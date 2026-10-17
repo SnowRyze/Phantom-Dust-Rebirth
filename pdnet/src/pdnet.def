@@ -1,0 +1,4 @@
+LIBRARY Microsoft.Xbox.Services
+EXPORTS
+    DllGetActivationFactory = PdGetActivationFactory PRIVATE
+    DllCanUnloadNow = PdCanUnloadNow PRIVATE

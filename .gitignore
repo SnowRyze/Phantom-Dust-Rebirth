@@ -1,0 +1,9 @@
+original/
+backup/
+pdnet/build/
+pdnet/build-*/
+*.obj
+*.pdb
+*.ilk
+*.exp
+*.lib
