@@ -1,7 +1,10 @@
 @echo off
 rem Builds pdnet as build\Microsoft.Xbox.Services.dll (x64, static CRT so it needs nothing from the package).
+rem Optional argument: a different output folder name, e.g. "build.cmd build-test".
 setlocal
 set ROOT=%~dp0
+set OUT=build
+if not "%~1"=="" set OUT=%~1
 set VSWHERE="%ProgramFiles(x86)%\Microsoft Visual Studio\Installer\vswhere.exe"
 for /f "usebackq delims=" %%i in (`%VSWHERE% -latest -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath`) do set VSDIR=%%i
 if not defined VSDIR (
@@ -10,8 +13,8 @@ if not defined VSDIR (
 )
 call "%VSDIR%\VC\Auxiliary\Build\vcvarsall.bat" x64 10.0.22000.0 >nul || exit /b 1
 
-if not exist "%ROOT%build" mkdir "%ROOT%build"
-pushd "%ROOT%build"
+if not exist "%ROOT%%OUT%" mkdir "%ROOT%%OUT%"
+pushd "%ROOT%%OUT%"
 cl /nologo /std:c++20 /EHsc /MT /O2 /Zi /W3 /permissive- /bigobj /utf-8 ^
    /DUNICODE /D_UNICODE ^
    "%ROOT%src\dllmain.cpp" "%ROOT%src\hooks.cpp" "%ROOT%src\gamesave.cpp" "%ROOT%src\log.cpp" ^
@@ -22,4 +25,4 @@ cl /nologo /std:c++20 /EHsc /MT /O2 /Zi /W3 /permissive- /bigobj /utf-8 ^
 set ERR=%ERRORLEVEL%
 popd
 if %ERR% neq 0 (echo BUILD FAILED & exit /b %ERR%)
-echo Built %ROOT%build\Microsoft.Xbox.Services.dll
+echo Built %ROOT%%OUT%\Microsoft.Xbox.Services.dll

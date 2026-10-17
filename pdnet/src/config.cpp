@@ -2,7 +2,6 @@
 #include "config.h"
 #include "log.h"
 #include <fstream>
-#include <sstream>
 
 namespace pdnet
 {
@@ -16,18 +15,14 @@ namespace pdnet
             ";   teredo = original Microsoft Teredo / Xbox Secure Device Association\r\n"
             "network_mode=direct\r\n"
             "\r\n"
-            "; Connections are found automatically (LAN, IPv6, STUN, UPnP, hole punching); no port forwarding needed.\r\n"
-            "; stun: ask public STUN servers what this PC's public address is (they see your IP, nothing else).\r\n"
-            "stun=on\r\n"
-            "stun_servers=stun.l.google.com:19302,stun.cloudflare.com:3478\r\n"
-            "; upnp: ask your router to open the game port automatically, if it supports UPnP.\r\n"
-            "upnp=on\r\n"
-            "\r\n"
-            "; Optional fixed address to offer peers in addition to the automatic ones (e.g. with manual port forwarding).\r\n"
+            "; Address other players use to reach this PC (direct mode).\r\n"
+            ";   auto      = this PC's primary network address (fine for LAN play)\r\n"
+            ";   1.2.3.4   = a fixed address, e.g. your public IP when port-forwarding\r\n"
             "advertise_ip=auto\r\n"
             "\r\n"
-            "; Game UDP port; must match networkmanifest.xml.\r\n"
+            "; UDP ports. game_port must match networkmanifest.xml; forward both for internet play.\r\n"
             "game_port=43210\r\n"
+            "control_port=43211\r\n"
             "\r\n"
             "; Pings per player when the game measures connection quality.\r\n"
             "qos_probes=5\r\n";
@@ -39,11 +34,6 @@ namespace pdnet
             size_t i = 0;
             while (i < s.size() && issp(s[i])) ++i;
             return s.substr(i);
-        }
-
-        bool On(const std::string& v)
-        {
-            return _stricmp(v.c_str(), "on") == 0 || _stricmp(v.c_str(), "true") == 0 || v == "1";
         }
 
         // pdnet.ini next to this DLL (set per build folder) wins over the one in LocalState (shared by builds).
@@ -85,19 +75,11 @@ namespace pdnet
                 if (key == "network_mode") c.teredo = _stricmp(value.c_str(), "teredo") == 0;
                 else if (key == "advertise_ip") c.advertiseIp = std::wstring(value.begin(), value.end());
                 else if (key == "game_port") c.gamePort = static_cast<uint16_t>(std::stoul(value));
+                else if (key == "control_port") c.controlPort = static_cast<uint16_t>(std::stoul(value));
                 else if (key == "qos_probes") c.qosProbes = (std::max)(1ul, std::stoul(value));
-                else if (key == "stun") c.stun = On(value);
-                else if (key == "upnp") c.upnp = On(value);
-                else if (key == "stun_servers")
-                {
-                    c.stunServers.clear();
-                    std::stringstream list(value);
-                    for (std::string item; std::getline(list, item, ',');)
-                        if (!Trim(item).empty()) c.stunServers.emplace_back(winrt::to_hstring(Trim(item)).c_str());
-                }
             }
-            Log(L"config: network_mode=%s stun=%d upnp=%d advertise_ip=%s game_port=%u qos_probes=%u",
-                c.teredo ? L"teredo" : L"direct", c.stun, c.upnp, c.advertiseIp.c_str(), c.gamePort, c.qosProbes);
+            Log(L"config: network_mode=%s advertise_ip=%s game_port=%u control_port=%u qos_probes=%u",
+                c.teredo ? L"teredo" : L"direct", c.advertiseIp.c_str(), c.gamePort, c.controlPort, c.qosProbes);
             return c;
         }
     }

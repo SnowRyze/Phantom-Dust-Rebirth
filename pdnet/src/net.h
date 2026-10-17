@@ -5,48 +5,23 @@
 #include <cstdint>
 #include <functional>
 #include <string>
+#include <string_view>
 #include <vector>
 
-// pdnet transport: everything rides on the game's own UDP socket (one port, nothing to forward).
-// Our packets start with "PDNC" and are filtered out of the game's receive loop before it sees them.
+// pdnet control channel: a small UDP protocol on the control port (default 43211) that stands in for
+// Secure Device Association. Game traffic itself stays on the game's own socket (43210).
 namespace pdnet::net
 {
-    struct Endpoint
-    {
-        std::array<uint8_t, 16> ip{}; // IPv6, or IPv4-mapped (::ffff:a.b.c.d)
-        uint16_t port = 0;
-
-        bool operator==(const Endpoint&) const = default;
-        bool IsV4() const;
-        sockaddr_in6 ToSockAddr() const;
-        static Endpoint From(const sockaddr* a, int len);
-        std::wstring ToString() const;
-    };
-
-    enum class CandidateKind : uint8_t
-    {
-        Lan = 1,      // this PC's LAN address
-        Public = 2,   // public IPv4:port the game socket maps to (STUN)
-        Guess = 3,    // public IPv4 with the game port, before the game socket exists
-        Ipv6 = 4,     // global IPv6 (no NAT)
-        Upnp = 5,     // router port mapping created via UPnP
-    };
-
-    struct Candidate
-    {
-        CandidateKind kind;
-        Endpoint ep;
-    };
-
+    // What a device address carries. Wire format (34 bytes, big-endian):
+    //   "PDN1" | version 1 | reserved 0 | gamePort | controlPort | ip[16] | deviceId
     struct Snapshot
     {
-        enum Flags : uint8_t { SymmetricNat = 1 };
-
+        std::array<uint8_t, 16> ip{}; // IPv6, or IPv4-mapped (::ffff:a.b.c.d)
+        uint16_t gamePort = 0;
+        uint16_t controlPort = 0;
         uint64_t deviceId = 0;
-        uint8_t flags = 0;
-        std::vector<Candidate> candidates;
 
-        static constexpr size_t kMaxSize = 128;
+        static constexpr size_t kSize = 34;
         std::vector<uint8_t> Serialize() const;
         static bool Parse(const uint8_t* data, size_t size, Snapshot& out);
         std::wstring Describe() const;
@@ -54,46 +29,40 @@ namespace pdnet::net
 
     enum class MsgType : uint8_t
     {
-        Connect = 1,  // snapshot, template name -> Ack
-        Ack = 2,      // snapshot
-        Delete = 3,   // snapshot, template name
-        Ping = 4,     // -> Pong
-        Pong = 5,     // u16 payload length, payload (published QoS private payload)
-        Punch = 6,    // u64 device id; opens NAT mappings, no reply
+        Connect = 1, // snapshot, template name -> Ack
+        Ack = 2,     // snapshot
+        Delete = 3,  // snapshot, template name
+        Ping = 4,    // -> Pong
+        Pong = 5,    // u16 payload length, payload (published QoS private payload)
     };
 
+    // Wire format: "PDNC" | type | nonce (4 bytes) | body
     struct Message
     {
-        MsgType type;
-        uint32_t nonce;
+        MsgType type{};
+        uint32_t nonce = 0;
         std::vector<uint8_t> body;
-        Endpoint from;
-        bool viaGameSocket;
+        sockaddr_in6 from{};
     };
 
-    // Starts discovery (LAN/IPv6 now, STUN in the background) and the fallback socket. Idempotent.
+    // Opens the control socket and starts the receive thread. Messages that aren't replies to a Request go to
+    // `onUnsolicited`. Only the first call has any effect.
     void Start(std::function<void(const Message&)> onUnsolicited);
 
-    // Current local snapshot (changes when STUN/UPnP finish or the game socket appears).
-    Snapshot Local();
-    uint64_t LocalDeviceId();
-    void OnLocalChanged(std::function<void()> handler);
+    // This PC's snapshot (random device id per run, address from config or the primary IPv4 route).
+    const Snapshot& Local();
 
-    // Called from the hooked WSARecvFrom. Returns true if the packet was ours (hide it from the game).
-    bool InterceptGamePacket(SOCKET s, const uint8_t* data, size_t size, const sockaddr* from, int fromLen);
+    void Send(const Snapshot& to, MsgType type, uint32_t nonce, const std::vector<uint8_t>& body);
+    void SendTo(const sockaddr_in6& to, MsgType type, uint32_t nonce, const std::vector<uint8_t>& body);
 
-    // Waits up to `ms` for the game's socket to exist (it is created when online play starts).
-    bool WaitForGameSocket(uint32_t ms);
-
-    void Send(const Endpoint& to, MsgType type, uint32_t nonce, const std::vector<uint8_t>& body, bool viaGame = true);
-
-    // Sends to every candidate of `to` repeatedly until a reply with the same nonce arrives.
+    // Sends to `to`'s control port every `retryMs` until a reply with the same nonce arrives or `timeoutMs` passes.
     bool Request(const Snapshot& to, MsgType type, const std::vector<uint8_t>& body, uint32_t timeoutMs, uint32_t retryMs, Message& reply);
 
-    // Sends punch packets to every candidate for a few seconds so both NATs open toward each other.
-    void Punch(const Snapshot& peer);
-
     uint32_t NewNonce();
+
+    sockaddr_in6 GameSockAddr(const std::array<uint8_t, 16>& ip, uint16_t port);
+    std::wstring IpToString(const std::array<uint8_t, 16>& ip);
+
     std::wstring Base64Encode(const std::vector<uint8_t>& data);
     bool Base64Decode(std::wstring_view text, std::vector<uint8_t>& out);
 }

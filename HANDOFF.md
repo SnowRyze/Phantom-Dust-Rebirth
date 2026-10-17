@@ -74,25 +74,26 @@ Never break the Teredo build or the master dump.
 - Menu scripts: `.ssb`. Name table in `PDUWP.exe` (`menu1, shop, vsmode, option, command, vsmenu, mainmenu, …`).
 - `tms_options.csv` holds the store product definitions and online version gates. Saved copies under `UserConfig` are AES-encrypted by the game.
 
-## 6. Current state of the source tree (important)
+## 6. Current state of the source tree
 
-**The source in `_netmod\pdnet\src` doesn't build right now, and doesn't match the installed DLL.**
+**Repaired (2026-10-17, second session).** `_netmod` is now a git repo; the first commit is the broken snapshot, for reference.
 
-- `sda.cpp` (12:19), `gamesave.*`, `hooks.*`, `dllmain.cpp`, `log.*`, `pch.h` and `pdnet.def` match the installed DLL.
-- `net.h` / `net.cpp` were **overwritten** after the installed DLL was built, for an unfinished design (see §8). `net.cpp` is a 67-line fragment.
-  **The stage 2 `net.h`/`net.cpp` that the installed DLL was built from no longer exist on disk.** `sda.cpp` still uses the
-  old API (`net::Snapshot` with `ip/gamePort/controlPort/deviceId`, `net::Local()`, `net::Start(handler)`, `net::Send`,
-  `net::SendTo`, `net::Request(...)`, `net::NewNonce()`, `net::GameSockAddr`, `net::IpToString`, `net::Base64Encode/Decode`,
-  `net::MsgType::{Connect,Ack,Delete,Ping,Pong}`, `net::Message{type,nonce,body,from(sockaddr_in6)}`). That defines what has to be recreated.
-- `config.h`/`config.cpp` gained `stun`, `stunServers` and `upnp` fields, and lost `controlPort`, for that unfinished design. The installed DLL's config had
-  `teredo`, `advertiseIp`, `gamePort`, `controlPort` (43211) and `qosProbes`, read from `pdnet.ini` next to the DLL first, then LocalState.
-- `_netmod\server\pdserver.py` is a **partial, unused** file (see §8). It can be deleted.
-- The good DLL binary is still at `_netmod\pdnet\build\Microsoft.Xbox.Services.dll` and in both builds. Don't rebuild over it until the source builds again.
-- There's no git repo. Consider `git init` in `_netmod` before making more changes.
+- `net.h`/`net.cpp` were rebuilt from the installed DLL's PDB and disassembly, and `config.*` were reverted to the stage 2 fields
+  (`teredo`, `advertiseIp`, `gamePort`, `controlPort`=43211, `qosProbes`; default INI text restored byte for byte).
+- Stage 2 wire format (confirmed from the binary):
+  - snapshot (34 bytes, big-endian) = `"PDN1" | 1 | 0 | gamePort | controlPort | ip[16] | deviceId`
+  - control message = `"PDNC" | type | nonce (4 bytes, native order) | body`, on one dual-stack UDP socket bound to `controlPort`
+  - Ack and Pong complete a pending `Request` by nonce. Everything else goes to the handler.
+- Verified: builds clean with `build.cmd build-repair`. Exports, imports and all UTF-16 strings are identical to the installed DLL,
+  and every `pdnet::net` function exists in both. A loopback harness passed the snapshot and Base64 round trips, connect→ack and
+  ping→pong against a Python peer written from the disassembled format, plus the unsolicited-message path. Not yet run inside the game.
+- `build.cmd [outdir]` now takes an optional output folder. `pdnet\build-stage2-1226\` is a copy of the original good build (DLL + PDB + objs), ignored by git.
+- The installed DLL in both builds and in `pdnet\build` is **unchanged**. The rebuilt DLL is only in `pdnet\build-repair`.
+- `server\pdserver.py` (partial) was deleted; it's still in the first commit.
 
 ## 7. What's left
 
-1. **Repair the source tree** so it reproduces the installed stage 2 DLL (recreate `net.h`/`net.cpp` to the API above, revert the config fields).
+1. ~~Repair the source tree~~ Done (§6). Optional: install `build-repair` into the Direct build only and do a single-player + lobby-browser smoke test.
 2. **Two-PC test of stage 2** once the user has a second PC: LAN first, through an Xbox Live lobby (host creates it, the other joins).
    Read `pdnet.log` on both. Open question: does the **host** ever parse the joiner's device address? (PeerToHost template: the joiner initiates.)
 3. **Internet play without port forwarding.** Not done; see §8.
@@ -107,8 +108,8 @@ Never break the Teredo build or the master dump.
   1. while writing the plug-and-play internet connectivity layer (automatic public-address discovery and NAT traversal on the game's socket);
   2. while writing the stage 3 relay server (`pdserver.py`), which forwards game traffic between players.
 
-  I don't know the exact reason. The user was told that this session couldn't continue that part of the work. The partial files left behind
-  are listed in §6. The next session should know this happened, and talk it through with the user rather than recreating those pieces.
+  I don't know the exact reason. The user was told that this session couldn't continue that part of the work. The partial files were
+  removed in the repair (§6). The next session should know this happened, and talk it through with the user rather than recreating those pieces.
 - Bash heredocs in this environment turned `\\` into `\` (and `\n` into real newlines) inside embedded Python. Use the Write/Edit tools for source edits.
 - `WINRT_LEAN_AND_MEAN` strips the `produce<>` code needed to implement Windows interfaces. C++/WinRT coroutines that call `get_strong()` can't be `const`.
 - Ghidra didn't define most of the UTF-16 log strings, so finding functions by string missed them. Finding them by import callers (`DumpCallers.java`) worked.

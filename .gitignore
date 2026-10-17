@@ -7,3 +7,4 @@ pdnet/build-*/
 *.ilk
 *.exp
 *.lib
+pdnet/build*/
