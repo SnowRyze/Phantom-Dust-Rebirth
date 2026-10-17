@@ -92,6 +92,23 @@ Never break the Teredo build or the master dump.
   The Teredo build and `pdnet\build` still have the original 12:26 DLL (MD5 E3E67884…), which is also kept in `pdnet\build-stage2-1226`.
 - `server\pdserver.py` (partial) was deleted; it's still in the first commit.
 
+## 6a. Test peer (one-PC join test)
+
+`pdnet.ini: test_peer=on` (set in **D:\PhantomDust-Direct only**; off by default) starts an in-process fake second player
+3 s after the game first calls `XboxLiveEndpointPairTemplate.GetTemplateByName` (lobby creation). It uses its own sockets
+(control 43212, game 43213) inside the game process, which sidesteps AppContainer loopback isolation. The steps are:
+ping, then CONNECT, then HELLO on the game port, then 20 s of heartbeats with ACKs, then DELETE. It logs `testpeer: n/4 PASS|FAIL` lines to pdnet.log.
+Code: `src	estpeer.cpp`. Verified offline against net.cpp plus a Python stand-in for the game port. The Direct build has this DLL (`build-testpeer`, MD5 632CEAC6…).
+
+Game mesh facts found for it (PDUWP.exe, Microsoft's sample MeshManager):
+- Packet: `seq u16 | type u8 | length u16 | flags u16 (0x8000 = wants ACK) | body`, little-endian; several messages per datagram.
+  Type 1 = heartbeat, 2 = HELLO (`responding u8 | nameLen u16 | UTF-16 name`), 3 = chat/custom, 4 = ACK (seq = acked seq), 0x40+ = game messages.
+  Builders: HELLO `FUN_140028310`, ACK `FUN_140028670`, heartbeat `FUN_1400281a0`. Dispatcher: `FUN_140029c50`.
+- Receive loop `FUN_140029330`: the sender is looked up by address, then via `FindEndpointPairBySocketAddressBytes` → device address → mesh connection.
+  An unknown sender is logged and skipped. A sender that is **known but in state 0/1 makes the loop `break` (the receive thread stops)**.
+- `OnAssociationIncoming` (`FUN_140037740`) creates a mesh connection for **any** inbound endpoint pair, in state 2 (accepted). HELLO moves it to 3.
+  So the host does not need the joiner's MPSD membership to accept packets. This answers the §7 question at the mesh level.
+
 ## 7. What's left
 
 1. ~~Repair the source tree~~ Done and smoke-tested in game (§6).

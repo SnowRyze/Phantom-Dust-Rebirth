@@ -8,6 +8,7 @@
 #include "net.h"
 #include "log.h"
 #include "config.h"
+#include "testpeer.h"
 #include <winrt/Windows.Networking.h>
 #include <winrt/Windows.Networking.XboxLive.h>
 
@@ -455,6 +456,7 @@ namespace pdnet
 
             xl::XboxLiveEndpointPairTemplate GetTemplateByName(hstring const& name) const
             {
+                if (GetConfig().testPeer) StartTestPeer(std::wstring{ name });
                 return As<xl::XboxLiveEndpointPairTemplate>(GetTemplate(std::wstring{ name }));
             }
 

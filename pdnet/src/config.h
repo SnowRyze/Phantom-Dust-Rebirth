@@ -11,6 +11,7 @@ namespace pdnet
         uint16_t gamePort = 43210;          // must match networkmanifest.xml (PeerSocketUDP)
         uint16_t controlPort = 43211;       // pdnet control channel (connect handshake, pings)
         uint32_t qosProbes = 5;
+        bool testPeer = false;              // test_peer=on: in-process fake second player (debug, see testpeer.h)
     };
 
     // Loaded once: pdnet.ini next to the DLL, else LocalState\pdnet.ini (written with defaults if missing).
