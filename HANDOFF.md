@@ -88,7 +88,8 @@ Never break the Teredo build or the master dump.
   and every `pdnet::net` function exists in both. A loopback harness passed the snapshot and Base64 round trips, connect→ack and
   ping→pong against a Python peer written from the disassembled format, plus the unsolicited-message path. Not yet run inside the game.
 - `build.cmd [outdir]` now takes an optional output folder. `pdnet\build-stage2-1226\` is a copy of the original good build (DLL + PDB + objs), ignored by git.
-- The installed DLL in both builds and in `pdnet\build` is **unchanged**. The rebuilt DLL is only in `pdnet\build-repair`.
+- The rebuilt DLL (`pdnet\build-repair`, MD5 8316A4A1…) is installed in **D:\PhantomDust-Direct only**, awaiting a smoke test.
+  The Teredo build and `pdnet\build` still have the original 12:26 DLL (MD5 E3E67884…), which is also kept in `pdnet\build-stage2-1226`.
 - `server\pdserver.py` (partial) was deleted; it's still in the first commit.
 
 ## 7. What's left
