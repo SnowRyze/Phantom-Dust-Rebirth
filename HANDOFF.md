@@ -94,7 +94,7 @@ Never break the Teredo build or the master dump.
 
 ## 7. What's left
 
-1. ~~Repair the source tree~~ Done (§6). Optional: install `build-repair` into the Direct build only and do a single-player + lobby-browser smoke test.
+1. ~~Repair the source tree~~ Done and smoke-tested in game (§6).
 2. **Two-PC test of stage 2** once the user has a second PC: LAN first, through an Xbox Live lobby (host creates it, the other joins).
    Read `pdnet.log` on both. Open question: does the **host** ever parse the joiner's device address? (PeerToHost template: the joiner initiates.)
 3. **Internet play without port forwarding.** Not done; see §8.
