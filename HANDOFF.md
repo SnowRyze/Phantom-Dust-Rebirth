@@ -132,7 +132,9 @@ Game mesh facts found for it (PDUWP.exe, Microsoft's sample MeshManager):
 
 - **Two responses were stopped by Anthropic's safety classifier**, and per its instruction they must not be reproduced:
   1. while writing the plug-and-play internet connectivity layer (automatic public-address discovery and NAT traversal on the game's socket);
-  2. while writing the stage 3 relay server (`pdserver.py`), which forwards game traffic between players.
+  2. while writing the stage 3 relay server (`pdserver.py`), which forwards game traffic between players;
+  3. (2026-10-18) while writing a passive "link monitor" for the Teredo build, which would have logged the state of
+     Windows' player-to-player endpoint pairs to diagnose "cross lagging" (see §11). Its partial file was deleted and nothing was installed.
 
   I don't know the exact reason. The user was told that this session couldn't continue that part of the work. The partial files were
   removed in the repair (§6). The next session should know this happened, and talk it through with the user rather than recreating those pieces.
@@ -151,6 +153,17 @@ Game mesh facts found for it (PDUWP.exe, Microsoft's sample MeshManager):
 - Server language: Python (the user had no preference). Testing will be on 2 PCs once available.
 - They like short, practical explanations, with one-command scripts for anything they have to run.
 - They actively play online with the Teredo build, so leave it registered when you're done testing.
+
+## 11. "Cross lagging" (reported 2026-10-18, Teredo build)
+
+- **Symptom:** in a 4-player online match, two players stop seeing and interacting with each other, while the other two still see
+  everyone. When one of the two dies, the other's game decides no opposing team is left and ends the match. It's random, but more common with poor or
+  international connections.
+- **Interpretation:** a missing or dropped link in the full peer mesh (each pair of players has its own Teredo/SDA link).
+- **Not caused by pdnet:** in teredo mode every `Windows.Networking.XboxLive.*` activation goes to the OS. During matches the DLL only
+  writes small save blobs (`progress.dat`, `0.dat`) on background threads.
+- **This PC:** Teredo qualified, NAT restricted (port) with no UPnP (Xbox "Moderate"), wired, ~10 ms to the Teredo server, with Teredo set by Group Policy (Enterprise Client).
+- **Tools:** `_netmod\lagmonitor.ps1` (read-only, logs Teredo state, ping and loss to a Desktop CSV). Open NAT on the user's side (UPnP or port forwarding) is the user's call.
 
 ## 10. Session history
 
