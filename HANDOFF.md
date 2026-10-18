@@ -1,6 +1,7 @@
 # Handoff: Phantom Dust (2017 UWP): replacing Xbox Live / Teredo networking
 
-Written 2026-10-17 at the end of a Claude Code session, for the next session to pick up from.
+Written 2026-10-17 by the first Claude Code session, then updated by a second session (source repair and test peer)
+and again on 2026-10-18 to bring everything in line. Two sessions have worked here; see §10 and `git log` in `_netmod`.
 The longer design notes and the research log are in [`MODDING_PLAN.md`](MODDING_PLAN.md). Read that next.
 
 ## 1. Goal
@@ -29,8 +30,8 @@ Never break the Teredo build or the master dump.
 | Path | Contents |
 |---|---|
 | `D:\PhantomDust-Dumped-NoMovie` | **Master dump, byte-for-byte as received** (checked against `_netmod\original`). Holds `_netmod\` (all project files). |
-| `D:\PhantomDust-Teredo` | **Currently registered.** Original Microsoft networking (`pdnet.ini: network_mode=teredo`) plus local saves and the menu fix. The user plays this one. **Don't modify it.** |
-| `D:\PhantomDust-Direct` | Same, plus `network_mode=direct` (stage 2 direct-UDP code) and manifest capabilities `internetClientServer` and `privateNetworkClientServer`. Never tested with two PCs. |
+| `D:\PhantomDust-Teredo` | **Currently registered.** Original Microsoft networking (`pdnet.ini: network_mode=teredo`) plus local saves and the menu fix. DLL = original 12:26 stage 2 build (MD5 `E3E67884`; its networking code stays inactive in teredo mode). **The user plays online with this build and it works** (confirmed 2026-10-18). **Don't modify it.** |
+| `D:\PhantomDust-Direct` | Same, plus `network_mode=direct`, `test_peer=on`, manifest capabilities `internetClientServer` and `privateNetworkClientServer`, and the newer test-peer DLL (MD5 `632CEAC6`, from `pdnet\build-testpeer`). Never tested with two PCs. |
 
 - All three use the **same package identity** (`Microsoft.MSEsper_8wekyb3d8bbwe`), because Xbox Live sign-in is tied to it.
   So only one can be registered at a time. Switch with `_netmod\builds.ps1 -Use Teredo|Direct|Master`, which removes
@@ -55,7 +56,7 @@ Never break the Teredo build or the master dump.
 3. **Debug menu move.** The dump had `Menu\option_en.ssb` replaced by a patched debug menu, with the real options kept as `option_enx.ssb`.
    The game loads `Assets\Data\Menu\<name>_en.ssb` by name. Now Options = real options, and Multiplayer → Split Screen
    (`vsmode_en.ssb`) = debug menu. Script: `_netmod\debugmenu.ps1 [-Revert]`. Verified by the user.
-4. **Stage 2 code (direct UDP instead of Teredo)**, in the DLL installed in both builds (built 12:26). It replaces
+4. **Stage 2 code (direct UDP instead of Teredo)**, first built 12:26 (still the Teredo build's DLL); the Direct build now runs the rebuilt test-peer version. It replaces
    `Windows.Networking.XboxLive.*`: device addresses become pdnet snapshots carrying the IP and ports, and endpoint pairs come from a CONNECT/ACK
    handshake on UDP 43211. QoS uses pings. It loads and doesn't break anything (user verified single player and the lobby browser), but **it has never
    run a real connection**, because only creating or joining a lobby exercises it and there's no second PC.
@@ -88,8 +89,11 @@ Never break the Teredo build or the master dump.
   and every `pdnet::net` function exists in both. A loopback harness passed the snapshot and Base64 round trips, connect→ack and
   ping→pong against a Python peer written from the disassembled format, plus the unsolicited-message path. Not yet run inside the game.
 - `build.cmd [outdir]` now takes an optional output folder. `pdnet\build-stage2-1226\` is a copy of the original good build (DLL + PDB + objs), ignored by git.
-- The rebuilt DLL (`pdnet\build-repair`, MD5 8316A4A1…) is installed in **D:\PhantomDust-Direct only**, awaiting a smoke test.
+- The rebuilt DLL (`pdnet\build-repair`, MD5 8316A4A1…) was installed in the Direct build and smoke-tested in game on 2026-10-17
+  (13:07: it loaded and lobby creation worked). It was then replaced there by the test-peer build (§6a).
   The Teredo build and `pdnet\build` still have the original 12:26 DLL (MD5 E3E67884…), which is also kept in `pdnet\build-stage2-1226`.
+- Build output folders: `build` / `build-stage2-1226` = original 12:26, `build-repair` = repaired source, `build-testpeer` = repaired + test peer (current source).
+  Don't build into `build` or `build-stage2-1226`; they're the known-good copies.
 - `server\pdserver.py` (partial) was deleted; it's still in the first commit.
 
 ## 6a. Test peer (one-PC join test)
@@ -98,7 +102,8 @@ Never break the Teredo build or the master dump.
 3 s after the game first calls `XboxLiveEndpointPairTemplate.GetTemplateByName` (lobby creation). It uses its own sockets
 (control 43212, game 43213) inside the game process, which sidesteps AppContainer loopback isolation. The steps are:
 ping, then CONNECT, then HELLO on the game port, then 20 s of heartbeats with ACKs, then DELETE. It logs `testpeer: n/4 PASS|FAIL` lines to pdnet.log.
-Code: `src	estpeer.cpp`. Verified offline against net.cpp plus a Python stand-in for the game port. The Direct build has this DLL (`build-testpeer`, MD5 632CEAC6…).
+Code: `src\testpeer.cpp`. Verified offline against net.cpp plus a Python stand-in for the game port. The Direct build has this DLL (`build-testpeer`, MD5 632CEAC6…).
+**Not yet run in the game:** as of 2026-10-18, pdnet.log has no `testpeer:` lines. Running it is the next one-PC step: register the Direct build, create an Xbox Live lobby, then read the log.
 
 Game mesh facts found for it (PDUWP.exe, Microsoft's sample MeshManager):
 - Packet: `seq u16 | type u8 | length u16 | flags u16 (0x8000 = wants ACK) | body`, little-endian; several messages per datagram.
@@ -112,13 +117,16 @@ Game mesh facts found for it (PDUWP.exe, Microsoft's sample MeshManager):
 ## 7. What's left
 
 1. ~~Repair the source tree~~ Done and smoke-tested in game (§6).
-2. **Two-PC test of stage 2** once the user has a second PC: LAN first, through an Xbox Live lobby (host creates it, the other joins).
-   Read `pdnet.log` on both. Open question: does the **host** ever parse the joiner's device address? (PeerToHost template: the joiner initiates.)
-3. **Internet play without port forwarding.** Not done; see §8.
-4. **Stage 3b:** replace XSAPI multiplayer (MPSD sessions, SmartMatch, search handles, RTA), sign-in (`XboxLiveUser`) and title storage
+2. **Run the test peer in the game** (§6a). This is the only end-to-end check possible on one PC. Switch with `builds.ps1 -Use Direct`,
+   then switch back with `-Use Teredo` afterwards so the user can play.
+3. **Two-PC test of stage 2** once the user has a second PC: LAN first, through an Xbox Live lobby (host creates it, the other joins).
+   Read `pdnet.log` on both. The earlier question of whether the host needs the joiner's device address is answered at the mesh level in §6a
+   (no: any inbound endpoint pair is accepted). It still needs confirming with real traffic.
+4. **Internet play without port forwarding.** Not done; see §8.
+5. **Stage 3b:** replace XSAPI multiplayer (MPSD sessions, SmartMatch, search handles, RTA), sign-in (`XboxLiveUser`) and title storage
    with the user's own server, implementing only the XSAPI surface listed in `MODDING_PLAN.md` §4b. Not started.
    Card packs and paid content: the agreed scope is restoring play, not unlocking paid content.
-5. Optional: give the Direct build its own package identity once it no longer needs Xbox Live, so it can coexist with the Teredo build.
+6. Optional: give the Direct build its own package identity once it no longer needs Xbox Live, so it can coexist with the Teredo build.
 
 ## 8. Difficulties encountered
 
@@ -142,3 +150,12 @@ Game mesh facts found for it (PDUWP.exe, Microsoft's sample MeshManager):
 - Debug menu stays on Multiplayer → Split Screen.
 - Server language: Python (the user had no preference). Testing will be on 2 PCs once available.
 - They like short, practical explanations, with one-command scripts for anything they have to run.
+- They actively play online with the Teredo build, so leave it registered when you're done testing.
+
+## 10. Session history
+
+- **Session 1** (2026-10-17, ~12:00–12:50): recon, the pdnet shim (saves, then stage 2 networking), menu move, build folders, this handoff.
+  Two of its responses were stopped by the safety classifier (§8). It ended with the source tree broken.
+- **Session 2** (2026-10-17, ~12:54–13:10): `git init` in `_netmod`, source repair, smoke test, test peer. Its commits carry the user's git name.
+  `git log` shows the test-peer commit `8abdf07` first even though its author date (12:19) is earlier. Go by commit order, not the date.
+- **2026-10-18:** the user played online with the Teredo build (log entry at 17:10). Session 1 updated this document to match git and the files on disk.
