@@ -1,7 +1,7 @@
 #pragma once
 #include "System/XboxLiveUser.g.h"
 
-
+// pdnet: the local player. Signed in without Xbox Live; name from pdnet.ini (display_name), id stable per PC.
 namespace winrt::Microsoft::Xbox::Services::System::implementation
 {
     struct XboxLiveUser : XboxLiveUserT<XboxLiveUser>
@@ -9,8 +9,8 @@ namespace winrt::Microsoft::Xbox::Services::System::implementation
         XboxLiveUser() = default;
 
         XboxLiveUser(Windows::System::User const& systemUser);
-        static winrt::event_token SignOutCompleted(Windows::Foundation::EventHandler<Microsoft::Xbox::Services::System::SignOutCompletedEventArgs> const& __param0);
-        static void SignOutCompleted(winrt::event_token const& __param0) noexcept;
+        static winrt::event_token SignOutCompleted(Windows::Foundation::EventHandler<Microsoft::Xbox::Services::System::SignOutCompletedEventArgs> const& handler);
+        static void SignOutCompleted(winrt::event_token const& token) noexcept;
         Windows::Foundation::IAsyncOperation<Microsoft::Xbox::Services::System::SignInResult> SignInAsync(Windows::Foundation::IInspectable coreDispatcher);
         Windows::Foundation::IAsyncOperation<Microsoft::Xbox::Services::System::SignInResult> SignInSilentlyAsync(Windows::Foundation::IInspectable coreDispatcher);
         Windows::Foundation::IAsyncOperation<Microsoft::Xbox::Services::System::GetTokenAndSignatureResult> GetTokenAndSignatureAsync(hstring httpMethod, hstring url, hstring headers);
@@ -23,6 +23,13 @@ namespace winrt::Microsoft::Xbox::Services::System::implementation
         bool IsSignedIn();
         hstring WebAccountId();
         Windows::System::User WindowsSystemUser();
+
+    private:
+        Windows::Foundation::IAsyncOperation<Microsoft::Xbox::Services::System::SignInResult> SignIn(const wchar_t* how);
+        Windows::Foundation::IAsyncOperation<Microsoft::Xbox::Services::System::GetTokenAndSignatureResult> NoToken(hstring url);
+
+        Windows::System::User m_systemUser{ nullptr };
+        std::atomic<bool> m_signedIn{ false };
     };
 }
 namespace winrt::Microsoft::Xbox::Services::System::factory_implementation

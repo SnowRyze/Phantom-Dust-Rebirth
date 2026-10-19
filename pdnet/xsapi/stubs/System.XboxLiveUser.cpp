@@ -1,67 +1,77 @@
 #include "xsapi_pch.h"
 #include "System.XboxLiveUser.h"
-
+#include "System.SignInResult.h"
+#include "System.GetTokenAndSignatureResult.h"
 
 namespace winrt::Microsoft::Xbox::Services::System::implementation
 {
-    XboxLiveUser::XboxLiveUser(Windows::System::User const& systemUser)
+    namespace
     {
-        PDNET_XSAPI_STUB("XboxLiveUser::XboxLiveUser");
+        winrt::event<Windows::Foundation::EventHandler<Microsoft::Xbox::Services::System::SignOutCompletedEventArgs>> g_signOutCompleted;
     }
-    winrt::event_token XboxLiveUser::SignOutCompleted(Windows::Foundation::EventHandler<Microsoft::Xbox::Services::System::SignOutCompletedEventArgs> const& __param0)
+
+    XboxLiveUser::XboxLiveUser(Windows::System::User const& systemUser) : m_systemUser(systemUser)
     {
-        PDNET_XSAPI_STUB("XboxLiveUser::SignOutCompleted");
     }
-    void XboxLiveUser::SignOutCompleted(winrt::event_token const& __param0) noexcept
+
+    winrt::event_token XboxLiveUser::SignOutCompleted(Windows::Foundation::EventHandler<Microsoft::Xbox::Services::System::SignOutCompletedEventArgs> const& handler)
     {
-        PDNET_XSAPI_STUB_NOEXCEPT("XboxLiveUser::SignOutCompleted");
+        return g_signOutCompleted.add(handler);
     }
-    Windows::Foundation::IAsyncOperation<Microsoft::Xbox::Services::System::SignInResult> XboxLiveUser::SignInAsync(Windows::Foundation::IInspectable coreDispatcher)
+
+    void XboxLiveUser::SignOutCompleted(winrt::event_token const& token) noexcept
     {
-        PDNET_XSAPI_STUB("XboxLiveUser::SignInAsync");
+        g_signOutCompleted.remove(token);
     }
-    Windows::Foundation::IAsyncOperation<Microsoft::Xbox::Services::System::SignInResult> XboxLiveUser::SignInSilentlyAsync(Windows::Foundation::IInspectable coreDispatcher)
+
+    Windows::Foundation::IAsyncOperation<Microsoft::Xbox::Services::System::SignInResult> XboxLiveUser::SignIn(const wchar_t* how)
     {
-        PDNET_XSAPI_STUB("XboxLiveUser::SignInSilentlyAsync");
+        m_signedIn = true;
+        ::pdnet::Log(L"xsapi-pdnet: %s -> signed in locally as '%s' (id %s)", how, Gamertag().c_str(), XboxUserId().c_str());
+        co_return winrt::make<implementation::SignInResult>(SignInStatus::Success);
     }
-    Windows::Foundation::IAsyncOperation<Microsoft::Xbox::Services::System::GetTokenAndSignatureResult> XboxLiveUser::GetTokenAndSignatureAsync(hstring httpMethod, hstring url, hstring headers)
+
+    Windows::Foundation::IAsyncOperation<Microsoft::Xbox::Services::System::SignInResult> XboxLiveUser::SignInAsync(Windows::Foundation::IInspectable)
     {
-        PDNET_XSAPI_STUB("XboxLiveUser::GetTokenAndSignatureAsync");
+        return SignIn(L"SignInAsync");
     }
-    Windows::Foundation::IAsyncOperation<Microsoft::Xbox::Services::System::GetTokenAndSignatureResult> XboxLiveUser::GetTokenAndSignatureAsync(hstring httpMethod, hstring url, hstring headers, hstring body)
+
+    Windows::Foundation::IAsyncOperation<Microsoft::Xbox::Services::System::SignInResult> XboxLiveUser::SignInSilentlyAsync(Windows::Foundation::IInspectable)
     {
-        PDNET_XSAPI_STUB("XboxLiveUser::GetTokenAndSignatureAsync");
+        return SignIn(L"SignInSilentlyAsync");
     }
-    Windows::Foundation::IAsyncOperation<Microsoft::Xbox::Services::System::GetTokenAndSignatureResult> XboxLiveUser::GetTokenAndSignatureArrayAsync(hstring httpMethod, hstring url, hstring headers, array_view<uint8_t const> requestBodyArray)
+
+    // There is no Xbox Live token to give; callers (e.g. Meld's web backend) get an empty one and should fail gracefully.
+    Windows::Foundation::IAsyncOperation<Microsoft::Xbox::Services::System::GetTokenAndSignatureResult> XboxLiveUser::NoToken(hstring url)
     {
-        PDNET_XSAPI_STUB("XboxLiveUser::GetTokenAndSignatureArrayAsync");
+        ::pdnet::Log(L"xsapi-pdnet: GetTokenAndSignature for %s -> empty token (no Xbox Live)", url.c_str());
+        co_return winrt::make<implementation::GetTokenAndSignatureResult>(XboxUserId(), Gamertag(), AgeGroup(), Privileges(), WebAccountId());
     }
-    hstring XboxLiveUser::XboxUserId()
+
+    Windows::Foundation::IAsyncOperation<Microsoft::Xbox::Services::System::GetTokenAndSignatureResult> XboxLiveUser::GetTokenAndSignatureAsync(hstring, hstring url, hstring)
     {
-        PDNET_XSAPI_STUB("XboxLiveUser::XboxUserId");
+        return NoToken(url);
     }
-    hstring XboxLiveUser::Gamertag()
+
+    Windows::Foundation::IAsyncOperation<Microsoft::Xbox::Services::System::GetTokenAndSignatureResult> XboxLiveUser::GetTokenAndSignatureAsync(hstring, hstring url, hstring, hstring)
     {
-        PDNET_XSAPI_STUB("XboxLiveUser::Gamertag");
+        return NoToken(url);
     }
-    hstring XboxLiveUser::AgeGroup()
+
+    Windows::Foundation::IAsyncOperation<Microsoft::Xbox::Services::System::GetTokenAndSignatureResult> XboxLiveUser::GetTokenAndSignatureArrayAsync(hstring, hstring url, hstring, array_view<uint8_t const>)
     {
-        PDNET_XSAPI_STUB("XboxLiveUser::AgeGroup");
+        return NoToken(url);
     }
-    hstring XboxLiveUser::Privileges()
-    {
-        PDNET_XSAPI_STUB("XboxLiveUser::Privileges");
-    }
-    bool XboxLiveUser::IsSignedIn()
-    {
-        PDNET_XSAPI_STUB("XboxLiveUser::IsSignedIn");
-    }
-    hstring XboxLiveUser::WebAccountId()
-    {
-        PDNET_XSAPI_STUB("XboxLiveUser::WebAccountId");
-    }
-    Windows::System::User XboxLiveUser::WindowsSystemUser()
-    {
-        PDNET_XSAPI_STUB("XboxLiveUser::WindowsSystemUser");
-    }
+
+    hstring XboxLiveUser::XboxUserId() { return hstring{ ::pdnet::xsapi::LocalXuid() }; }
+    hstring XboxLiveUser::Gamertag() { return hstring{ ::pdnet::GetConfig().displayName }; }
+    hstring XboxLiveUser::AgeGroup() { return L"Adult"; }
+
+    // Xbox privilege ids the game may check: 254 multiplayer, 252 communications, 249 profile viewing,
+    // 247 user-created content, 211 social network sharing, 188 add friend.
+    hstring XboxLiveUser::Privileges() { return L"188 211 247 249 252 254"; }
+
+    bool XboxLiveUser::IsSignedIn() { return m_signedIn; }
+    hstring XboxLiveUser::WebAccountId() { return L"pdnet-local"; }
+    Windows::System::User XboxLiveUser::WindowsSystemUser() { return m_systemUser; }
 }
