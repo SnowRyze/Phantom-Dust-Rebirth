@@ -95,8 +95,13 @@ Never break the Teredo build or the master dump.
      `search`, `show <id>`, `join <id> [s]` (joins as fake player "lobbytool" with a TEST-NET address), `host <id> [s]` (self-test).
    - **Verified (no game):** all 40 lobby functions resolve; lobbytool self-test against EOS passed (create, 1300-byte value split and rejoined,
      read by id, update visible, destroy). A new lobby shows up in bucket searches after a few seconds, not instantly.
-   - **Not yet run inside the game.** Next: `xboxfree.ps1 -Build build-stageb`, create a match, then `lobbytool search` and `lobbytool join <id> 60`;
-     the game's lobby screen should show "lobbytool" arrive and leave. Then two PCs (test plan in the guide).
+   - **In game (2026-10-19 00:27, Direct build with `build-stageb`, user created a match):** the game created lobby `pd12f7be…` (owner = the
+     game's product user), wrote it 4 times and set its search handle (numbers cross, crossplat, crossplay, gamerule, gametype, language,
+     rating, ratinglimit, ratingmin/ratingmax, reqmoney, reqskill, sendskill, sessiontype, stage, state, version=140; strings gamename,
+     platform). `lobbytool search` found it with all properties. `lobbytool join … 60`: the game numbered the new member 2 within ~150 ms,
+     raised `MemberListChange`, re-read the session (2 members); on leave it raised it again (1 member). No crash, no multiplayer stubs hit.
+     Not yet confirmed on screen whether the lobby UI listed "lobbytool". Next: two PCs (test plan in the guide), the game's lobby browser
+     on the joining side (`GetSearchHandlesAsync` + filter), and starting a match.
    - Known gaps: reservations (`AddMemberReservation`) stay on the PC that made them; transfer handles (`SetTransferHandleAsync`) are still a stub;
      an EOS re-sign-in doesn't rejoin lobbies (the game is told the subscription was lost and should leave/recreate).
 
