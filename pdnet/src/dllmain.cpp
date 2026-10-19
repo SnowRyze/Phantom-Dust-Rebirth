@@ -7,6 +7,7 @@
 #include "eostest.h"
 #include "hooks.h"
 #include "log.h"
+#include "../xsapi/xsapi.h"
 
 namespace
 {
@@ -48,6 +49,10 @@ namespace
 extern "C" HRESULT WINAPI PdGetActivationFactory(HSTRING classId, IActivationFactory** factory)
 {
     EnsureInitialized();
+    if (pdnet::GetConfig().xboxOff)
+    {
+        return pdnet::xsapi::GetActivationFactory(classId, factory);
+    }
     if (!g_origGetFactory)
     {
         return CLASS_E_CLASSNOTAVAILABLE;

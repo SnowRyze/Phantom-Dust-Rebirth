@@ -80,6 +80,7 @@ namespace pdnet
                 else if (key == "test_peer") c.testPeer = _stricmp(value.c_str(), "on") == 0;
                 else if (key == "eos_test") c.eosTest = _stricmp(value.c_str(), "on") == 0;
                 else if (key == "eos") c.eos = _stricmp(value.c_str(), "on") == 0;
+                else if (key == "xbox") c.xboxOff = _stricmp(value.c_str(), "off") == 0;
                 else if (key == "display_name" && !value.empty())
                 {
                     std::wstring name{ winrt::to_hstring(value) };
