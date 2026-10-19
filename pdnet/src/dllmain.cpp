@@ -3,6 +3,7 @@
 // logs what the game activates, and replaces Xbox cloud saves with local files.
 #include "pch.h"
 #include "config.h"
+#include "eos.h"
 #include "eostest.h"
 #include "hooks.h"
 #include "log.h"
@@ -31,7 +32,11 @@ namespace
             }
             pdnet::Log(L"original XSAPI %s (error %lu)", g_origGetFactory ? L"loaded" : L"NOT loaded", module ? 0 : GetLastError());
 
-            if (pdnet::GetConfig().eosTest)
+            if (pdnet::GetConfig().eos)
+            {
+                pdnet::eos::Start();
+            }
+            else if (pdnet::GetConfig().eosTest)
             {
                 pdnet::StartEosTest();
             }

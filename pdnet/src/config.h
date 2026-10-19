@@ -13,6 +13,8 @@ namespace pdnet
         uint32_t qosProbes = 5;
         bool testPeer = false;              // test_peer=on: in-process fake second player (debug, see testpeer.h)
         bool eosTest = false;               // eos_test=on: one-shot Epic Online Services feasibility check (see eostest.h)
+        bool eos = false;                   // eos=on: stay signed in to Epic Online Services (see eos.h)
+        std::wstring displayName = L"Player"; // display_name=: name shown to other players (max 32 characters)
     };
 
     // Loaded once: pdnet.ini next to the DLL, else LocalState\pdnet.ini (written with defaults if missing).
