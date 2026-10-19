@@ -29,10 +29,12 @@
 
 namespace pdnet::xsapi
 {
-    void ReportStub(const char* function);
+    void ReportStub(const char* function, bool returnedDefault = false);
 
     // This PC's player id (decimal, like an XUID): random once, then kept in LocalState\pdnet\identity.txt.
     const std::wstring& LocalXuid();
 }
 #define PDNET_XSAPI_STUB(fn) do { ::pdnet::xsapi::ReportStub(fn); throw ::winrt::hresult_not_implemented(); } while (0)
 #define PDNET_XSAPI_STUB_NOEXCEPT(fn) ::pdnet::xsapi::ReportStub(fn)
+// Unimplemented but harmless: log, then the stub returns a safe empty value.
+#define PDNET_XSAPI_STUB_DEFAULT(fn) ::pdnet::xsapi::ReportStub(fn, true)

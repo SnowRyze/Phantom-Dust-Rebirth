@@ -10,7 +10,7 @@ int32_t __stdcall WINRT_GetActivationFactory(void* classId, void** factory) noex
 
 namespace pdnet::xsapi
 {
-    void ReportStub(const char* function)
+    void ReportStub(const char* function, bool returnedDefault)
     {
         static std::mutex lock;
         static std::map<std::string, int> calls;
@@ -19,7 +19,9 @@ namespace pdnet::xsapi
             std::lock_guard guard(lock);
             n = ++calls[function];
         }
-        if (n <= 3) Log(L"xsapi-stub: %S called (not implemented yet)%s", function, n == 3 ? L" - further calls not logged" : L"");
+        if (n <= 3)
+            Log(L"xsapi-stub: %S %s%s", function, returnedDefault ? L"returned a default (not implemented yet)" : L"NOT IMPLEMENTED (error returned)",
+                n == 3 ? L" - further calls not logged" : L"");
     }
 
     const std::wstring& LocalXuid()
