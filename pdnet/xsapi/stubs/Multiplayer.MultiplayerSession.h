@@ -1,12 +1,17 @@
-#pragma once
+﻿#pragma once
 #include "Multiplayer/MultiplayerSession.g.h"
+#include "../mpsd.h"
+
+// pdnet-hand: a session being edited by this PC, backed by a pdnet::mpsd::SessionDoc.
 
 
 namespace winrt::Microsoft::Xbox::Services::Multiplayer::implementation
 {
     struct MultiplayerSession : MultiplayerSessionT<MultiplayerSession>
     {
-        MultiplayerSession() = default;
+        MultiplayerSession() : m_doc(std::make_shared<::pdnet::mpsd::SessionDoc>()) {}
+        // pdnet: a session as returned by the store (a snapshot the game can edit and write back).
+        MultiplayerSession(Microsoft::Xbox::Services::XboxLiveContext context, ::pdnet::mpsd::SessionPtr doc) : m_context(std::move(context)), m_doc(std::move(doc)) {}
 
         MultiplayerSession(Microsoft::Xbox::Services::XboxLiveContext const& xboxLiveContext);
         MultiplayerSession(Microsoft::Xbox::Services::XboxLiveContext const& xboxLiveContext, Microsoft::Xbox::Services::Multiplayer::MultiplayerSessionReference const& multiplayerSessionReference, uint32_t maxMembersInSession, Microsoft::Xbox::Services::Multiplayer::MultiplayerSessionVisibility const& multiplayerSessionVisibility, Windows::Foundation::Collections::IVectorView<hstring> const& initiatorXboxUserIds, hstring const& sessionCustomConstantsJson);
@@ -81,6 +86,15 @@ namespace winrt::Microsoft::Xbox::Services::Multiplayer::implementation
         void SetSessionCustomPropertyJson(hstring const& name, hstring const& valueJson);
         void DeleteSessionCustomPropertyJson(hstring const& name);
         void _Init(Microsoft::Xbox::Services::XboxLiveContext const& xboxLiveContext, Microsoft::Xbox::Services::Multiplayer::MultiplayerSessionReference const& multiplayerSessionReference, uint32_t maxMembersInSession, Microsoft::Xbox::Services::Multiplayer::MultiplayerSessionVisibility const& multiplayerSessionVisibility, Windows::Foundation::Collections::IVectorView<hstring> const& initiatorXboxUserIds, hstring const& sessionCustomConstantsJson);
+
+        const ::pdnet::mpsd::SessionDoc& Doc() const { return *m_doc; }
+        Microsoft::Xbox::Services::XboxLiveContext Context() const { return m_context; }
+
+    private:
+        ::pdnet::mpsd::MemberDoc& Me();
+        Microsoft::Xbox::Services::XboxLiveContext m_context{ nullptr };
+        ::pdnet::mpsd::SessionPtr m_doc;
+
     };
 }
 namespace winrt::Microsoft::Xbox::Services::Multiplayer::factory_implementation

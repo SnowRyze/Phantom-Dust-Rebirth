@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 #include "Multiplayer/MultiplayerService.g.h"
 
 
@@ -35,5 +35,11 @@ namespace winrt::Microsoft::Xbox::Services::Multiplayer::implementation
         void EnableMultiplayerSubscriptions();
         void DisableMultiplayerSubscriptions();
         bool MultiplayerSubscriptionsEnabled();
+
+    private:
+        winrt::event<Windows::Foundation::EventHandler<Microsoft::Xbox::Services::Multiplayer::MultiplayerSessionChangeEventArgs>> m_sessionChanged;
+        winrt::event<Windows::Foundation::EventHandler<Microsoft::Xbox::Services::Multiplayer::MultiplayerSubscriptionLostEventArgs>> m_subscriptionLost;
+        Microsoft::Xbox::Services::XboxLiveContext m_context{ nullptr };
+        std::atomic<bool> m_subscriptions{ false };
     };
 }

@@ -39,7 +39,7 @@ cl %CFLAGS% %EOSFLAGS% /MP /Fo"obj\\" /Fd"obj\core.pdb" ^
 rem 2. XSAPI stand-in: precompiled header, then every class in parallel
 cl %CFLAGS% %XINC% /Yc"xsapi_pch.h" /Fp"obj\xsapi\xsapi.pch" /Fo"obj\xsapi\\" /Fd"obj\xsapi.pdb" "%ROOT%xsapi\xsapi_pch.cpp" || goto :failed
 cl %CFLAGS% %XINC% /MP /Yu"xsapi_pch.h" /Fp"obj\xsapi\xsapi.pch" /Fo"obj\xsapi\\" /Fd"obj\xsapi.pdb" ^
-   "%ROOT%xsapi\xsapi.cpp" "%ROOT%xsapi\gen\module.g.cpp" "%ROOT%xsapi\stubs\*.cpp" || goto :failed
+   "%ROOT%xsapi\xsapi.cpp" "%ROOT%xsapi\mpsd.cpp" "%ROOT%xsapi\gen\module.g.cpp" "%ROOT%xsapi\stubs\*.cpp" || goto :failed
 
 rem 3. link
 link /nologo /DLL /OUT:Microsoft.Xbox.Services.dll /DEF:"%ROOT%src\pdnet.def" /DEBUG /OPT:REF /OPT:ICF ^
