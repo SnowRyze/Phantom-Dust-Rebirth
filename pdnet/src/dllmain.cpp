@@ -12,6 +12,7 @@
 namespace
 {
     HMODULE g_self;
+    bool g_injected = false; // loaded by pdlaunch into an unmodified game (PdInjectedInit) rather than as Microsoft.Xbox.Services.dll
     using GetFactoryFn = HRESULT(WINAPI*)(HSTRING, IActivationFactory**);
     GetFactoryFn g_origGetFactory;
 
@@ -22,8 +23,13 @@ namespace
         {
             wchar_t path[MAX_PATH];
             GetModuleFileNameW(g_self, path, MAX_PATH);
-            pdnet::Log(L"pdnet loaded from %s (pid %lu)", path, GetCurrentProcessId());
+            pdnet::Log(L"pdnet loaded from %s (pid %lu)%s", path, GetCurrentProcessId(), g_injected ? L", injected by pdlaunch" : L"");
 
+            if (g_injected)
+            {
+                if (pdnet::GetConfig().eos) pdnet::eos::Start();
+                return;
+            }
             std::wstring orig = path;
             orig.replace(orig.find_last_of(L'\\') + 1, std::wstring::npos, L"Microsoft.Xbox.Services.orig.dll");
             HMODULE module = LoadLibraryExW(orig.c_str(), nullptr, LOAD_WITH_ALTERED_SEARCH_PATH);
@@ -42,8 +48,16 @@ namespace
                 pdnet::StartEosTest();
             }
         });
-        pdnet::InstallActivationHooks(g_self);
+        pdnet::InstallActivationHooks(g_self, g_injected);
     }
+}
+
+// pdlaunch calls this in the game process (a remote thread) before the game's main thread starts.
+extern "C" DWORD WINAPI PdInjectedInit(LPVOID)
+{
+    g_injected = true;
+    EnsureInitialized();
+    return 0;
 }
 
 extern "C" HRESULT WINAPI PdGetActivationFactory(HSTRING classId, IActivationFactory** factory)

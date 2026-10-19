@@ -3,12 +3,17 @@
 #include "gamesave.h"
 #include "sda.h"
 #include "log.h"
+#include "config.h"
+#include "../xsapi/xsapi.h"
 #include <set>
 
 namespace pdnet
 {
     namespace
     {
+        HMODULE g_self = nullptr;
+        std::atomic<bool> g_injected{ false };
+
         using RoGetActivationFactoryFn = HRESULT(WINAPI*)(HSTRING, REFIID, void**);
 
         RoGetActivationFactoryFn RealRoGetActivationFactory()
@@ -18,9 +23,16 @@ namespace pdnet
         }
 
         // Classes we answer ourselves instead of the OS.
-        HRESULT TryOverride(std::wstring_view cls, REFIID iid, void** factory, bool& handled)
+        HRESULT TryOverride(HSTRING classId, std::wstring_view cls, REFIID iid, void** factory, bool& handled)
         {
             handled = false;
+            if (g_injected && GetConfig().xboxOff && cls.starts_with(L"Microsoft.Xbox.Services."))
+            {
+                handled = true;
+                winrt::com_ptr<IActivationFactory> xsapi;
+                HRESULT hr = xsapi::GetActivationFactory(classId, xsapi.put());
+                return SUCCEEDED(hr) ? xsapi->QueryInterface(iid, factory) : hr;
+            }
             if (cls == L"Windows.Gaming.XboxLive.Storage.GameSaveProvider")
             {
                 static auto saves = CreateGameSaveProviderFactory();
@@ -40,6 +52,7 @@ namespace pdnet
             UINT32 len = 0;
             const wchar_t* raw = WindowsGetStringRawBuffer(classId, &len);
             std::wstring_view cls(raw ? raw : L"", len);
+            if (g_injected) InstallActivationHooks(g_self, true); // catch modules loaded since the last activation
 
             static std::mutex lock;
             static std::set<std::wstring, std::less<>> seen;
@@ -52,7 +65,7 @@ namespace pdnet
             try
             {
                 bool handled;
-                HRESULT hr = TryOverride(cls, iid, factory, handled);
+                HRESULT hr = TryOverride(classId, cls, iid, factory, handled);
                 if (handled)
                 {
                     Log(L"activate %.*s -> pdnet (0x%08X)", static_cast<int>(cls.size()), cls.data(), hr);
@@ -129,9 +142,11 @@ namespace pdnet
         }
     }
 
-    void InstallActivationHooks(HMODULE self)
+    void InstallActivationHooks(HMODULE self, bool injected)
     {
-        static std::mutex lock;
+        g_self = self;
+        if (injected) g_injected = true;
+        static std::recursive_mutex lock;
         static std::set<HMODULE> patched;
         std::lock_guard guard(lock);
 

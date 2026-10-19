@@ -242,3 +242,10 @@ Game mesh facts found for it (PDUWP.exe, Microsoft's sample MeshManager):
   and Xbox-free mode up to stage A (create match works). The fourth classifier stop came at the start of stage B; then this update.
 - **2026-10-19 (session 3):** stage B from `STAGE_B_GUIDE.md`: EOS lobby layer, EOS-backed session store, search handles, change events,
   `lobbytool` (second EOS client) and its self-test against EOS. No classifier stop this time. Not yet run in the game (§4.9).
+- **2026-10-19 (session 3, later):** stage B tester kit for unpacked copies: `testkit-stageb\` + `make-testkit-stageb.ps1` →
+  `D:\PhantomDust-pdnet-StageB-TestKit-2026-10-19.zip` (DLL `A3755102`, the one tested in game and installed in the Direct build; **no eos.ini
+  inside** — send a tester client's eos.ini separately). Also started, **untested and parked**: running pdnet in an unmodified Microsoft Store
+  install via a launcher (`pdnet\tools\pdlaunch.cpp`, `testkit-store\store-setup.ps1`/`store-remove.ps1`): Windows' package-debugger setting
+  starts `pdlaunch.exe`, which injects `pdnet.dll` and calls its new `PdInjectedInit` export; with `xbox=off` the activation hook then answers
+  `Microsoft.Xbox.Services.*` itself. Not needed now (the tester has an unpacked copy). Note: `pdnet\build-stageb` now holds a rebuild with
+  this injected-mode code (dump mode unchanged in intent, but not re-run in game); rerunning `make-testkit-stageb.ps1` would package it.
