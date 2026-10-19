@@ -42,7 +42,12 @@ Milestones: local sign-in → lobby create/list/join → two players connected i
   (client policy allowing Connect, P2P and Lobbies).
 - The **EOS C SDK** zip (download from the portal), saved locally.
 
-## Step 1 results so far (2026-10-19)
+## Step 1: PASSED (2026-10-19, 00:35 run)
+
+`load=ok init=ok platform=ok deviceid=ok (already existed) login=ok (same product user as the previous launch) nat=ok (Moderate) lobby=ok`.
+No threads were suspended while the game was in the background (nosuspend.ps1 works). Details of how we got there follow.
+
+## Step 1 history
 
 - load / init / platform: **ok** inside the sandbox.
 - Device ID: first failed (`EOS_UnexpectedError`) because EOS keeps it in Windows Credential Manager, which the AppContainer
