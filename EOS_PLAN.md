@@ -84,6 +84,21 @@ XSAPI. Replacing sign-in means replacing, at the same time, every XSAPI service 
 title storage, presence, social/profile, stats, leaderboards), with stubs where a feature isn't needed.
 The user object itself is small (the 12 members above).
 
+## Xbox-free mode (`xbox=off`, runner `_netmod\xboxfree.ps1`)
+
+pdnet answers every `Microsoft.Xbox.Services.*` class itself (`pdnet\xsapi\`, generated from the winmd by `generate.py`;
+unimplemented members log `xsapi-stub:` and return safe defaults).
+
+- 2026-10-19: boots with no Xbox sign-in. Local user (name from `display_name`, id in `LocalState\pdnet\identity.txt`); title storage
+  served from `Assets\Data(\gstorage)` (tms_options.csv, gsdata_en.dat); main menu, scenario mode and the multiplayer menu work.
+- 2026-10-19, **stage A**: local in-memory sessions (`xsapi\mpsd.*`). **Create match works**: the game creates `SearchableGame/<guid>`
+  (max 4), joins, writes it ~6 times, and sets up the PeerToHostUDP template.
+  Calls seen in the lobby that stage B must back: `SetSearchHandleAsync` (MultiplayerSearchHandleRequest with Numbers/StringsMetadata),
+  `SetActivityAsync`, `MultiplayerSession::SearchHandleId`, `DateOfNextTimer`, `CompareMultiplayerSessions`.
+- **Stage B (next):** back the session store with EOS lobbies. Session ↔ lobby (members ↔ lobby members with attributes: id, name,
+  device address, custom properties), search handle ↔ searchable lobby attributes, `GetSearchHandlesAsync` ↔ EOS lobby search,
+  EOS lobby updates → `MultiplayerSessionChanged`, and `CompareMultiplayerSessions` implemented.
+
 ## Risks
 
 - The SDK may not run in the AppContainer (step 1 exists to find out).
