@@ -143,7 +143,7 @@ Game mesh facts found for it (PDUWP.exe, Microsoft's sample MeshManager):
 2. ~~Replace sign-in and title storage~~ Done in Xbox-free mode (§4.8).
 3. **Sessions shared between players** (stage B in EOS_PLAN.md). Stage A keeps sessions in memory on one PC, so other players can't find or
    join a lobby. In the lobby the game also calls `SetSearchHandleAsync`, `SetActivityAsync`, `MultiplayerSession::SearchHandleId`,
-   `DateOfNextTimer` and `CompareMultiplayerSessions`, which are still stubs. **This session could not continue it; see §8.**
+   `DateOfNextTimer` and `CompareMultiplayerSessions`, which are still stubs. **This session could not continue it; see §8.** A step-by-step scope for a human developer is in [`STAGE_B_GUIDE.md`](STAGE_B_GUIDE.md).
 4. **In-match connections between players** (stage C). For now the Direct build's networking is pdnet's direct UDP (§4.4): it should work on a LAN,
    and over the internet only if the host forwards ports. Not done; see §8.
 5. **Two-PC testing** of anything multiplayer, once the user has a second PC or tester (the test kit, §4.5, is for that).
