@@ -23,7 +23,7 @@ pushd "%ROOT%%OUT%"
 cl /nologo /std:c++20 /EHsc /MT /O2 /Zi /W3 /permissive- /bigobj /utf-8 ^
    /DUNICODE /D_UNICODE %EOSFLAGS% ^
    "%ROOT%src\dllmain.cpp" "%ROOT%src\hooks.cpp" "%ROOT%src\gamesave.cpp" "%ROOT%src\log.cpp" ^
-   "%ROOT%src\config.cpp" "%ROOT%src\net.cpp" "%ROOT%src\sda.cpp" "%ROOT%src\testpeer.cpp" "%ROOT%src\eostest.cpp" ^
+   "%ROOT%src\config.cpp" "%ROOT%src\net.cpp" "%ROOT%src\sda.cpp" "%ROOT%src\testpeer.cpp" "%ROOT%src\eostest.cpp" "%ROOT%src\credstore.cpp" ^
    /LD /Fe:Microsoft.Xbox.Services.dll ^
    /link /DEF:"%ROOT%src\pdnet.def" /DEBUG /OPT:REF /OPT:ICF ^
    kernel32.lib ole32.lib oleaut32.lib runtimeobject.lib ws2_32.lib bcrypt.lib

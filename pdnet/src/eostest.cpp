@@ -1,5 +1,6 @@
 #include "pch.h"
 #include "eostest.h"
+#include "credstore.h"
 #include "log.h"
 
 #ifdef PDNET_NO_EOS
@@ -189,6 +190,11 @@ namespace pdnet
             }
             step(L"load", L"ok");
 
+            // The sandbox can't use Windows Credential Manager, where EOS keeps the device ID; give EOS a private store.
+            std::wstring eosDir = LocalStatePath() + L"\\eos";
+            CreateDirectoryW(eosDir.c_str(), nullptr);
+            RedirectCredentialStore(g_sdk.module, eosDir + L"\\credentials");
+
             EOS_InitializeOptions init{};
             init.ApiVersion = EOS_INITIALIZE_API_LATEST;
             init.ProductName = "PhantomDust-pdnet";
@@ -214,7 +220,7 @@ namespace pdnet
                     return finish();
                 }
             }
-            std::wstring cacheDir = LocalStatePath() + L"\\eos";
+            std::wstring cacheDir = eosDir + L"\\cache";
             CreateDirectoryW(cacheDir.c_str(), nullptr);
             std::string cache = winrt::to_string(cacheDir);
 
