@@ -1,8 +1,8 @@
 # Handoff: Phantom Dust (2017 UWP): replacing Xbox Live / Teredo networking
 
-Written 2026-10-17 by the first Claude Code session, then updated by a second session (source repair and test peer)
-and again on 2026-10-18 to bring everything in line. Two sessions have worked here; see §10 and `git log` in `_netmod`.
-The longer design notes and the research log are in [`MODDING_PLAN.md`](MODDING_PLAN.md). Read that next.
+Written 2026-10-17 by the first Claude Code session, updated by a second session (source repair and test peer),
+and updated again on 2026-10-18 and 2026-10-19 (EOS, Xbox-free mode). See §10 and `git log` in `_netmod`.
+Read next: [`EOS_PLAN.md`](EOS_PLAN.md) (the current direction, with detailed progress) and [`MODDING_PLAN.md`](MODDING_PLAN.md) (original design and research).
 
 ## 1. Goal
 
@@ -30,8 +30,8 @@ Never break the Teredo build or the master dump.
 | Path | Contents |
 |---|---|
 | `D:\PhantomDust-Dumped-NoMovie` | **Master dump, byte-for-byte as received** (checked against `_netmod\original`). Holds `_netmod\` (all project files). |
-| `D:\PhantomDust-Teredo` | **Currently registered.** Original Microsoft networking (`pdnet.ini: network_mode=teredo`) plus local saves and the menu fix. DLL = original 12:26 stage 2 build (MD5 `E3E67884`; its networking code stays inactive in teredo mode). **The user plays online with this build and it works** (confirmed 2026-10-18). **Don't modify it.** |
-| `D:\PhantomDust-Direct` | Same, plus `network_mode=direct`, `test_peer=on`, manifest capabilities `internetClientServer` and `privateNetworkClientServer`, and the newer test-peer DLL (MD5 `632CEAC6`, from `pdnet\build-testpeer`). Never tested with two PCs. |
+| `D:\PhantomDust-Teredo` | Original Microsoft networking (`pdnet.ini: network_mode=teredo`) plus local saves and the menu fix. DLL = original 12:26 stage 2 build (MD5 `E3E67884`; its networking code stays inactive in teredo mode). **The user plays online with this build and it works.** **Don't modify it.** |
+| `D:\PhantomDust-Direct` | The development build. As of 2026-10-19: Xbox-free DLL (MD5 `F21B9852`, from `pdnet\build-xboxoff`), `EOSSDK-Win64-Shipping.dll` and `eos.ini` (credentials; never commit), and pdnet.ini set to `network_mode=direct xbox=off eos=on eos_test=off test_peer=off display_name=YourName` (still the placeholder name). Manifest capabilities `internetClientServer` and `privateNetworkClientServer`. **Registered at the time of writing; switch back with `builds.ps1 -Use Teredo` for normal play.** |
 
 - All three use the **same package identity** (`Microsoft.MSEsper_8wekyb3d8bbwe`), because Xbox Live sign-in is tied to it.
   So only one can be registered at a time. Switch with `_netmod\builds.ps1 -Use Teredo|Direct|Master`, which removes
@@ -60,6 +60,25 @@ Never break the Teredo build or the master dump.
    `Windows.Networking.XboxLive.*`: device addresses become pdnet snapshots carrying the IP and ports, and endpoint pairs come from a CONNECT/ACK
    handshake on UDP 43211. QoS uses pings. It loads and doesn't break anything (user verified single player and the lobby browser), but **it has never
    run a real connection**, because only creating or joining a lobby exercises it and there's no second PC.
+5. **Shareable test kit** (2026-10-18): `D:\PhantomDust-pdnet-TestKit-2026-10-18.zip` (source in `testkit\`). It contains the mod only, no game files;
+   `install.ps1` applies it to the tester's own unpacked copy. Not yet used by a second tester.
+6. **No-suspend** (2026-10-19): `nosuspend.ps1 [-Off]` turns on package debug mode (`IPackageDebugSettings::EnableDebugging`) so Windows
+   doesn't suspend the game when minimized. Verified: no threads suspended in the background. Re-run it after a build switch if pausing returns.
+7. **EOS (Epic Online Services) works inside the game's sandbox** (2026-10-19), with EOS SDK 1.19.2 loaded at run time (`eossdk.*`):
+   - Feasibility test (`eos_test=on`, `eostest.ps1`) passed: device-ID login (no Epic account), NAT query (Moderate), and a lobby created and deleted with presence off.
+   - The sandbox blocks Windows Credential Manager, where EOS keeps the device ID. `credstore.cpp` points the EOS module's
+     `CredRead/Write/Delete/Free` imports at DPAPI files in `LocalState\eos\credentials`.
+   - Long-lived sign-in (`eos=on`, `eos.cpp`, `eosrun.ps1`): stayed signed in for about 75 minutes with no drops (the SDK refreshes device-ID sessions itself).
+     It uses the same product user every launch.
+8. **Xbox-free mode** (`xbox=off`, `xboxfree.ps1`, code in `pdnet\xsapi\`): pdnet answers every `Microsoft.Xbox.Services.*` class itself.
+   - `xsapi\generate.py` runs cppwinrt on the XSAPI winmd: 169 classes. A stub `.cpp` is regenerated until it has hand-written code or a `// pdnet-hand` line.
+     Unimplemented members log `xsapi-stub:` and return safe defaults (empty/zero/default object/finished async).
+   - Hand-written so far: `XboxLiveUser` (local sign-in; name = `display_name`; id kept in `LocalState\pdnet\identity.txt`), `XboxLiveContext`,
+     settings and app config, title storage (served from `titlestorage\` or the game's `Assets\Data(\gstorage)`; missing blobs fail as HTTP 404),
+     and **stage A sessions** (`xsapi\mpsd.*`: in-memory session store plus MultiplayerSession/member/properties/constants/reference/write result
+     and the write/read/events parts of MultiplayerService).
+   - **Verified by the user:** boots without Xbox sign-in; main menu, scenario mode and the multiplayer menu work; **creating a match lobby works**
+     (on this PC only, since sessions exist only in memory).
 
 ## 5. Key technical findings (for whoever continues)
 
@@ -92,8 +111,12 @@ Never break the Teredo build or the master dump.
 - The rebuilt DLL (`pdnet\build-repair`, MD5 8316A4A1…) was installed in the Direct build and smoke-tested in game on 2026-10-17
   (13:07: it loaded and lobby creation worked). It was then replaced there by the test-peer build (§6a).
   The Teredo build and `pdnet\build` still have the original 12:26 DLL (MD5 E3E67884…), which is also kept in `pdnet\build-stage2-1226`.
-- Build output folders: `build` / `build-stage2-1226` = original 12:26, `build-repair` = repaired source, `build-testpeer` = repaired + test peer (current source).
+- Build output folders: `build` / `build-stage2-1226` = original 12:26, `build-repair` = repaired source, `build-testpeer` = repaired + test peer,
+  `build-eostest` (CAD9F6F4) = EOS test, `build-eos` (5CF6B75D) = long-lived sign-in, `build-xboxoff` (F21B9852) = Xbox-free mode (current source).
   Don't build into `build` or `build-stage2-1226`; they're the known-good copies.
+- Since 2026-10-19, `build.cmd` compiles in phases: core sources, then the XSAPI stand-in with a precompiled header (`xsapi_pch.h`) and `/MP`,
+  then link (about 95 s). It needs `xsapi\gen\` first: `py -I pdnet\xsapi\generate.py <master>\Microsoft.Xbox.Services.winmd` (gen\ is git-ignored).
+- Commit messages containing double quotes break when passed through PowerShell to git; write them to a file and use `git commit -F`.
 - `server\pdserver.py` (partial) was deleted; it's still in the first commit.
 
 ## 6a. Test peer (one-PC join test)
@@ -117,27 +140,31 @@ Game mesh facts found for it (PDUWP.exe, Microsoft's sample MeshManager):
 ## 7. What's left
 
 1. ~~Repair the source tree~~ Done and smoke-tested in game (§6).
-2. **Run the test peer in the game** (§6a). This is the only end-to-end check possible on one PC. Switch with `builds.ps1 -Use Direct`,
-   then switch back with `-Use Teredo` afterwards so the user can play.
-3. **Two-PC test of stage 2** once the user has a second PC: LAN first, through an Xbox Live lobby (host creates it, the other joins).
-   Read `pdnet.log` on both. The earlier question of whether the host needs the joiner's device address is answered at the mesh level in §6a
-   (no: any inbound endpoint pair is accepted). It still needs confirming with real traffic.
-4. **Internet play without port forwarding.** Not done; see §8.
-5. **Stage 3b:** replace XSAPI multiplayer (MPSD sessions, SmartMatch, search handles, RTA), sign-in (`XboxLiveUser`) and title storage
-   with the user's own server, implementing only the XSAPI surface listed in `MODDING_PLAN.md` §4b. Not started.
+2. ~~Replace sign-in and title storage~~ Done in Xbox-free mode (§4.8).
+3. **Sessions shared between players** (stage B in EOS_PLAN.md). Stage A keeps sessions in memory on one PC, so other players can't find or
+   join a lobby. In the lobby the game also calls `SetSearchHandleAsync`, `SetActivityAsync`, `MultiplayerSession::SearchHandleId`,
+   `DateOfNextTimer` and `CompareMultiplayerSessions`, which are still stubs. **This session could not continue it; see §8.**
+4. **In-match connections between players** (stage C). For now the Direct build's networking is pdnet's direct UDP (§4.4): it should work on a LAN,
+   and over the internet only if the host forwards ports. Not done; see §8.
+5. **Two-PC testing** of anything multiplayer, once the user has a second PC or tester (the test kit, §4.5, is for that).
+6. Remaining Xbox-free stubs that only affect local features (stats, presence, profiles, events) currently return defaults; they can stay.
+7. Optional: give the Direct build its own package identity once it no longer needs Xbox Live at all, so it can coexist with the Teredo build.
    Card packs and paid content: the agreed scope is restoring play, not unlocking paid content.
-6. Optional: give the Direct build its own package identity once it no longer needs Xbox Live, so it can coexist with the Teredo build.
 
 ## 8. Difficulties encountered
 
-- **Two responses were stopped by Anthropic's safety classifier**, and per its instruction they must not be reproduced:
+- **Four responses were stopped by Anthropic's safety classifier**, and per its instruction they must not be reproduced:
   1. while writing the plug-and-play internet connectivity layer (automatic public-address discovery and NAT traversal on the game's socket);
   2. while writing the stage 3 relay server (`pdserver.py`), which forwards game traffic between players;
   3. (2026-10-18) while writing a passive "link monitor" for the Teredo build, which would have logged the state of
-     Windows' player-to-player endpoint pairs to diagnose "cross lagging" (see §11). Its partial file was deleted and nothing was installed.
+     Windows' player-to-player endpoint pairs to diagnose "cross lagging" (see §11). Its partial file was deleted and nothing was installed;
+  4. (2026-10-19) while starting stage B, connecting the game's multiplayer sessions to EOS lobbies. Nothing had been written yet;
+     the stopped step only read the EOS SDK headers.
 
-  I don't know the exact reason. The user was told that this session couldn't continue that part of the work. The partial files were
-  removed in the repair (§6). The next session should know this happened, and talk it through with the user rather than recreating those pieces.
+  I don't know the exact reasons. All four involve code for connecting players to each other. The user was told this session couldn't continue
+  those parts, and asked whether switching models would get around it; the answer given was no, it shouldn't be used to get around a safeguard,
+  and that likely false positives should be reported to Anthropic (thumbs-down feedback or `/bug`). The next session should know this
+  happened and talk it through with the user rather than recreating those pieces.
 - Bash heredocs in this environment turned `\\` into `\` (and `\n` into real newlines) inside embedded Python. Use the Write/Edit tools for source edits.
 - `WINRT_LEAN_AND_MEAN` strips the `produce<>` code needed to implement Windows interfaces. C++/WinRT coroutines that call `get_strong()` can't be `const`.
 - Ghidra didn't define most of the UTF-16 log strings, so finding functions by string missed them. Finding them by import callers (`DumpCallers.java`) worked.
@@ -145,6 +172,11 @@ Game mesh facts found for it (PDUWP.exe, Microsoft's sample MeshManager):
   `CheckNetIsolation LoopbackExempt -a -n=Microsoft.MSEsper_8wekyb3d8bbwe` (a system setting; it's the user's call).
 - Only one registration per package identity, which is why builds are switched instead of installed side by side.
 - Inbound UDP to the game needs the `internetClientServer` / `privateNetworkClientServer` capabilities (added only to the Direct build).
+- Windows suspends the game when it's minimized (a Store app), which froze an EOS test run; that's what `nosuspend.ps1` is for.
+- The EOS SDK can't store its device ID in the sandbox (Credential Manager blocked); fixed by `credstore.cpp`.
+- Xbox-free bring-up crashed twice before the main menu: first on an unhandled E_NOTIMPL, so stubs now return defaults; then on an empty title-storage
+  result, so title storage is now served locally. Expect this "run, read `xboxfree.ps1 -Report`, implement the next piece" loop for new areas.
+- This PC's clock jumped back about an hour during one session; log timestamps are wall-clock, so don't trust them across that.
 
 ## 9. User preferences learned
 
@@ -153,6 +185,9 @@ Game mesh facts found for it (PDUWP.exe, Microsoft's sample MeshManager):
 - Server language: Python (the user had no preference). Testing will be on 2 PCs once available.
 - They like short, practical explanations, with one-command scripts for anything they have to run.
 - They actively play online with the Teredo build, so leave it registered when you're done testing.
+- EOS credentials live in `_netmod\eos.local.ini` (git-ignored) and get copied to the Direct build as `eos.ini`. The client secret was visible
+  to session 1 through a file-change notice. Before any build with credentials is shared, create a separate client in the Epic portal.
+- They want as little player setup as possible: no Epic accounts for players, and no port forwarding or router changes.
 
 ## 11. "Cross lagging" (reported 2026-10-18, Teredo build)
 
@@ -172,3 +207,6 @@ Game mesh facts found for it (PDUWP.exe, Microsoft's sample MeshManager):
 - **Session 2** (2026-10-17, ~12:54–13:10): `git init` in `_netmod`, source repair, smoke test, test peer. Its commits carry the user's git name.
   `git log` shows the test-peer commit `8abdf07` first even though its author date (12:19) is earlier. Go by commit order, not the date.
 - **2026-10-18:** the user played online with the Teredo build (log entry at 17:10). Session 1 updated this document to match git and the files on disk.
+  Also: the test kit, the cross-lagging diagnosis and `lagmonitor.ps1`, and the third classifier stop.
+- **2026-10-19 (session 1):** EOS plan, feasibility test plus credential store, `nosuspend.ps1`, long-lived EOS sign-in, the sign-in recon in Ghidra,
+  and Xbox-free mode up to stage A (create match works). The fourth classifier stop came at the start of stage B; then this update.
