@@ -100,8 +100,14 @@ Never break the Teredo build or the master dump.
      rating, ratinglimit, ratingmin/ratingmax, reqmoney, reqskill, sendskill, sessiontype, stage, state, version=140; strings gamename,
      platform). `lobbytool search` found it with all properties. `lobbytool join … 60`: the game numbered the new member 2 within ~150 ms,
      raised `MemberListChange`, re-read the session (2 members); on leave it raised it again (1 member). No crash, no multiplayer stubs hit.
-     Not yet confirmed on screen whether the lobby UI listed "lobbytool". Next: two PCs (test plan in the guide), the game's lobby browser
-     on the joining side (`GetSearchHandlesAsync` + filter), and starting a match.
+     **The lobby screen did not list "lobbytool"** (user, 00:29).
+   - **Test peer in game (00:36, `test_peer=on`, DLL `A3755102`):** first in-game run of pdnet's stage 2 networking: 4/4 PASS (ping, CONNECT/ACK,
+     HELLO both ways — the game named itself `<xuid> [noid]` — then 20 s of heartbeats and a clean DELETE). Right after HELLO the game sent one
+     48-byte type-3 (chat/custom) message that the test peer doesn't answer. **The lobby screen listed nothing either.**
+   - So neither a session member alone nor a mesh peer alone shows up. Likely the UI needs both (a member whose device address matches the
+     connected peer) and/or the game's own player-info exchange after HELLO. Next: Ghidra on the lobby member list and the type-3 message,
+     or a real second PC (which does all of this naturally).
+   - Fixed meanwhile (`4b0a7e1`): EOS hides member ids/attributes from non-members, so search results now carry EOS's member count.
    - Known gaps: reservations (`AddMemberReservation`) stay on the PC that made them; transfer handles (`SetTransferHandleAsync`) are still a stub;
      an EOS re-sign-in doesn't rejoin lobbies (the game is told the subscription was lost and should leave/recreate).
 
