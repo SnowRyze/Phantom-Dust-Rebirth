@@ -79,6 +79,26 @@ Never break the Teredo build or the master dump.
      and the write/read/events parts of MultiplayerService).
    - **Verified by the user:** boots without Xbox sign-in; main menu, scenario mode and the multiplayer menu work; **creating a match lobby works**
      (on this PC only, since sessions exist only in memory).
+9. **Stage B code: sessions shared through EOS lobbies** (2026-10-19, session 3, commit `e689999`, DLL `pdnet\build-stageb`, MD5 `91379196`).
+   Follows [`STAGE_B_GUIDE.md`](STAGE_B_GUIDE.md) steps 1–8. The session ↔ lobby mapping is written down at the top of `xsapi\mpsd.h`.
+   - `src\lobbies.*`: the EOS lobby layer (plain C++, no EOS types, so the XSAPI side can use it). Each call is posted to the EOS thread and
+     the caller waits with a 12 s timeout, so the game can't hang on a lost callback. Notifications go to one worker thread in order.
+   - `xsapi\mpsd.*`: `SessionStore` creates/joins/updates/leaves the lobby inside `Write()`. The lobby id is `pd1` + SHA-256 of the session key,
+     so a session reference or search handle (handle id = lobby id) finds the lobby on any PC. Bucket `pd1|<scid>|<template>` gates mod versions.
+     Writes apply only fields the game edited (stage A copied the whole doc, which would overwrite other players' data).
+     Only the lobby owner can write lobby attributes, so a non-owner's session-level edits go to its `PD_REQ` member attribute and the owner applies
+     them; the owner also numbers members in join order and promotes whichever member the game names as host.
+   - Search handles live on the lobby (`PD_SEARCH`); `GetSearchHandlesAsync` searches the bucket and evaluates the game's filter
+     (`numbers/ratingmin le N and numbers/ratingmax ge N`, `numbers/reqmoney le N`, `numbers/cross eq 0`, `numbers/ratinglimit eq N`, from PDUWP.exe strings).
+   - Remote changes raise `MultiplayerSessionChanged` (respecting `SetSessionChangeSubscription`); EOS sign-out raises `MultiplayerSubscriptionLost`.
+   - `pdnet\tools\lobbytool.exe` (`build-lobbytool.cmd`): a second EOS client on this PC (desktop process, so its own device ID and product user).
+     `search`, `show <id>`, `join <id> [s]` (joins as fake player "lobbytool" with a TEST-NET address), `host <id> [s]` (self-test).
+   - **Verified (no game):** all 40 lobby functions resolve; lobbytool self-test against EOS passed (create, 1300-byte value split and rejoined,
+     read by id, update visible, destroy). A new lobby shows up in bucket searches after a few seconds, not instantly.
+   - **Not yet run inside the game.** Next: `xboxfree.ps1 -Build build-stageb`, create a match, then `lobbytool search` and `lobbytool join <id> 60`;
+     the game's lobby screen should show "lobbytool" arrive and leave. Then two PCs (test plan in the guide).
+   - Known gaps: reservations (`AddMemberReservation`) stay on the PC that made them; transfer handles (`SetTransferHandleAsync`) are still a stub;
+     an EOS re-sign-in doesn't rejoin lobbies (the game is told the subscription was lost and should leave/recreate).
 
 ## 5. Key technical findings (for whoever continues)
 
@@ -112,7 +132,7 @@ Never break the Teredo build or the master dump.
   (13:07: it loaded and lobby creation worked). It was then replaced there by the test-peer build (§6a).
   The Teredo build and `pdnet\build` still have the original 12:26 DLL (MD5 E3E67884…), which is also kept in `pdnet\build-stage2-1226`.
 - Build output folders: `build` / `build-stage2-1226` = original 12:26, `build-repair` = repaired source, `build-testpeer` = repaired + test peer,
-  `build-eostest` (CAD9F6F4) = EOS test, `build-eos` (5CF6B75D) = long-lived sign-in, `build-xboxoff` (F21B9852) = Xbox-free mode (current source).
+  `build-eostest` (CAD9F6F4) = EOS test, `build-eos` (5CF6B75D) = long-lived sign-in, `build-xboxoff` (F21B9852) = Xbox-free mode stage A, `build-stageb` (91379196) = stage B, EOS lobbies (current source).
   Don't build into `build` or `build-stage2-1226`; they're the known-good copies.
 - Since 2026-10-19, `build.cmd` compiles in phases: core sources, then the XSAPI stand-in with a precompiled header (`xsapi_pch.h`) and `/MP`,
   then link (about 95 s). It needs `xsapi\gen\` first: `py -I pdnet\xsapi\generate.py <master>\Microsoft.Xbox.Services.winmd` (gen\ is git-ignored).
@@ -141,9 +161,8 @@ Game mesh facts found for it (PDUWP.exe, Microsoft's sample MeshManager):
 
 1. ~~Repair the source tree~~ Done and smoke-tested in game (§6).
 2. ~~Replace sign-in and title storage~~ Done in Xbox-free mode (§4.8).
-3. **Sessions shared between players** (stage B in EOS_PLAN.md). Stage A keeps sessions in memory on one PC, so other players can't find or
-   join a lobby. In the lobby the game also calls `SetSearchHandleAsync`, `SetActivityAsync`, `MultiplayerSession::SearchHandleId`,
-   `DateOfNextTimer` and `CompareMultiplayerSessions`, which are still stubs. **This session could not continue it; see §8.** A step-by-step scope for a human developer is in [`STAGE_B_GUIDE.md`](STAGE_B_GUIDE.md).
+3. **Sessions shared between players** (stage B): **written and tested against EOS without the game (§4.9); in-game test next.**
+   Then the guide's test plan (two PCs, soak, `xbox=on`/Teredo regression).
 4. **In-match connections between players** (stage C). For now the Direct build's networking is pdnet's direct UDP (§4.4): it should work on a LAN,
    and over the internet only if the host forwards ports. Not done; see §8.
 5. **Two-PC testing** of anything multiplayer, once the user has a second PC or tester (the test kit, §4.5, is for that).
@@ -210,3 +229,5 @@ Game mesh facts found for it (PDUWP.exe, Microsoft's sample MeshManager):
   Also: the test kit, the cross-lagging diagnosis and `lagmonitor.ps1`, and the third classifier stop.
 - **2026-10-19 (session 1):** EOS plan, feasibility test plus credential store, `nosuspend.ps1`, long-lived EOS sign-in, the sign-in recon in Ghidra,
   and Xbox-free mode up to stage A (create match works). The fourth classifier stop came at the start of stage B; then this update.
+- **2026-10-19 (session 3):** stage B from `STAGE_B_GUIDE.md`: EOS lobby layer, EOS-backed session store, search handles, change events,
+  `lobbytool` (second EOS client) and its self-test against EOS. No classifier stop this time. Not yet run in the game (§4.9).
