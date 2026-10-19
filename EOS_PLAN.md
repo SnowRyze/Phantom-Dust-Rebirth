@@ -42,6 +42,17 @@ Milestones: local sign-in → lobby create/list/join → two players connected i
   (client policy allowing Connect, P2P and Lobbies).
 - The **EOS C SDK** zip (download from the portal), saved locally.
 
+## Step 1 results so far (2026-10-19)
+
+- load / init / platform: **ok** inside the sandbox.
+- Device ID: first failed (`EOS_UnexpectedError`) because EOS keeps it in Windows Credential Manager, which the AppContainer
+  can't use. Fixed with `credstore.cpp`, which points the EOS module's CredRead/Write/Delete/Free imports at DPAPI files in
+  `LocalState\eos\credentials`. Now **ok**, and **login ok** (anonymous product user, no Epic account).
+- NAT and lobby: not reached; Windows suspended the game (all threads `Suspended`) when it lost focus.
+- **Suspension:** Store apps are suspended when minimized, which would freeze EOS (and Teredo) mid-match.
+  `_netmod\nosuspend.ps1` turns on package debug mode (`IPackageDebugSettings::EnableDebugging`) so Windows doesn't suspend the game;
+  `-Off` reverts it. A real release needs a player-friendly version of this (or ExtendedExecution, which the game already references).
+
 ## Risks
 
 - The SDK may not run in the AppContainer (step 1 exists to find out).
