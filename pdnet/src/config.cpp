@@ -78,6 +78,7 @@ namespace pdnet
                 else if (key == "control_port") c.controlPort = static_cast<uint16_t>(std::stoul(value));
                 else if (key == "qos_probes") c.qosProbes = (std::max)(1ul, std::stoul(value));
                 else if (key == "test_peer") c.testPeer = _stricmp(value.c_str(), "on") == 0;
+                else if (key == "eos_test") c.eosTest = _stricmp(value.c_str(), "on") == 0;
             }
             if (c.testPeer) Log(L"config: test_peer=on (fake second player starts when a lobby is created)");
             Log(L"config: network_mode=%s advertise_ip=%s game_port=%u control_port=%u qos_probes=%u",

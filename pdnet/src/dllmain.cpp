@@ -2,6 +2,8 @@
 // Stage 1: forwards every XSAPI class to the original (renamed Microsoft.Xbox.Services.orig.dll),
 // logs what the game activates, and replaces Xbox cloud saves with local files.
 #include "pch.h"
+#include "config.h"
+#include "eostest.h"
 #include "hooks.h"
 #include "log.h"
 
@@ -28,6 +30,11 @@ namespace
                 g_origGetFactory = reinterpret_cast<GetFactoryFn>(GetProcAddress(module, "DllGetActivationFactory"));
             }
             pdnet::Log(L"original XSAPI %s (error %lu)", g_origGetFactory ? L"loaded" : L"NOT loaded", module ? 0 : GetLastError());
+
+            if (pdnet::GetConfig().eosTest)
+            {
+                pdnet::StartEosTest();
+            }
         });
         pdnet::InstallActivationHooks(g_self);
     }
