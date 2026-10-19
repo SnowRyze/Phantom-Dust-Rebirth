@@ -58,6 +58,32 @@ No threads were suspended while the game was in the background (nosuspend.ps1 wo
   `_netmod\nosuspend.ps1` turns on package debug mode (`IPackageDebugSettings::EnableDebugging`) so Windows doesn't suspend the game;
   `-Off` reverts it. A real release needs a player-friendly version of this (or ExtendedExecution, which the game already references).
 
+## Step 1a: long-lived sign-in (built 2026-10-19, awaiting in-game run)
+
+`eos=on` + `display_name=` in the Direct build's pdnet.ini. `eos.cpp` owns one EOS thread: device-ID sign-in at startup,
+re-sign-in on auth expiry or logout (with backoff), `Post()` for later steps. Runner: `_netmod\eosrun.ps1 -Name ... / -Report`.
+
+## Step 1b recon: how the game signs in (Ghidra, PDUWP.exe, 2026-10-19)
+
+The game's user manager is a state machine, `FUN_1401017c0` (state at `+0xb8`, states 1–10):
+- state 6: `FUN_140101fa0(mgr, Windows.System.User)` stores the Windows user at `+0x60` and moves to state 7. It then creates the
+  `XboxLiveUser` through its factory (`FUN_140105370`, stored at `+0xd0`), then `XboxLiveContext(user)` (`FUN_1400edbe0`), and then
+  `FUN_140104150` configures the context's settings and subscribes to `ServiceCallRouted` (debug logging).
+- `FUN_140105200` / `FUN_1401052c0` add and remove the static `XboxLiveUser.SignOutCompleted` handler.
+- state 10: reads the gamertag (`FUN_1400a6e30` → user vtable `+0x60` = `get_Gamertag`); if it's empty, it shows the literal "Gamertag".
+
+XSAPI vtable slots (from the winmd, after IInspectable's 6):
+- `XboxLiveUser`: 0x30 SignInAsync, 0x38 SignInSilentlyAsync, 0x40/0x48 GetTokenAndSignatureAsync, 0x50 …ArrayAsync,
+  0x58 XboxUserId, 0x60 Gamertag, 0x68 AgeGroup, 0x70 Privileges, 0x78 IsSignedIn, 0x80 WebAccountId, 0x88 WindowsSystemUser.
+- statics: 0x30 add_SignOutCompleted, 0x38 remove_SignOutCompleted.
+- `XboxLiveContext`: 0x30 User, 0x38 ProfileService, 0x40 SocialService, … 0x70 MultiplayerService, … 0x98 TitleStorageService, … 0xc0 Settings, 0xc8 AppConfig.
+
+**Consequence for the order of work.** XSAPI's own classes take an `XboxLiveUser`/`XboxLiveContext` and use their internals
+(e.g. `MultiplayerSession(XboxLiveContext^)`, every service hangs off the context). So a pdnet-made user can't be handed to the real
+XSAPI. Replacing sign-in means replacing, at the same time, every XSAPI service the game touches (multiplayer, matchmaking,
+title storage, presence, social/profile, stats, leaderboards), with stubs where a feature isn't needed.
+The user object itself is small (the 12 members above).
+
 ## Risks
 
 - The SDK may not run in the AppContainer (step 1 exists to find out).
