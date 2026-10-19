@@ -8,3 +8,4 @@ pdnet/build-*/
 *.exp
 *.lib
 pdnet/build*/
+eos.local.ini
