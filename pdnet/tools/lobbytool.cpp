@@ -69,7 +69,8 @@ namespace
 
     void Print(const lobbies::Lobby& l)
     {
-        wprintf(L"lobby %S  owner %S  bucket %S  members %zu/%u%s\n", l.id.c_str(), l.ownerId.c_str(), l.bucket.c_str(), l.members.size(), l.maxMembers, l.joined ? L"  (joined)" : L"");
+        wprintf(L"lobby %S  owner %S  bucket %S  members %u/%u%s\n", l.id.c_str(), l.ownerId.c_str(), l.bucket.c_str(), l.memberCount, l.maxMembers,
+            l.joined ? L"  (joined)" : L"  (search result: member details hidden)");
         for (auto& [k, v] : l.attributes) wprintf(L"    %-14S %S\n", k.c_str(), v.c_str());
         for (auto& m : l.members)
         {

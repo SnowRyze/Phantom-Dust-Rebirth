@@ -25,6 +25,7 @@ namespace pdnet::lobbies
         std::string ownerId;
         std::string bucket;
         uint32_t maxMembers = 0;
+        uint32_t memberCount = 0; // search results carry only this: their member list is empty (EOS shares members with members only)
         bool joined = false; // this PC is a member (details are live) rather than a search result
         Attributes attributes;
         std::vector<Member> members;

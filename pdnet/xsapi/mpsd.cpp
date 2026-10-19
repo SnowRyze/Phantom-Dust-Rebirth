@@ -199,6 +199,7 @@ namespace pdnet::mpsd
             d.hostDeviceToken = U16(Attr(a, "PD_HOST"));
             d.search = ParseSearch(lobbies::Joined(a, "PD_SEARCH"));
             d.shared = lobby.joined;
+            d.lobbyMemberCount = lobby.memberCount;
 
             std::map<std::wstring, uint32_t> ids;
             for (auto& [xuid, id] : ParseStringMap(lobbies::Joined(a, "PD_MIDS"))) ids[xuid] = static_cast<uint32_t>(_wtoi(id.c_str()));

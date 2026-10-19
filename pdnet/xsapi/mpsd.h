@@ -112,6 +112,7 @@ namespace pdnet::mpsd
         std::optional<SearchHandle> search;
         std::wstring ownerXuid; // xuid of the lobby owner (empty for a local-only session)
         bool shared = false;    // backed by an EOS lobby
+        uint32_t lobbyMemberCount = 0; // member count EOS reports (a search result has the count but not the members)
         Edits edits;
 
         std::wstring Key() const { return scid + L"|" + templateName + L"|" + sessionName; }

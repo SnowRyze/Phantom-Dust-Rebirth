@@ -217,10 +217,12 @@ namespace pdnet::lobbies
 
             EOS_LobbyDetails_GetMemberCountOptions membersOpts{ EOS_LOBBYDETAILS_GETMEMBERCOUNT_API_LATEST };
             uint32_t members = api.EOS_LobbyDetails_GetMemberCount(details, &membersOpts);
+            lobby.memberCount = members;
             for (uint32_t i = 0; i < members; ++i)
             {
                 EOS_LobbyDetails_GetMemberByIndexOptions o{ EOS_LOBBYDETAILS_GETMEMBERBYINDEX_API_LATEST, i };
                 EOS_ProductUserId user = api.EOS_LobbyDetails_GetMemberByIndex(details, &o);
+                if (!user) continue; // search result: members are not visible to non-members
                 Member m;
                 m.userId = Narrow(api, user);
                 EOS_LobbyDetails_GetMemberAttributeCountOptions co{ EOS_LOBBYDETAILS_GETMEMBERATTRIBUTECOUNT_API_LATEST, user };

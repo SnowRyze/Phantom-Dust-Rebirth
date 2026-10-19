@@ -44,6 +44,6 @@ namespace winrt::Microsoft::Xbox::Services::Multiplayer::implementation
         uint32_t n = 0;
         for (auto& m : m_doc->members)
             if (!m.reservation && !m.leaving) ++n;
-        return n;
+        return (std::max)(n, m_doc->lobbyMemberCount);
     }
 }
