@@ -12,3 +12,4 @@ eos.local.ini
 pdnet/xsapi/gen/
 pdnet/xsapi/gen-component/
 pdnet/build-*.log
+pdnet/tools/out/

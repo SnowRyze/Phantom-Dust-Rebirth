@@ -21,8 +21,29 @@ namespace pdnet::eossdk
         X(EOS_Connect_CreateDeviceId) X(EOS_Connect_Login) X(EOS_Connect_CreateUser) X(EOS_Connect_GetLoginStatus) \
         X(EOS_Connect_AddNotifyAuthExpiration) X(EOS_Connect_RemoveNotifyAuthExpiration)                          \
         X(EOS_Connect_AddNotifyLoginStatusChanged) X(EOS_Connect_RemoveNotifyLoginStatusChanged)                  \
-        X(EOS_ProductUserId_ToString) X(EOS_P2P_QueryNATType) X(EOS_Lobby_CreateLobby) X(EOS_Lobby_DestroyLobby)  \
-        X(EOS_EResult_ToString)
+        X(EOS_ProductUserId_ToString) X(EOS_ProductUserId_FromString) X(EOS_P2P_QueryNATType)                     \
+        X(EOS_EResult_ToString)                                                                                   \
+        PDNET_EOS_LOBBY_FUNCTIONS(X)
+// Lobby interface (stage B: multiplayer sessions shared through EOS lobbies, see lobbies.h).
+#define PDNET_EOS_LOBBY_FUNCTIONS(X)                                                                              \
+        X(EOS_Lobby_CreateLobby) X(EOS_Lobby_DestroyLobby) X(EOS_Lobby_JoinLobbyById) X(EOS_Lobby_LeaveLobby)     \
+        X(EOS_Lobby_UpdateLobbyModification) X(EOS_Lobby_UpdateLobby) X(EOS_Lobby_PromoteMember)                  \
+        X(EOS_Lobby_CopyLobbyDetailsHandle) X(EOS_Lobby_CreateLobbySearch)                                        \
+        X(EOS_Lobby_AddNotifyLobbyUpdateReceived) X(EOS_Lobby_RemoveNotifyLobbyUpdateReceived)                    \
+        X(EOS_Lobby_AddNotifyLobbyMemberUpdateReceived) X(EOS_Lobby_RemoveNotifyLobbyMemberUpdateReceived)        \
+        X(EOS_Lobby_AddNotifyLobbyMemberStatusReceived) X(EOS_Lobby_RemoveNotifyLobbyMemberStatusReceived)        \
+        X(EOS_LobbyModification_SetPermissionLevel) X(EOS_LobbyModification_SetMaxMembers)                        \
+        X(EOS_LobbyModification_AddAttribute) X(EOS_LobbyModification_RemoveAttribute)                           \
+        X(EOS_LobbyModification_AddMemberAttribute) X(EOS_LobbyModification_RemoveMemberAttribute)               \
+        X(EOS_LobbyModification_Release)                                                                          \
+        X(EOS_LobbyDetails_GetLobbyOwner) X(EOS_LobbyDetails_CopyInfo) X(EOS_LobbyDetails_Info_Release)           \
+        X(EOS_LobbyDetails_GetAttributeCount) X(EOS_LobbyDetails_CopyAttributeByIndex)                            \
+        X(EOS_LobbyDetails_GetMemberCount) X(EOS_LobbyDetails_GetMemberByIndex)                                   \
+        X(EOS_LobbyDetails_GetMemberAttributeCount) X(EOS_LobbyDetails_CopyMemberAttributeByIndex)                \
+        X(EOS_LobbyDetails_Release) X(EOS_Lobby_Attribute_Release)                                                \
+        X(EOS_LobbySearch_SetParameter) X(EOS_LobbySearch_SetLobbyId) X(EOS_LobbySearch_SetMaxResults)            \
+        X(EOS_LobbySearch_Find) X(EOS_LobbySearch_GetSearchResultCount) X(EOS_LobbySearch_CopySearchResultByIndex) \
+        X(EOS_LobbySearch_Release)
 #define PDNET_EOS_MEMBER(name) decltype(&::name) name = nullptr;
         PDNET_EOS_FUNCTIONS(PDNET_EOS_MEMBER)
 #undef PDNET_EOS_MEMBER

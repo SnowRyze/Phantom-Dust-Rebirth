@@ -3,8 +3,9 @@
 #   .\xboxfree.ps1 [-Name "MyName"]   prepare D:\PhantomDust-Direct, register it, keep it running when minimized, launch
 #   .\xboxfree.ps1 -Report            what the game asked pdnet for, which stand-ins it hit, and whether it crashed
 #   .\xboxfree.ps1 -Off               put the Direct build back to normal Xbox Live mode (xbox=on)
+#   -Build build-stageb               install that pdnet build folder's DLL instead of build-xboxoff (stage B: EOS lobbies)
 # Afterwards switch back with:  .\builds.ps1 -Use Teredo
-param([string]$Name, [switch]$Report, [switch]$Off)
+param([string]$Name, [switch]$Report, [switch]$Off, [string]$Build = 'build-xboxoff')
 $ErrorActionPreference = 'Stop'
 $direct = 'D:\PhantomDust-Direct'
 $log = "$env:LOCALAPPDATA\Packages\Microsoft.MSEsper_8wekyb3d8bbwe\LocalState\pdnet.log"
@@ -24,7 +25,7 @@ if ($Report) {
     Write-Host "`n--- stand-ins the game hit that aren't implemented yet (xsapi-stub)"
     $run | Where-Object { $_ -match 'xsapi-stub' } | ForEach-Object { $_ }
     Write-Host "`n--- EOS"
-    $run | Where-Object { $_ -match ' eos: ' } | ForEach-Object { $_ }
+    $run | Where-Object { $_ -match ' eos: | lobby: ' } | ForEach-Object { $_ }
     $p = Get-Process PDUWP -ErrorAction SilentlyContinue
     Write-Host "`nGame running now: $([bool]$p)"
     $crash = Get-WinEvent -FilterHashtable @{ LogName = 'Application'; Id = 1000; StartTime = (Get-Date).AddHours(-3) } -ErrorAction SilentlyContinue |
@@ -46,7 +47,7 @@ $creds = Get-Content "$PSScriptRoot\eos.local.ini" | Where-Object { $_ -match '^
 if (@($creds).Count -lt 5) { throw 'Fill in all five values in _netmod\eos.local.ini first.' }
 $sdkDll = Get-ChildItem 'C:\Users\ryhol\tools\downloads\eos-sdk' -Recurse -Filter 'EOSSDK-Win64-Shipping.dll' | Select-Object -First 1
 
-Copy-Item "$PSScriptRoot\pdnet\build-xboxoff\Microsoft.Xbox.Services.dll" "$direct\Microsoft.Xbox.Services.dll" -Force
+Copy-Item "$PSScriptRoot\pdnet\$Build\Microsoft.Xbox.Services.dll" "$direct\Microsoft.Xbox.Services.dll" -Force
 Copy-Item $sdkDll.FullName "$direct\EOSSDK-Win64-Shipping.dll" -Force
 Copy-Item "$PSScriptRoot\eos.local.ini" "$direct\eos.ini" -Force
 

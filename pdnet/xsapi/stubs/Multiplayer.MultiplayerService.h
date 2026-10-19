@@ -1,5 +1,6 @@
 ﻿#pragma once
 #include "Multiplayer/MultiplayerService.g.h"
+#include "../mpsd.h"
 
 
 namespace winrt::Microsoft::Xbox::Services::Multiplayer::implementation
@@ -36,7 +37,13 @@ namespace winrt::Microsoft::Xbox::Services::Multiplayer::implementation
         void DisableMultiplayerSubscriptions();
         bool MultiplayerSubscriptionsEnabled();
 
+        // pdnet: raised by the session store when another PC changes a session (stage B).
+        void RaiseSessionChanged(::pdnet::mpsd::SessionPtr const& session, Microsoft::Xbox::Services::Multiplayer::MultiplayerSessionChangeTypes changes);
+        void RaiseSubscriptionLost();
+
     private:
+        void Register();
+        std::atomic<bool> m_registered{ false };
         winrt::event<Windows::Foundation::EventHandler<Microsoft::Xbox::Services::Multiplayer::MultiplayerSessionChangeEventArgs>> m_sessionChanged;
         winrt::event<Windows::Foundation::EventHandler<Microsoft::Xbox::Services::Multiplayer::MultiplayerSubscriptionLostEventArgs>> m_subscriptionLost;
         Microsoft::Xbox::Services::XboxLiveContext m_context{ nullptr };

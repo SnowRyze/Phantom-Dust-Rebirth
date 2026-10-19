@@ -20,11 +20,12 @@ namespace winrt::Microsoft::Xbox::Services::Multiplayer::implementation
         {
             m_doc->keywords.clear();
             if (value) for (auto const& w : value) m_doc->keywords.emplace_back(w);
+            m_doc->edits.keywords = true;
         }
         Microsoft::Xbox::Services::Multiplayer::MultiplayerSessionRestriction JoinRestriction() { return m_doc->joinRestriction; }
-        void JoinRestriction(Microsoft::Xbox::Services::Multiplayer::MultiplayerSessionRestriction const& value) { m_doc->joinRestriction = value; }
+        void JoinRestriction(Microsoft::Xbox::Services::Multiplayer::MultiplayerSessionRestriction const& value) { m_doc->joinRestriction = value; m_doc->edits.joinRestriction = true; }
         Microsoft::Xbox::Services::Multiplayer::MultiplayerSessionRestriction ReadRestriction() { return m_doc->readRestriction; }
-        void ReadRestriction(Microsoft::Xbox::Services::Multiplayer::MultiplayerSessionRestriction const& value) { m_doc->readRestriction = value; }
+        void ReadRestriction(Microsoft::Xbox::Services::Multiplayer::MultiplayerSessionRestriction const& value) { m_doc->readRestriction = value; m_doc->edits.readRestriction = true; }
         Windows::Foundation::Collections::IVectorView<Microsoft::Xbox::Services::Multiplayer::MultiplayerSessionMember> TurnCollection() { return winrt::single_threaded_vector<Microsoft::Xbox::Services::Multiplayer::MultiplayerSessionMember>().GetView(); }
         void TurnCollection(Windows::Foundation::Collections::IVectorView<Microsoft::Xbox::Services::Multiplayer::MultiplayerSessionMember> const&) {}
         hstring MatchmakingTargetSessionConstantsJson() { return L"{}"; }

@@ -16,4 +16,7 @@ namespace pdnet::eos
 
     // Runs `work` on the EOS thread, where every EOS call must happen. `platform` is the EOS_HPlatform.
     void Post(std::function<void(void* platform)> work);
+
+    // Called on the EOS thread when the sign-in is lost (false) and when it comes back afterwards (true).
+    void SetSignInListener(std::function<void(bool signedIn)> listener);
 }

@@ -1,0 +1,665 @@
+#include "pch.h"
+#include "lobbies.h"
+#include "eos.h"
+#include "log.h"
+#include <condition_variable>
+#include <deque>
+#include <future>
+#include <thread>
+
+namespace pdnet::lobbies
+{
+    // Pieces of a long value (bytes). EOS accepts longer string values, but small pieces keep well inside its limits.
+    constexpr size_t kPiece = 500;
+
+    void Split(Attributes& out, const std::string& key, const std::string& value)
+    {
+        if (value.size() <= kPiece)
+        {
+            out[key] = value;
+            return;
+        }
+        size_t pos = 0;
+        int n = 0;
+        while (pos < value.size())
+        {
+            size_t len = (std::min)(kPiece, value.size() - pos);
+            while (pos + len < value.size() && len > 1 && (static_cast<unsigned char>(value[pos + len]) & 0xC0) == 0x80) --len; // keep UTF-8 sequences whole
+            out[n ? key + "." + std::to_string(n) : key] = value.substr(pos, len);
+            pos += len;
+            ++n;
+        }
+        out[key + "#"] = std::to_string(n);
+    }
+
+    std::string Joined(const Attributes& in, const std::string& key)
+    {
+        auto first = in.find(key);
+        if (first == in.end()) return {};
+        std::string value = first->second;
+        auto count = in.find(key + "#");
+        int n = count == in.end() ? 1 : atoi(count->second.c_str());
+        for (int i = 1; i < n; ++i)
+        {
+            auto piece = in.find(key + "." + std::to_string(i));
+            if (piece != in.end()) value += piece->second;
+        }
+        return value;
+    }
+
+    std::vector<std::string> SplitKeys(const Attributes& in, const std::string& key)
+    {
+        std::vector<std::string> keys;
+        if (in.count(key)) keys.push_back(key);
+        auto count = in.find(key + "#");
+        if (count != in.end())
+        {
+            keys.push_back(key + "#");
+            int n = atoi(count->second.c_str());
+            for (int i = 1; i < n; ++i)
+                if (in.count(key + "." + std::to_string(i))) keys.push_back(key + "." + std::to_string(i));
+        }
+        return keys;
+    }
+}
+
+#ifdef PDNET_NO_EOS
+
+namespace pdnet::lobbies
+{
+    bool Available() { return false; }
+    std::string LocalUserId() { return {}; }
+    std::optional<Lobby> Create(const std::string&, const std::string&, uint32_t, const Attributes&, const Attributes&) { return std::nullopt; }
+    std::optional<Lobby> Join(const std::string&, const Attributes&) { return std::nullopt; }
+    bool Update(const std::string&, const Changes&, const Changes&, uint32_t) { return false; }
+    bool Leave(const std::string&) { return false; }
+    bool Destroy(const std::string&) { return false; }
+    bool Promote(const std::string&, const std::string&) { return false; }
+    std::optional<Lobby> Read(const std::string&) { return std::nullopt; }
+    std::vector<Lobby> Search(const std::string&, uint32_t) { return {}; }
+    void SetListener(std::function<void(const std::string&, Event, const std::string&)>) {}
+    void SetSignOutListener(std::function<void()>) {}
+}
+
+#else
+
+#include "eossdk.h"
+
+namespace pdnet::lobbies
+{
+    namespace
+    {
+        using namespace eossdk;
+        constexpr uint32_t kTimeoutMs = 12000;
+
+        const Api* Sdk() { return eossdk::Load(ModuleDir()); }
+
+        std::string Narrow(const Api& api, EOS_ProductUserId id)
+        {
+            char buf[EOS_PRODUCTUSERID_MAX_LENGTH + 1] = {};
+            int32_t len = sizeof(buf);
+            return id && api.EOS_ProductUserId_ToString(id, buf, &len) == EOS_EResult::EOS_Success ? std::string(buf) : std::string();
+        }
+
+        std::wstring W(const std::string& s) { return Wide(s.c_str()); }
+
+        // One EOS completion callback, kept until EOS reports a final result.
+        template <typename Info>
+        struct Pending
+        {
+            std::function<void(const Info*)> fn;
+            static void EOS_CALL Thunk(const Info* data)
+            {
+                if (data->ResultCode == EOS_EResult::EOS_OperationWillRetry) return; // EOS calls again later
+                auto self = static_cast<Pending*>(data->ClientData);
+                self->fn(data);
+                delete self;
+            }
+        };
+
+        template <typename Info>
+        Pending<Info>* Then(std::function<void(const Info*)> fn) { return new Pending<Info>{ std::move(fn) }; }
+
+        struct Context
+        {
+            const Api& api;
+            EOS_HPlatform platform;
+            EOS_HLobby lobby;
+            EOS_ProductUserId me;
+        };
+
+        void RegisterNotifications(const Api& api, EOS_HLobby lobby);
+
+        // Runs `work` on the EOS thread and waits (here, on the caller's thread) until it calls `finish` or time runs out.
+        // On timeout the caller gets T{}; a late finish is dropped.
+        template <typename T>
+        T Run(const wchar_t* what, std::function<void(const Context&, std::function<void(T)>)> work, uint32_t timeoutMs = kTimeoutMs)
+        {
+            if (!eos::SignedIn())
+            {
+                Log(L"lobby: %s skipped - EOS is not signed in", what);
+                return T{};
+            }
+            auto promise = std::make_shared<std::promise<T>>();
+            auto done = std::make_shared<std::atomic<bool>>(false);
+            std::function<void(T)> finish = [promise, done](T value)
+            {
+                if (!done->exchange(true)) promise->set_value(std::move(value));
+            };
+            auto future = promise->get_future();
+            std::string userId = winrt::to_string(eos::LocalUserId());
+            eos::Post([work = std::move(work), finish, userId, what](void* platform)
+            {
+                const Api* api = Sdk();
+                if (!api || !platform)
+                {
+                    finish(T{});
+                    return;
+                }
+                Context c{ *api, static_cast<EOS_HPlatform>(platform), api->EOS_Platform_GetLobbyInterface(static_cast<EOS_HPlatform>(platform)),
+                           api->EOS_ProductUserId_FromString(userId.c_str()) };
+                RegisterNotifications(*api, c.lobby);
+                try { work(c, finish); }
+                catch (...)
+                {
+                    Log(L"lobby: %s threw 0x%08X", what, winrt::to_hresult());
+                    finish(T{});
+                }
+            });
+            if (future.wait_for(std::chrono::milliseconds(timeoutMs)) != std::future_status::ready)
+            {
+                Log(L"lobby: %s timed out after %u ms", what, timeoutMs);
+                return T{};
+            }
+            return future.get();
+        }
+
+        std::string AttributeValue(const EOS_Lobby_AttributeData& d)
+        {
+            switch (d.ValueType)
+            {
+            case EOS_ELobbyAttributeType::EOS_AT_STRING: return d.Value.AsUtf8 ? d.Value.AsUtf8 : "";
+            case EOS_ELobbyAttributeType::EOS_AT_INT64: return std::to_string(d.Value.AsInt64);
+            case EOS_ELobbyAttributeType::EOS_AT_DOUBLE: return std::to_string(d.Value.AsDouble);
+            case EOS_ELobbyAttributeType::EOS_AT_BOOLEAN: return d.Value.AsBool ? "1" : "0";
+            }
+            return {};
+        }
+
+        // Copies everything out of a details handle (its strings die with it).
+        Lobby FromDetails(const Api& api, EOS_HLobbyDetails details, bool joined)
+        {
+            Lobby lobby;
+            lobby.joined = joined;
+            EOS_LobbyDetails_CopyInfoOptions infoOpts{ EOS_LOBBYDETAILS_COPYINFO_API_LATEST };
+            EOS_LobbyDetails_Info* info = nullptr;
+            if (api.EOS_LobbyDetails_CopyInfo(details, &infoOpts, &info) == EOS_EResult::EOS_Success && info)
+            {
+                lobby.id = info->LobbyId ? info->LobbyId : "";
+                lobby.ownerId = Narrow(api, info->LobbyOwnerUserId);
+                lobby.bucket = info->BucketId ? info->BucketId : "";
+                lobby.maxMembers = info->MaxMembers;
+                api.EOS_LobbyDetails_Info_Release(info);
+            }
+
+            EOS_LobbyDetails_GetAttributeCountOptions countOpts{ EOS_LOBBYDETAILS_GETATTRIBUTECOUNT_API_LATEST };
+            uint32_t count = api.EOS_LobbyDetails_GetAttributeCount(details, &countOpts);
+            for (uint32_t i = 0; i < count; ++i)
+            {
+                EOS_LobbyDetails_CopyAttributeByIndexOptions o{ EOS_LOBBYDETAILS_COPYATTRIBUTEBYINDEX_API_LATEST, i };
+                EOS_Lobby_Attribute* a = nullptr;
+                if (api.EOS_LobbyDetails_CopyAttributeByIndex(details, &o, &a) == EOS_EResult::EOS_Success && a)
+                {
+                    if (a->Data && a->Data->Key) lobby.attributes[a->Data->Key] = AttributeValue(*a->Data);
+                    api.EOS_Lobby_Attribute_Release(a);
+                }
+            }
+
+            EOS_LobbyDetails_GetMemberCountOptions membersOpts{ EOS_LOBBYDETAILS_GETMEMBERCOUNT_API_LATEST };
+            uint32_t members = api.EOS_LobbyDetails_GetMemberCount(details, &membersOpts);
+            for (uint32_t i = 0; i < members; ++i)
+            {
+                EOS_LobbyDetails_GetMemberByIndexOptions o{ EOS_LOBBYDETAILS_GETMEMBERBYINDEX_API_LATEST, i };
+                EOS_ProductUserId user = api.EOS_LobbyDetails_GetMemberByIndex(details, &o);
+                Member m;
+                m.userId = Narrow(api, user);
+                EOS_LobbyDetails_GetMemberAttributeCountOptions co{ EOS_LOBBYDETAILS_GETMEMBERATTRIBUTECOUNT_API_LATEST, user };
+                uint32_t n = api.EOS_LobbyDetails_GetMemberAttributeCount(details, &co);
+                for (uint32_t k = 0; k < n; ++k)
+                {
+                    EOS_LobbyDetails_CopyMemberAttributeByIndexOptions ao{ EOS_LOBBYDETAILS_COPYMEMBERATTRIBUTEBYINDEX_API_LATEST, user, k };
+                    EOS_Lobby_Attribute* a = nullptr;
+                    if (api.EOS_LobbyDetails_CopyMemberAttributeByIndex(details, &ao, &a) == EOS_EResult::EOS_Success && a)
+                    {
+                        if (a->Data && a->Data->Key) m.attributes[a->Data->Key] = AttributeValue(*a->Data);
+                        api.EOS_Lobby_Attribute_Release(a);
+                    }
+                }
+                lobby.members.push_back(std::move(m));
+            }
+            return lobby;
+        }
+
+        // The live copy of a lobby this PC is in, if it is in it.
+        std::optional<Lobby> Local(const Context& c, const std::string& id)
+        {
+            EOS_Lobby_CopyLobbyDetailsHandleOptions o{ EOS_LOBBY_COPYLOBBYDETAILSHANDLE_API_LATEST, id.c_str(), c.me };
+            EOS_HLobbyDetails details = nullptr;
+            if (c.api.EOS_Lobby_CopyLobbyDetailsHandle(c.lobby, &o, &details) != EOS_EResult::EOS_Success || !details) return std::nullopt;
+            Lobby lobby = FromDetails(c.api, details, true);
+            c.api.EOS_LobbyDetails_Release(details);
+            return lobby;
+        }
+
+        // Sends one modification (lobby changes only if `lobby` is set, i.e. we own it) and reports EOS's answer.
+        void Modify(const Context& c, const std::string& id, const Changes* lobby, const Changes& member, uint32_t maxMembers, std::function<void(bool)> done)
+        {
+            EOS_Lobby_UpdateLobbyModificationOptions mo{ EOS_LOBBY_UPDATELOBBYMODIFICATION_API_LATEST, c.me, id.c_str() };
+            EOS_HLobbyModification mod = nullptr;
+            EOS_EResult r = c.api.EOS_Lobby_UpdateLobbyModification(c.lobby, &mo, &mod);
+            if (r != EOS_EResult::EOS_Success || !mod)
+            {
+                Log(L"lobby: modify %S: %s", id.c_str(), Result(c.api, r).c_str());
+                done(false);
+                return;
+            }
+
+            bool any = false;
+            auto check = [&](EOS_EResult result, const char* op, const std::string& key)
+            {
+                if (result != EOS_EResult::EOS_Success) Log(L"lobby: %S %S on %S: %s", op, key.c_str(), id.c_str(), Result(c.api, result).c_str());
+                else any = true;
+            };
+            auto attribute = [](const std::string& key, const std::string& value)
+            {
+                EOS_Lobby_AttributeData a{};
+                a.ApiVersion = EOS_LOBBY_ATTRIBUTEDATA_API_LATEST;
+                a.Key = key.c_str();
+                a.Value.AsUtf8 = value.c_str();
+                a.ValueType = EOS_ELobbyAttributeType::EOS_AT_STRING;
+                return a;
+            };
+            if (lobby)
+            {
+                for (auto& [key, value] : lobby->set)
+                {
+                    auto a = attribute(key, value);
+                    EOS_LobbyModification_AddAttributeOptions o{ EOS_LOBBYMODIFICATION_ADDATTRIBUTE_API_LATEST, &a, EOS_ELobbyAttributeVisibility::EOS_LAT_PUBLIC };
+                    check(c.api.EOS_LobbyModification_AddAttribute(mod, &o), "set", key);
+                }
+                for (auto& key : lobby->remove)
+                {
+                    EOS_LobbyModification_RemoveAttributeOptions o{ EOS_LOBBYMODIFICATION_REMOVEATTRIBUTE_API_LATEST, key.c_str() };
+                    check(c.api.EOS_LobbyModification_RemoveAttribute(mod, &o), "remove", key);
+                }
+                if (maxMembers)
+                {
+                    EOS_LobbyModification_SetMaxMembersOptions o{ EOS_LOBBYMODIFICATION_SETMAXMEMBERS_API_LATEST, maxMembers };
+                    check(c.api.EOS_LobbyModification_SetMaxMembers(mod, &o), "max members", std::to_string(maxMembers));
+                }
+            }
+            for (auto& [key, value] : member.set)
+            {
+                auto a = attribute(key, value);
+                EOS_LobbyModification_AddMemberAttributeOptions o{ EOS_LOBBYMODIFICATION_ADDMEMBERATTRIBUTE_API_LATEST, &a, EOS_ELobbyAttributeVisibility::EOS_LAT_PUBLIC };
+                check(c.api.EOS_LobbyModification_AddMemberAttribute(mod, &o), "set member", key);
+            }
+            for (auto& key : member.remove)
+            {
+                EOS_LobbyModification_RemoveMemberAttributeOptions o{ EOS_LOBBYMODIFICATION_REMOVEMEMBERATTRIBUTE_API_LATEST, key.c_str() };
+                check(c.api.EOS_LobbyModification_RemoveMemberAttribute(mod, &o), "remove member", key);
+            }
+
+            if (!any)
+            {
+                c.api.EOS_LobbyModification_Release(mod);
+                done(true);
+                return;
+            }
+            EOS_Lobby_UpdateLobbyOptions uo{ EOS_LOBBY_UPDATELOBBY_API_LATEST, mod };
+            const Api& api = c.api;
+            c.api.EOS_Lobby_UpdateLobby(c.lobby, &uo, Then<EOS_Lobby_UpdateLobbyCallbackInfo>([&api, id, done](const EOS_Lobby_UpdateLobbyCallbackInfo* info)
+            {
+                if (info->ResultCode != EOS_EResult::EOS_Success) Log(L"lobby: update %S failed: %s", id.c_str(), Result(api, info->ResultCode).c_str());
+                done(info->ResultCode == EOS_EResult::EOS_Success);
+            }), Pending<EOS_Lobby_UpdateLobbyCallbackInfo>::Thunk);
+            c.api.EOS_LobbyModification_Release(mod);
+        }
+
+        // Search (by bucket or by id); copies each result.
+        void Find(const Context& c, const std::string* bucket, const std::string* id, uint32_t maxResults, std::function<void(std::vector<Lobby>)> done)
+        {
+            EOS_Lobby_CreateLobbySearchOptions so{ EOS_LOBBY_CREATELOBBYSEARCH_API_LATEST, (std::min)(maxResults, static_cast<uint32_t>(EOS_LOBBY_MAX_SEARCH_RESULTS)) };
+            EOS_HLobbySearch search = nullptr;
+            EOS_EResult r = c.api.EOS_Lobby_CreateLobbySearch(c.lobby, &so, &search);
+            if (r != EOS_EResult::EOS_Success || !search)
+            {
+                Log(L"lobby: create search: %s", Result(c.api, r).c_str());
+                done({});
+                return;
+            }
+            if (id)
+            {
+                EOS_LobbySearch_SetLobbyIdOptions o{ EOS_LOBBYSEARCH_SETLOBBYID_API_LATEST, id->c_str() };
+                r = c.api.EOS_LobbySearch_SetLobbyId(search, &o);
+            }
+            else
+            {
+                EOS_Lobby_AttributeData a{};
+                a.ApiVersion = EOS_LOBBY_ATTRIBUTEDATA_API_LATEST;
+                a.Key = EOS_LOBBY_SEARCH_BUCKET_ID;
+                a.Value.AsUtf8 = bucket->c_str();
+                a.ValueType = EOS_ELobbyAttributeType::EOS_AT_STRING;
+                EOS_LobbySearch_SetParameterOptions o{ EOS_LOBBYSEARCH_SETPARAMETER_API_LATEST, &a, EOS_EComparisonOp::EOS_CO_EQUAL };
+                r = c.api.EOS_LobbySearch_SetParameter(search, &o);
+            }
+            if (r != EOS_EResult::EOS_Success)
+            {
+                Log(L"lobby: search parameter: %s", Result(c.api, r).c_str());
+                c.api.EOS_LobbySearch_Release(search);
+                done({});
+                return;
+            }
+            EOS_LobbySearch_FindOptions fo{ EOS_LOBBYSEARCH_FIND_API_LATEST, c.me };
+            const Api& api = c.api;
+            c.api.EOS_LobbySearch_Find(search, &fo, Then<EOS_LobbySearch_FindCallbackInfo>([&api, search, done](const EOS_LobbySearch_FindCallbackInfo* info)
+            {
+                std::vector<Lobby> found;
+                if (info->ResultCode == EOS_EResult::EOS_Success)
+                {
+                    EOS_LobbySearch_GetSearchResultCountOptions co{ EOS_LOBBYSEARCH_GETSEARCHRESULTCOUNT_API_LATEST };
+                    uint32_t n = api.EOS_LobbySearch_GetSearchResultCount(search, &co);
+                    for (uint32_t i = 0; i < n; ++i)
+                    {
+                        EOS_LobbySearch_CopySearchResultByIndexOptions o{ EOS_LOBBYSEARCH_COPYSEARCHRESULTBYINDEX_API_LATEST, i };
+                        EOS_HLobbyDetails details = nullptr;
+                        if (api.EOS_LobbySearch_CopySearchResultByIndex(search, &o, &details) == EOS_EResult::EOS_Success && details)
+                        {
+                            found.push_back(FromDetails(api, details, false));
+                            api.EOS_LobbyDetails_Release(details);
+                        }
+                    }
+                }
+                else if (info->ResultCode != EOS_EResult::EOS_NotFound)
+                {
+                    Log(L"lobby: search failed: %s", Result(api, info->ResultCode).c_str());
+                }
+                api.EOS_LobbySearch_Release(search);
+                done(std::move(found));
+            }), Pending<EOS_LobbySearch_FindCallbackInfo>::Thunk);
+        }
+
+        // Notifications are handed to one worker thread in arrival order, so the listener never runs on the EOS thread.
+        std::mutex g_lock;
+        std::condition_variable g_wake;
+        std::deque<std::function<void()>> g_queue;
+        std::function<void(const std::string&, Event, const std::string&)> g_listener;
+        std::function<void()> g_signOutListener;
+
+        void Dispatch(std::function<void()> item)
+        {
+            static std::once_flag once;
+            std::call_once(once, []
+            {
+                std::thread([]
+                {
+                    winrt::init_apartment(winrt::apartment_type::multi_threaded);
+                    for (;;)
+                    {
+                        std::function<void()> next;
+                        {
+                            std::unique_lock guard(g_lock);
+                            g_wake.wait(guard, [] { return !g_queue.empty(); });
+                            next = std::move(g_queue.front());
+                            g_queue.pop_front();
+                        }
+                        try { next(); }
+                        catch (...) { Log(L"lobby: listener threw 0x%08X", winrt::to_hresult()); }
+                    }
+                }).detach();
+            });
+            {
+                std::lock_guard guard(g_lock);
+                g_queue.push_back(std::move(item));
+            }
+            g_wake.notify_one();
+        }
+
+        void Notify(const char* lobbyId, Event event, std::string userId)
+        {
+            std::string id = lobbyId ? lobbyId : "";
+            Dispatch([id, event, userId]
+            {
+                std::function<void(const std::string&, Event, const std::string&)> listener;
+                {
+                    std::lock_guard guard(g_lock);
+                    listener = g_listener;
+                }
+                if (listener) listener(id, event, userId);
+            });
+        }
+
+        void EOS_CALL OnLobbyUpdate(const EOS_Lobby_LobbyUpdateReceivedCallbackInfo* info)
+        {
+            Notify(info->LobbyId, Event::LobbyUpdated, {});
+        }
+
+        void EOS_CALL OnMemberUpdate(const EOS_Lobby_LobbyMemberUpdateReceivedCallbackInfo* info)
+        {
+            Notify(info->LobbyId, Event::MemberUpdated, Narrow(*Sdk(), info->TargetUserId));
+        }
+
+        void EOS_CALL OnMemberStatus(const EOS_Lobby_LobbyMemberStatusReceivedCallbackInfo* info)
+        {
+            Event e = Event::MemberUpdated;
+            switch (info->CurrentStatus)
+            {
+            case EOS_ELobbyMemberStatus::EOS_LMS_JOINED: e = Event::MemberJoined; break;
+            case EOS_ELobbyMemberStatus::EOS_LMS_LEFT:
+            case EOS_ELobbyMemberStatus::EOS_LMS_DISCONNECTED: e = Event::MemberLeft; break;
+            case EOS_ELobbyMemberStatus::EOS_LMS_KICKED: e = Event::Kicked; break;
+            case EOS_ELobbyMemberStatus::EOS_LMS_PROMOTED: e = Event::Promoted; break;
+            case EOS_ELobbyMemberStatus::EOS_LMS_CLOSED: e = Event::Closed; break;
+            }
+            Notify(info->LobbyId, e, Narrow(*Sdk(), info->TargetUserId));
+        }
+
+        void RegisterNotifications(const Api& api, EOS_HLobby lobby)
+        {
+            static bool registered = false; // EOS thread only
+            if (registered) return;
+            registered = true;
+            EOS_Lobby_AddNotifyLobbyUpdateReceivedOptions a{ EOS_LOBBY_ADDNOTIFYLOBBYUPDATERECEIVED_API_LATEST };
+            EOS_Lobby_AddNotifyLobbyMemberUpdateReceivedOptions b{ EOS_LOBBY_ADDNOTIFYLOBBYMEMBERUPDATERECEIVED_API_LATEST };
+            EOS_Lobby_AddNotifyLobbyMemberStatusReceivedOptions s{ EOS_LOBBY_ADDNOTIFYLOBBYMEMBERSTATUSRECEIVED_API_LATEST };
+            bool ok = api.EOS_Lobby_AddNotifyLobbyUpdateReceived(lobby, &a, nullptr, OnLobbyUpdate) != EOS_INVALID_NOTIFICATIONID;
+            ok &= api.EOS_Lobby_AddNotifyLobbyMemberUpdateReceived(lobby, &b, nullptr, OnMemberUpdate) != EOS_INVALID_NOTIFICATIONID;
+            ok &= api.EOS_Lobby_AddNotifyLobbyMemberStatusReceived(lobby, &s, nullptr, OnMemberStatus) != EOS_INVALID_NOTIFICATIONID;
+            Log(L"lobby: change notifications %s", ok ? L"registered" : L"FAILED to register");
+        }
+    }
+
+    bool Available() { return eos::SignedIn(); }
+    std::string LocalUserId() { return winrt::to_string(eos::LocalUserId()); }
+
+    std::optional<Lobby> Create(const std::string& id, const std::string& bucket, uint32_t maxMembers, const Attributes& lobbyAttributes, const Attributes& memberAttributes)
+    {
+        return Run<std::optional<Lobby>>(L"create", [=](const Context& c, std::function<void(std::optional<Lobby>)> finish)
+        {
+            EOS_Lobby_CreateLobbyOptions o{};
+            o.ApiVersion = EOS_LOBBY_CREATELOBBY_API_LATEST;
+            o.LocalUserId = c.me;
+            o.MaxLobbyMembers = maxMembers ? maxMembers : 4;
+            o.PermissionLevel = EOS_ELobbyPermissionLevel::EOS_LPL_PUBLICADVERTISED;
+            o.bPresenceEnabled = EOS_FALSE;
+            o.bAllowInvites = EOS_FALSE;
+            o.BucketId = bucket.c_str();
+            o.bDisableHostMigration = EOS_FALSE;
+            o.bEnableRTCRoom = EOS_FALSE;
+            o.LobbyId = id.c_str();
+            o.bEnableJoinById = EOS_TRUE;
+            o.RTCRoomJoinActionType = EOS_ELobbyRTCRoomJoinActionType::EOS_LRRJAT_ManualJoin;
+            Context ctx = c;
+            c.api.EOS_Lobby_CreateLobby(c.lobby, &o, Then<EOS_Lobby_CreateLobbyCallbackInfo>([ctx, id, lobbyAttributes, memberAttributes, finish](const EOS_Lobby_CreateLobbyCallbackInfo* info)
+            {
+                if (info->ResultCode != EOS_EResult::EOS_Success)
+                {
+                    Log(L"lobby: create %S failed: %s", id.c_str(), Result(ctx.api, info->ResultCode).c_str());
+                    finish(std::nullopt);
+                    return;
+                }
+                Changes lobby{ lobbyAttributes, {} }, member{ memberAttributes, {} };
+                Modify(ctx, id, &lobby, member, 0, [ctx, id, finish](bool ok)
+                {
+                    if (!ok) Log(L"lobby: %S created but its first attributes were not accepted", id.c_str());
+                    finish(Local(ctx, id));
+                });
+            }), Pending<EOS_Lobby_CreateLobbyCallbackInfo>::Thunk);
+        });
+    }
+
+    std::optional<Lobby> Join(const std::string& id, const Attributes& memberAttributes)
+    {
+        return Run<std::optional<Lobby>>(L"join", [=](const Context& c, std::function<void(std::optional<Lobby>)> finish)
+        {
+            if (Local(c, id))
+            {
+                Modify(c, id, nullptr, Changes{ memberAttributes, {} }, 0, [c, id, finish](bool) { finish(Local(c, id)); });
+                return;
+            }
+            EOS_Lobby_JoinLobbyByIdOptions o{};
+            o.ApiVersion = EOS_LOBBY_JOINLOBBYBYID_API_LATEST;
+            o.LobbyId = id.c_str();
+            o.LocalUserId = c.me;
+            o.bPresenceEnabled = EOS_FALSE;
+            o.RTCRoomJoinActionType = EOS_ELobbyRTCRoomJoinActionType::EOS_LRRJAT_ManualJoin;
+            Context ctx = c;
+            c.api.EOS_Lobby_JoinLobbyById(c.lobby, &o, Then<EOS_Lobby_JoinLobbyByIdCallbackInfo>([ctx, id, memberAttributes, finish](const EOS_Lobby_JoinLobbyByIdCallbackInfo* info)
+            {
+                if (info->ResultCode != EOS_EResult::EOS_Success)
+                {
+                    Log(L"lobby: join %S failed: %s", id.c_str(), Result(ctx.api, info->ResultCode).c_str());
+                    finish(std::nullopt);
+                    return;
+                }
+                Modify(ctx, id, nullptr, Changes{ memberAttributes, {} }, 0, [ctx, id, finish](bool) { finish(Local(ctx, id)); });
+            }), Pending<EOS_Lobby_JoinLobbyByIdCallbackInfo>::Thunk);
+        });
+    }
+
+    bool Update(const std::string& id, const Changes& lobby, const Changes& member, uint32_t maxMembers)
+    {
+        if (lobby.empty() && member.empty() && !maxMembers) return true;
+        return Run<bool>(L"update", [=](const Context& c, std::function<void(bool)> finish)
+        {
+            auto current = Local(c, id);
+            if (!current)
+            {
+                Log(L"lobby: update %S: not in that lobby", id.c_str());
+                finish(false);
+                return;
+            }
+            bool owner = current->ownerId == Narrow(c.api, c.me);
+            if (!owner && (!lobby.empty() || maxMembers))
+                Log(L"lobby: %S: session-level change from a non-owner dropped (%zu set, %zu removed)", id.c_str(), lobby.set.size(), lobby.remove.size());
+            Modify(c, id, owner ? &lobby : nullptr, member, owner ? maxMembers : 0, finish);
+        });
+    }
+
+    bool Leave(const std::string& id)
+    {
+        return Run<bool>(L"leave", [=](const Context& c, std::function<void(bool)> finish)
+        {
+            EOS_Lobby_LeaveLobbyOptions o{ EOS_LOBBY_LEAVELOBBY_API_LATEST, c.me, id.c_str() };
+            const Api& api = c.api;
+            c.api.EOS_Lobby_LeaveLobby(c.lobby, &o, Then<EOS_Lobby_LeaveLobbyCallbackInfo>([&api, id, finish](const EOS_Lobby_LeaveLobbyCallbackInfo* info)
+            {
+                bool ok = info->ResultCode == EOS_EResult::EOS_Success || info->ResultCode == EOS_EResult::EOS_NotFound;
+                if (!ok) Log(L"lobby: leave %S failed: %s", id.c_str(), Result(api, info->ResultCode).c_str());
+                finish(ok);
+            }), Pending<EOS_Lobby_LeaveLobbyCallbackInfo>::Thunk);
+        });
+    }
+
+    bool Destroy(const std::string& id)
+    {
+        return Run<bool>(L"destroy", [=](const Context& c, std::function<void(bool)> finish)
+        {
+            EOS_Lobby_DestroyLobbyOptions o{ EOS_LOBBY_DESTROYLOBBY_API_LATEST, c.me, id.c_str() };
+            const Api& api = c.api;
+            c.api.EOS_Lobby_DestroyLobby(c.lobby, &o, Then<EOS_Lobby_DestroyLobbyCallbackInfo>([&api, id, finish](const EOS_Lobby_DestroyLobbyCallbackInfo* info)
+            {
+                bool ok = info->ResultCode == EOS_EResult::EOS_Success || info->ResultCode == EOS_EResult::EOS_NotFound;
+                if (!ok) Log(L"lobby: destroy %S failed: %s", id.c_str(), Result(api, info->ResultCode).c_str());
+                finish(ok);
+            }), Pending<EOS_Lobby_DestroyLobbyCallbackInfo>::Thunk);
+        });
+    }
+
+    bool Promote(const std::string& id, const std::string& userId)
+    {
+        return Run<bool>(L"promote", [=](const Context& c, std::function<void(bool)> finish)
+        {
+            EOS_Lobby_PromoteMemberOptions o{ EOS_LOBBY_PROMOTEMEMBER_API_LATEST, id.c_str(), c.me, c.api.EOS_ProductUserId_FromString(userId.c_str()) };
+            const Api& api = c.api;
+            c.api.EOS_Lobby_PromoteMember(c.lobby, &o, Then<EOS_Lobby_PromoteMemberCallbackInfo>([&api, id, finish](const EOS_Lobby_PromoteMemberCallbackInfo* info)
+            {
+                if (info->ResultCode != EOS_EResult::EOS_Success) Log(L"lobby: promote in %S failed: %s", id.c_str(), Result(api, info->ResultCode).c_str());
+                finish(info->ResultCode == EOS_EResult::EOS_Success);
+            }), Pending<EOS_Lobby_PromoteMemberCallbackInfo>::Thunk);
+        });
+    }
+
+    std::optional<Lobby> Read(const std::string& id)
+    {
+        return Run<std::optional<Lobby>>(L"read", [=](const Context& c, std::function<void(std::optional<Lobby>)> finish)
+        {
+            if (auto local = Local(c, id))
+            {
+                finish(std::move(local));
+                return;
+            }
+            Find(c, nullptr, &id, 1, [finish](std::vector<Lobby> found)
+            {
+                finish(found.empty() ? std::nullopt : std::optional<Lobby>(std::move(found.front())));
+            });
+        });
+    }
+
+    std::vector<Lobby> Search(const std::string& bucket, uint32_t maxResults)
+    {
+        return Run<std::vector<Lobby>>(L"search", [=](const Context& c, std::function<void(std::vector<Lobby>)> finish)
+        {
+            Find(c, &bucket, nullptr, maxResults, finish);
+        });
+    }
+
+    void SetListener(std::function<void(const std::string&, Event, const std::string&)> listener)
+    {
+        std::lock_guard guard(g_lock);
+        g_listener = std::move(listener);
+    }
+
+    void SetSignOutListener(std::function<void()> listener)
+    {
+        {
+            std::lock_guard guard(g_lock);
+            g_signOutListener = std::move(listener);
+        }
+        eos::SetSignInListener([](bool signedIn)
+        {
+            if (signedIn) return;
+            Dispatch([]
+            {
+                std::function<void()> listener;
+                {
+                    std::lock_guard guard(g_lock);
+                    listener = g_signOutListener;
+                }
+                if (listener) listener();
+            });
+        });
+    }
+}
+
+#endif

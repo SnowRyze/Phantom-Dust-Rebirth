@@ -12,6 +12,7 @@ namespace pdnet::eos
     std::wstring LocalUserId() { return {}; }
     std::wstring DisplayName() { return GetConfig().displayName; }
     void Post(std::function<void(void*)>) {}
+    void SetSignInListener(std::function<void(bool)>) {}
 }
 
 #else
@@ -31,6 +32,18 @@ namespace pdnet::eos
         std::atomic<bool> g_signedIn{ false };
         std::atomic<bool> g_needSignIn{ true };
         std::wstring g_userId;
+        std::function<void(bool)> g_signInListener; // guarded by g_lock
+        bool g_lostSignIn = false;                  // EOS thread only
+
+        void NotifySignIn(bool signedIn)
+        {
+            std::function<void(bool)> listener;
+            {
+                std::lock_guard guard(g_lock);
+                listener = g_signInListener;
+            }
+            if (listener) listener(signedIn);
+        }
 
         void SetUser(const std::wstring& id)
         {
@@ -51,6 +64,8 @@ namespace pdnet::eos
             {
                 g_signedIn = false;
                 g_needSignIn = true;
+                g_lostSignIn = true;
+                NotifySignIn(false);
             }
         }
 
@@ -158,6 +173,11 @@ namespace pdnet::eos
                     {
                         g_needSignIn = false;
                         retryDelayMs = 5000;
+                        if (g_lostSignIn)
+                        {
+                            g_lostSignIn = false;
+                            NotifySignIn(true);
+                        }
                     }
                     else
                     {
@@ -212,6 +232,12 @@ namespace pdnet::eos
     {
         std::lock_guard guard(g_lock);
         g_work.push_back(std::move(work));
+    }
+
+    void SetSignInListener(std::function<void(bool)> listener)
+    {
+        std::lock_guard guard(g_lock);
+        g_signInListener = std::move(listener);
     }
 }
 

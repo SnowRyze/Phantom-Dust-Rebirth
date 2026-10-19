@@ -55,6 +55,11 @@ namespace pdnet::eossdk
         PDNET_EOS_FUNCTIONS(PDNET_EOS_RESOLVE)
 #undef PDNET_EOS_RESOLVE
         if (!ok) return nullptr;
+        int lobbyFunctions = 0;
+#define PDNET_EOS_COUNT(name) ++lobbyFunctions;
+        PDNET_EOS_LOBBY_FUNCTIONS(PDNET_EOS_COUNT)
+#undef PDNET_EOS_COUNT
+        Log(L"eos: SDK loaded, all functions resolved (%d lobby functions)", lobbyFunctions);
 
         std::wstring eosDir = LocalStatePath() + L"\\eos";
         CreateDirectoryW(eosDir.c_str(), nullptr);

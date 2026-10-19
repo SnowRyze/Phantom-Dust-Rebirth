@@ -1,4 +1,4 @@
-// pdnet-hand: core session members implemented; the rest are still generated defaults.
+// pdnet-hand: core session members implemented (stage B: setters record edits, see mpsd.h); the rest are still generated defaults.
 #include "xsapi_pch.h"
 #include "Multiplayer.MultiplayerSession.h"
 #include "Multiplayer.MultiplayerSessionTournamentsServer.h"
@@ -38,7 +38,8 @@ namespace winrt::Microsoft::Xbox::Services::Multiplayer::implementation
     }
     Microsoft::Xbox::Services::Multiplayer::MultiplayerSessionChangeTypes MultiplayerSession::CompareMultiplayerSessions(Microsoft::Xbox::Services::Multiplayer::MultiplayerSession const& currentSession, Microsoft::Xbox::Services::Multiplayer::MultiplayerSession const& oldSession)
     {
-        PDNET_XSAPI_STUB_DEFAULT("MultiplayerSession::CompareMultiplayerSessions"); return Microsoft::Xbox::Services::Multiplayer::MultiplayerSessionChangeTypes{};
+        if (!currentSession || !oldSession) return Microsoft::Xbox::Services::Multiplayer::MultiplayerSessionChangeTypes::Everything;
+        return ::pdnet::mpsd::Compare(winrt::get_self<MultiplayerSession>(currentSession)->Doc(), winrt::get_self<MultiplayerSession>(oldSession)->Doc());
     }
     Microsoft::Xbox::Services::Multiplayer::WriteSessionStatus MultiplayerSession::ConvertHttpStatusToWriteSessionStatus(int32_t httpStatusCode)
     {
@@ -50,7 +51,7 @@ namespace winrt::Microsoft::Xbox::Services::Multiplayer::implementation
     }
     hstring MultiplayerSession::SearchHandleId()
     {
-        PDNET_XSAPI_STUB_DEFAULT("MultiplayerSession::SearchHandleId"); return hstring{};
+        return m_doc->search ? hstring{ m_doc->search->id } : hstring{};
     }
     Microsoft::Xbox::Services::Tournaments::TournamentArbitrationStatus MultiplayerSession::ArbitrationStatus()
     {
@@ -62,7 +63,7 @@ namespace winrt::Microsoft::Xbox::Services::Multiplayer::implementation
     }
     Windows::Foundation::DateTime MultiplayerSession::DateOfNextTimer()
     {
-        PDNET_XSAPI_STUB_DEFAULT("MultiplayerSession::DateOfNextTimer"); return Windows::Foundation::DateTime{};
+        return Windows::Foundation::DateTime{}; // no session timers
     }
     Windows::Foundation::DateTime MultiplayerSession::DateOfSession()
     {
@@ -167,6 +168,7 @@ namespace winrt::Microsoft::Xbox::Services::Multiplayer::implementation
         m.customConstantsJson = memberCustomConstantsJson;
         m.initializeRequested = initializeRequested;
         m.status = Microsoft::Xbox::Services::Multiplayer::MultiplayerSessionMemberStatus::Reserved;
+        m.reservation = true;
         m_doc->members.push_back(m);
     }
     Microsoft::Xbox::Services::Multiplayer::MultiplayerSessionMember MultiplayerSession::Join()
@@ -194,10 +196,12 @@ namespace winrt::Microsoft::Xbox::Services::Multiplayer::implementation
     void MultiplayerSession::SetVisibility(Microsoft::Xbox::Services::Multiplayer::MultiplayerSessionVisibility const& visibility)
     {
         m_doc->visibility = visibility;
+        m_doc->edits.visibility = true;
     }
     void MultiplayerSession::SetMaxMembersInSession(uint32_t maxMembersInSession)
     {
         m_doc->maxMembers = maxMembersInSession;
+        m_doc->edits.maxMembers = true;
     }
     void MultiplayerSession::SetMutableRoleSettings(Windows::Foundation::Collections::IMapView<hstring, Microsoft::Xbox::Services::Multiplayer::MultiplayerRoleType> const& roleTypes)
     {
@@ -250,6 +254,7 @@ namespace winrt::Microsoft::Xbox::Services::Multiplayer::implementation
     void MultiplayerSession::SetHostDeviceToken(hstring const& hostDeviceToken)
     {
         m_doc->hostDeviceToken = hostDeviceToken;
+        m_doc->edits.host = true;
     }
     void MultiplayerSession::SetMatchmakingServerConnectionPath(hstring const& serverConnectionPath)
     {
@@ -258,6 +263,7 @@ namespace winrt::Microsoft::Xbox::Services::Multiplayer::implementation
     void MultiplayerSession::SetClosed(bool closed)
     {
         m_doc->closed = closed;
+        m_doc->edits.closed = true;
     }
     void MultiplayerSession::SetAllocateCloudCompute(bool allocateCloudCompute)
     {
@@ -322,10 +328,12 @@ namespace winrt::Microsoft::Xbox::Services::Multiplayer::implementation
     void MultiplayerSession::SetSessionCustomPropertyJson(hstring const& name, hstring const& valueJson)
     {
         m_doc->customProperties[std::wstring{ name }] = valueJson;
+        m_doc->edits.properties.insert(std::wstring{ name });
     }
     void MultiplayerSession::DeleteSessionCustomPropertyJson(hstring const& name)
     {
         m_doc->customProperties.erase(std::wstring{ name });
+        m_doc->edits.properties.insert(std::wstring{ name });
     }
     void MultiplayerSession::_Init(Microsoft::Xbox::Services::XboxLiveContext const& xboxLiveContext, Microsoft::Xbox::Services::Multiplayer::MultiplayerSessionReference const& multiplayerSessionReference, uint32_t maxMembersInSession, Microsoft::Xbox::Services::Multiplayer::MultiplayerSessionVisibility const& multiplayerSessionVisibility, Windows::Foundation::Collections::IVectorView<hstring> const& initiatorXboxUserIds, hstring const& sessionCustomConstantsJson)
     {

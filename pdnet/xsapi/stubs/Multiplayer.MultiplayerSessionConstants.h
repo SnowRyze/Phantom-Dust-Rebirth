@@ -11,9 +11,9 @@ namespace winrt::Microsoft::Xbox::Services::Multiplayer::implementation
         explicit MultiplayerSessionConstants(::pdnet::mpsd::SessionPtr doc) : m_doc(std::move(doc)) {}
 
         uint32_t MaxMembersInSession() { return m_doc->maxMembers; }
-        void MaxMembersInSession(uint32_t value) { m_doc->maxMembers = value; }
+        void MaxMembersInSession(uint32_t value) { m_doc->maxMembers = value; m_doc->edits.maxMembers = true; }
         Microsoft::Xbox::Services::Multiplayer::MultiplayerSessionVisibility MultiplayerSessionVisibility() { return m_doc->visibility; }
-        void MultiplayerSessionVisibility(Microsoft::Xbox::Services::Multiplayer::MultiplayerSessionVisibility const& value) { m_doc->visibility = value; }
+        void MultiplayerSessionVisibility(Microsoft::Xbox::Services::Multiplayer::MultiplayerSessionVisibility const& value) { m_doc->visibility = value; m_doc->edits.visibility = true; }
         Windows::Foundation::Collections::IVectorView<hstring> InitiatorXboxUserIds()
         {
             std::vector<hstring> ids;

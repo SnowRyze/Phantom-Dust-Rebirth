@@ -34,7 +34,7 @@ rem 1. pdnet core
 cl %CFLAGS% %EOSFLAGS% /MP /Fo"obj\\" /Fd"obj\core.pdb" ^
    "%ROOT%src\dllmain.cpp" "%ROOT%src\hooks.cpp" "%ROOT%src\gamesave.cpp" "%ROOT%src\log.cpp" ^
    "%ROOT%src\config.cpp" "%ROOT%src\net.cpp" "%ROOT%src\sda.cpp" "%ROOT%src\testpeer.cpp" "%ROOT%src\eostest.cpp" "%ROOT%src\credstore.cpp" ^
-   "%ROOT%src\eossdk.cpp" "%ROOT%src\eos.cpp" || goto :failed
+   "%ROOT%src\eossdk.cpp" "%ROOT%src\eos.cpp" "%ROOT%src\lobbies.cpp" || goto :failed
 
 rem 2. XSAPI stand-in: precompiled header, then every class in parallel
 cl %CFLAGS% %XINC% /Yc"xsapi_pch.h" /Fp"obj\xsapi\xsapi.pch" /Fo"obj\xsapi\\" /Fd"obj\xsapi.pdb" "%ROOT%xsapi\xsapi_pch.cpp" || goto :failed
