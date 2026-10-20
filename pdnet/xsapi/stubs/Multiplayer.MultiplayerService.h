@@ -42,6 +42,15 @@ namespace winrt::Microsoft::Xbox::Services::Multiplayer::implementation
         void RaiseSubscriptionLost();
 
     private:
+        // The bodies; the public versions wrap them in pdnet::xsapi::Repeatable.
+        Windows::Foundation::IAsyncOperation<Microsoft::Xbox::Services::Multiplayer::MultiplayerSession> WriteSessionAsyncImpl(Microsoft::Xbox::Services::Multiplayer::MultiplayerSession multiplayerSession, Microsoft::Xbox::Services::Multiplayer::MultiplayerSessionWriteMode multiplayerSessionWriteMode);
+        Windows::Foundation::IAsyncOperation<Microsoft::Xbox::Services::Multiplayer::WriteSessionResult> TryWriteSessionAsyncImpl(Microsoft::Xbox::Services::Multiplayer::MultiplayerSession multiplayerSession, Microsoft::Xbox::Services::Multiplayer::MultiplayerSessionWriteMode multiplayerSessionWriteMode);
+        Windows::Foundation::IAsyncOperation<Microsoft::Xbox::Services::Multiplayer::MultiplayerSession> WriteSessionByHandleAsyncImpl(Microsoft::Xbox::Services::Multiplayer::MultiplayerSession multiplayerSession, Microsoft::Xbox::Services::Multiplayer::MultiplayerSessionWriteMode multiplayerSessionWriteMode, hstring handleId);
+        Windows::Foundation::IAsyncOperation<Microsoft::Xbox::Services::Multiplayer::WriteSessionResult> TryWriteSessionByHandleAsyncImpl(Microsoft::Xbox::Services::Multiplayer::MultiplayerSession multiplayerSession, Microsoft::Xbox::Services::Multiplayer::MultiplayerSessionWriteMode multiplayerSessionWriteMode, hstring handleId);
+        Windows::Foundation::IAsyncOperation<Microsoft::Xbox::Services::Multiplayer::MultiplayerSession> GetCurrentSessionAsyncImpl(Microsoft::Xbox::Services::Multiplayer::MultiplayerSessionReference sessionReference);
+        Windows::Foundation::IAsyncOperation<Microsoft::Xbox::Services::Multiplayer::MultiplayerSession> GetCurrentSessionByHandleAsyncImpl(hstring handleId);
+        Windows::Foundation::IAsyncOperation<Windows::Foundation::Collections::IVectorView<Microsoft::Xbox::Services::Multiplayer::MultiplayerSearchHandleDetails>> GetSearchHandlesAsyncImpl(hstring serviceConfigurationId, hstring sessionTemplateName, hstring orderBy, bool orderAscending, hstring searchFilter);
+        Windows::Foundation::IAsyncOperation<Windows::Foundation::Collections::IVectorView<Microsoft::Xbox::Services::Multiplayer::MultiplayerSearchHandleDetails>> GetSearchHandlesAsyncImpl(Microsoft::Xbox::Services::Multiplayer::MultiplayerQuerySearchHandleRequest searchHandleRequest);
         void Register();
         std::atomic<bool> m_registered{ false };
         winrt::event<Windows::Foundation::EventHandler<Microsoft::Xbox::Services::Multiplayer::MultiplayerSessionChangeEventArgs>> m_sessionChanged;

@@ -275,3 +275,9 @@ Game mesh facts found for it (PDUWP.exe, Microsoft's sample MeshManager):
   On Xbox Live the game downloaded the real blob, so this only shows with pdnet serving local files. Fix (Direct build only): the original
   copy as an override, `D:\PhantomDust-Direct\titlestorage\gsdata_en.dat` (pdnet checks `titlestorage\` first). Master and Teredo untouched.
   Not yet confirmed in game. Testers with the same dump would see the same bug.
+- **2026-10-19/20: crash when leaving a lobby (both players)** — access violation at PDUWP.exe+0xA7083. Ghidra: `FUN_14009c7c0` is the
+  game's session-write task; it polls `TryWriteSessionAsync` every frame and calls `GetResults` on it more than once, then reads
+  `WriteSessionResult.Succeeded` without a null check. C++/WinRT coroutines move their result out on the first `GetResults`
+  (`return std::move(m_result)` in windows.foundation.h), so the second read was null. Fix: `xsapi\repeatable.h` wraps every implemented
+  MultiplayerService operation (writes, reads, by-handle, search) so results can be read again. Build `build-stagec` MD5 `61C45C57`.
+  **Not yet confirmed in game.** Other stand-ins still use plain coroutines; wrap any that crash the same way.

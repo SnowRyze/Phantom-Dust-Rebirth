@@ -8,6 +8,7 @@
 #include "Multiplayer.MultiplayerSubscriptionLostEventArgs.h"
 #include "Multiplayer.MultiplayerSearchHandleDetails.h"
 #include <algorithm>
+#include "../repeatable.h"
 
 
 namespace winrt::Microsoft::Xbox::Services::Multiplayer::implementation
@@ -94,13 +95,13 @@ namespace winrt::Microsoft::Xbox::Services::Multiplayer::implementation
     {
         m_subscriptionLost.remove(__param0);
     }
-    Windows::Foundation::IAsyncOperation<Microsoft::Xbox::Services::Multiplayer::MultiplayerSession> MultiplayerService::WriteSessionAsync(Microsoft::Xbox::Services::Multiplayer::MultiplayerSession multiplayerSession, Microsoft::Xbox::Services::Multiplayer::MultiplayerSessionWriteMode multiplayerSessionWriteMode)
+    Windows::Foundation::IAsyncOperation<Microsoft::Xbox::Services::Multiplayer::MultiplayerSession> MultiplayerService::WriteSessionAsyncImpl(Microsoft::Xbox::Services::Multiplayer::MultiplayerSession multiplayerSession, Microsoft::Xbox::Services::Multiplayer::MultiplayerSessionWriteMode multiplayerSessionWriteMode)
     {
         auto result = co_await TryWriteSessionAsync(multiplayerSession, multiplayerSessionWriteMode);
         if (!result.Succeeded()) throw winrt::hresult_error(HTTP_E_STATUS_PRECOND_FAILED, L"pdnet: session write failed");
         co_return result.Session();
     }
-    Windows::Foundation::IAsyncOperation<Microsoft::Xbox::Services::Multiplayer::WriteSessionResult> MultiplayerService::TryWriteSessionAsync(Microsoft::Xbox::Services::Multiplayer::MultiplayerSession multiplayerSession, Microsoft::Xbox::Services::Multiplayer::MultiplayerSessionWriteMode multiplayerSessionWriteMode)
+    Windows::Foundation::IAsyncOperation<Microsoft::Xbox::Services::Multiplayer::WriteSessionResult> MultiplayerService::TryWriteSessionAsyncImpl(Microsoft::Xbox::Services::Multiplayer::MultiplayerSession multiplayerSession, Microsoft::Xbox::Services::Multiplayer::MultiplayerSessionWriteMode multiplayerSessionWriteMode)
     {
         co_await winrt::resume_background();
         auto self = winrt::get_self<implementation::MultiplayerSession>(multiplayerSession);
@@ -117,13 +118,13 @@ namespace winrt::Microsoft::Xbox::Services::Multiplayer::implementation
         auto session = winrt::make<implementation::MultiplayerSession>(self->Context(), stored);
         co_return winrt::make<implementation::WriteSessionResult>(true, stored->writeStatus, session);
     }
-    Windows::Foundation::IAsyncOperation<Microsoft::Xbox::Services::Multiplayer::MultiplayerSession> MultiplayerService::WriteSessionByHandleAsync(Microsoft::Xbox::Services::Multiplayer::MultiplayerSession multiplayerSession, Microsoft::Xbox::Services::Multiplayer::MultiplayerSessionWriteMode multiplayerSessionWriteMode, hstring handleId)
+    Windows::Foundation::IAsyncOperation<Microsoft::Xbox::Services::Multiplayer::MultiplayerSession> MultiplayerService::WriteSessionByHandleAsyncImpl(Microsoft::Xbox::Services::Multiplayer::MultiplayerSession multiplayerSession, Microsoft::Xbox::Services::Multiplayer::MultiplayerSessionWriteMode multiplayerSessionWriteMode, hstring handleId)
     {
         auto result = co_await TryWriteSessionByHandleAsync(multiplayerSession, multiplayerSessionWriteMode, handleId);
         if (!result.Succeeded()) throw winrt::hresult_error(HTTP_E_STATUS_NOT_FOUND, L"pdnet: session write by handle failed");
         co_return result.Session();
     }
-    Windows::Foundation::IAsyncOperation<Microsoft::Xbox::Services::Multiplayer::WriteSessionResult> MultiplayerService::TryWriteSessionByHandleAsync(Microsoft::Xbox::Services::Multiplayer::MultiplayerSession multiplayerSession, Microsoft::Xbox::Services::Multiplayer::MultiplayerSessionWriteMode multiplayerSessionWriteMode, hstring handleId)
+    Windows::Foundation::IAsyncOperation<Microsoft::Xbox::Services::Multiplayer::WriteSessionResult> MultiplayerService::TryWriteSessionByHandleAsyncImpl(Microsoft::Xbox::Services::Multiplayer::MultiplayerSession multiplayerSession, Microsoft::Xbox::Services::Multiplayer::MultiplayerSessionWriteMode multiplayerSessionWriteMode, hstring handleId)
     {
         co_await winrt::resume_background();
         auto target = ::pdnet::mpsd::SessionStore::Instance().GetByHandle(std::wstring{ handleId });
@@ -137,7 +138,7 @@ namespace winrt::Microsoft::Xbox::Services::Multiplayer::implementation
         auto session = winrt::make<implementation::MultiplayerSession>(self->Context(), std::make_shared<::pdnet::mpsd::SessionDoc>(std::move(written)));
         co_return co_await TryWriteSessionAsync(session, multiplayerSessionWriteMode);
     }
-    Windows::Foundation::IAsyncOperation<Microsoft::Xbox::Services::Multiplayer::MultiplayerSession> MultiplayerService::GetCurrentSessionAsync(Microsoft::Xbox::Services::Multiplayer::MultiplayerSessionReference sessionReference)
+    Windows::Foundation::IAsyncOperation<Microsoft::Xbox::Services::Multiplayer::MultiplayerSession> MultiplayerService::GetCurrentSessionAsyncImpl(Microsoft::Xbox::Services::Multiplayer::MultiplayerSessionReference sessionReference)
     {
         co_await winrt::resume_background();
         std::wstring key = KeyOf(sessionReference);
@@ -146,7 +147,7 @@ namespace winrt::Microsoft::Xbox::Services::Multiplayer::implementation
         if (!stored) throw winrt::hresult_error(HTTP_E_STATUS_NOT_FOUND, L"pdnet: no such session");
         co_return winrt::make<implementation::MultiplayerSession>(m_context, stored);
     }
-    Windows::Foundation::IAsyncOperation<Microsoft::Xbox::Services::Multiplayer::MultiplayerSession> MultiplayerService::GetCurrentSessionByHandleAsync(hstring handleId)
+    Windows::Foundation::IAsyncOperation<Microsoft::Xbox::Services::Multiplayer::MultiplayerSession> MultiplayerService::GetCurrentSessionByHandleAsyncImpl(hstring handleId)
     {
         co_await winrt::resume_background();
         auto stored = ::pdnet::mpsd::SessionStore::Instance().GetByHandle(std::wstring{ handleId });
@@ -215,7 +216,7 @@ namespace winrt::Microsoft::Xbox::Services::Multiplayer::implementation
     {
         PDNET_XSAPI_STUB_DEFAULT("MultiplayerService::GetActivitiesForUsersAsync"); co_return winrt::single_threaded_vector<Microsoft::Xbox::Services::Multiplayer::MultiplayerActivityDetails>().GetView();
     }
-    Windows::Foundation::IAsyncOperation<Windows::Foundation::Collections::IVectorView<Microsoft::Xbox::Services::Multiplayer::MultiplayerSearchHandleDetails>> MultiplayerService::GetSearchHandlesAsync(hstring serviceConfigurationId, hstring sessionTemplateName, hstring orderBy, bool orderAscending, hstring searchFilter)
+    Windows::Foundation::IAsyncOperation<Windows::Foundation::Collections::IVectorView<Microsoft::Xbox::Services::Multiplayer::MultiplayerSearchHandleDetails>> MultiplayerService::GetSearchHandlesAsyncImpl(hstring serviceConfigurationId, hstring sessionTemplateName, hstring orderBy, bool orderAscending, hstring searchFilter)
     {
         co_await winrt::resume_background();
         auto all = ::pdnet::mpsd::SessionStore::Instance().SearchHandles(std::wstring{ serviceConfigurationId }, std::wstring{ sessionTemplateName });
@@ -243,11 +244,45 @@ namespace winrt::Microsoft::Xbox::Services::Multiplayer::implementation
         ::pdnet::Log(L"xsapi-pdnet: search %s: %zu session(s), %zu match '%s'", sessionTemplateName.c_str(), all.size(), results.size(), filter.c_str());
         co_return winrt::single_threaded_vector(std::move(results)).GetView();
     }
-    Windows::Foundation::IAsyncOperation<Windows::Foundation::Collections::IVectorView<Microsoft::Xbox::Services::Multiplayer::MultiplayerSearchHandleDetails>> MultiplayerService::GetSearchHandlesAsync(Microsoft::Xbox::Services::Multiplayer::MultiplayerQuerySearchHandleRequest searchHandleRequest)
+    Windows::Foundation::IAsyncOperation<Windows::Foundation::Collections::IVectorView<Microsoft::Xbox::Services::Multiplayer::MultiplayerSearchHandleDetails>> MultiplayerService::GetSearchHandlesAsyncImpl(Microsoft::Xbox::Services::Multiplayer::MultiplayerQuerySearchHandleRequest searchHandleRequest)
     {
         co_return co_await GetSearchHandlesAsync(searchHandleRequest.ServiceConfigurationId(), searchHandleRequest.SessionTemplateName(),
             searchHandleRequest.OrderBy(), searchHandleRequest.OrderAscending(), searchHandleRequest.SearchFilter());
     }
+    // Public operations: results can be read more than once (see repeatable.h).
+    Windows::Foundation::IAsyncOperation<Microsoft::Xbox::Services::Multiplayer::MultiplayerSession> MultiplayerService::WriteSessionAsync(Microsoft::Xbox::Services::Multiplayer::MultiplayerSession multiplayerSession, Microsoft::Xbox::Services::Multiplayer::MultiplayerSessionWriteMode multiplayerSessionWriteMode)
+    {
+        return ::pdnet::xsapi::Repeatable(WriteSessionAsyncImpl(multiplayerSession, multiplayerSessionWriteMode));
+    }
+    Windows::Foundation::IAsyncOperation<Microsoft::Xbox::Services::Multiplayer::WriteSessionResult> MultiplayerService::TryWriteSessionAsync(Microsoft::Xbox::Services::Multiplayer::MultiplayerSession multiplayerSession, Microsoft::Xbox::Services::Multiplayer::MultiplayerSessionWriteMode multiplayerSessionWriteMode)
+    {
+        return ::pdnet::xsapi::Repeatable(TryWriteSessionAsyncImpl(multiplayerSession, multiplayerSessionWriteMode));
+    }
+    Windows::Foundation::IAsyncOperation<Microsoft::Xbox::Services::Multiplayer::MultiplayerSession> MultiplayerService::WriteSessionByHandleAsync(Microsoft::Xbox::Services::Multiplayer::MultiplayerSession multiplayerSession, Microsoft::Xbox::Services::Multiplayer::MultiplayerSessionWriteMode multiplayerSessionWriteMode, hstring handleId)
+    {
+        return ::pdnet::xsapi::Repeatable(WriteSessionByHandleAsyncImpl(multiplayerSession, multiplayerSessionWriteMode, handleId));
+    }
+    Windows::Foundation::IAsyncOperation<Microsoft::Xbox::Services::Multiplayer::WriteSessionResult> MultiplayerService::TryWriteSessionByHandleAsync(Microsoft::Xbox::Services::Multiplayer::MultiplayerSession multiplayerSession, Microsoft::Xbox::Services::Multiplayer::MultiplayerSessionWriteMode multiplayerSessionWriteMode, hstring handleId)
+    {
+        return ::pdnet::xsapi::Repeatable(TryWriteSessionByHandleAsyncImpl(multiplayerSession, multiplayerSessionWriteMode, handleId));
+    }
+    Windows::Foundation::IAsyncOperation<Microsoft::Xbox::Services::Multiplayer::MultiplayerSession> MultiplayerService::GetCurrentSessionAsync(Microsoft::Xbox::Services::Multiplayer::MultiplayerSessionReference sessionReference)
+    {
+        return ::pdnet::xsapi::Repeatable(GetCurrentSessionAsyncImpl(sessionReference));
+    }
+    Windows::Foundation::IAsyncOperation<Microsoft::Xbox::Services::Multiplayer::MultiplayerSession> MultiplayerService::GetCurrentSessionByHandleAsync(hstring handleId)
+    {
+        return ::pdnet::xsapi::Repeatable(GetCurrentSessionByHandleAsyncImpl(handleId));
+    }
+    Windows::Foundation::IAsyncOperation<Windows::Foundation::Collections::IVectorView<Microsoft::Xbox::Services::Multiplayer::MultiplayerSearchHandleDetails>> MultiplayerService::GetSearchHandlesAsync(hstring serviceConfigurationId, hstring sessionTemplateName, hstring orderBy, bool orderAscending, hstring searchFilter)
+    {
+        return ::pdnet::xsapi::Repeatable(GetSearchHandlesAsyncImpl(serviceConfigurationId, sessionTemplateName, orderBy, orderAscending, searchFilter));
+    }
+    Windows::Foundation::IAsyncOperation<Windows::Foundation::Collections::IVectorView<Microsoft::Xbox::Services::Multiplayer::MultiplayerSearchHandleDetails>> MultiplayerService::GetSearchHandlesAsync(Microsoft::Xbox::Services::Multiplayer::MultiplayerQuerySearchHandleRequest searchHandleRequest)
+    {
+        return ::pdnet::xsapi::Repeatable(GetSearchHandlesAsyncImpl(searchHandleRequest));
+    }
+
     void MultiplayerService::EnableMultiplayerSubscriptions()
     {
         Register();
