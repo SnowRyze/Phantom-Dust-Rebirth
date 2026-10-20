@@ -281,3 +281,5 @@ Game mesh facts found for it (PDUWP.exe, Microsoft's sample MeshManager):
   (`return std::move(m_result)` in windows.foundation.h), so the second read was null. Fix: `xsapi\repeatable.h` wraps every implemented
   MultiplayerService operation (writes, reads, by-handle, search) so results can be read again. Build `build-stagec` MD5 `61C45C57`.
   **Not yet confirmed in game.** Other stand-ins still use plain coroutines; wrap any that crash the same way.
+  Installed in the Direct build (61C45C57) and packaged as `D:\PhantomDust-pdnet-StageC-TestKit-61C45C57-with-eos.zip` (replaces the
+  C5F9697B kit, which has the leave crash).
