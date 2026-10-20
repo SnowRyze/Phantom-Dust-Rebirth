@@ -268,3 +268,10 @@ Game mesh facts found for it (PDUWP.exe, Microsoft's sample MeshManager):
 - **2026-10-20: stage C tester kit** `testkit-stagec\` (README for no port forwarding, `network_mode=eos`) built with
   `make-testkit.ps1 -Stage C -EosIni .\eos.tester.ini` → `D:\PhantomDust-pdnet-StageC-TestKit-C5F9697B-with-eos.zip`. Kit zips are now named
   after the DLL's MD5 prefix (the clock jumps made dated names ambiguous). Both players need stage C; the user's Direct build already matches.
+- **2026-10-20: wrong card names in Xbox-free mode** ("Aura Particle" shown as "Rebirth", still behaving as Aura). Cause: the dump's
+  `Assets\Data\gstorage\gsdata_en.dat` (C519B2D8, 2022-07-12) is an edited copy; next to it are `gsdata_en.dat.bak` (984175A8) and
+  `gsdata_en - Copy.dat` (892EEDB6, 2022-07-06, header matches the untouched gsdata_ja.dat). Card text is identical in all three; the header
+  differs: u32 at 0x14 = 374 originally (750 edited) and u32 at 0x18 = 301 originally (300 edited, off by one = names shifted by one entry).
+  On Xbox Live the game downloaded the real blob, so this only shows with pdnet serving local files. Fix (Direct build only): the original
+  copy as an override, `D:\PhantomDust-Direct\titlestorage\gsdata_en.dat` (pdnet checks `titlestorage\` first). Master and Teredo untouched.
+  Not yet confirmed in game. Testers with the same dump would see the same bug.
