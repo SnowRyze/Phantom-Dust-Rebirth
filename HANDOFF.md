@@ -249,3 +249,10 @@ Game mesh facts found for it (PDUWP.exe, Microsoft's sample MeshManager):
   starts `pdlaunch.exe`, which injects `pdnet.dll` and calls its new `PdInjectedInit` export; with `xbox=off` the activation hook then answers
   `Microsoft.Xbox.Services.*` itself. Not needed now (the tester has an unpacked copy). Note: `pdnet\build-stageb` now holds a rebuild with
   this injected-mode code (dump mode unchanged in intent, but not re-run in game); rerunning `make-testkit-stageb.ps1` would package it.
+- **2026-10-19 (session 3): FIRST TWO-PC TEST PASSED (stage B + direct UDP), user + one tester on different home networks.** Kit
+  `PhantomDust-pdnet-StageB-TestKit-WITH-EOS.zip` (DLL `A3755102`, tester EOS client). Run 1: user joined the tester's lobby through the EOS
+  browser and lobby join worked, but the match connection timed out (host's advertised address was a private LAN address on another network).
+  Run 2: user hosted with UDP 43210/43211 forwarded and `advertise_ip=<public IP>`; the tester found and joined the lobby, connected directly
+  (`sda: inbound connection ... (seen as <tester's public IP>)`), and **the user reports everything running correctly** (lobby and match).
+  Remaining: automatic internet connectivity without port forwarding (stage C, e.g. EOS P2P relays — see §8 before starting), longer soak,
+  `xbox=on`/Teredo regression check.
