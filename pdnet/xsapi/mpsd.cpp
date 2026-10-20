@@ -1,6 +1,7 @@
 #include "xsapi_pch.h"
 #include "mpsd.h"
 #include "../src/lobbies.h"
+#include "nametrace.h"
 #include <winrt/Windows.Data.Json.h>
 #include <bcrypt.h>
 #include <algorithm>
@@ -473,6 +474,7 @@ namespace pdnet::mpsd
             OnLobbyEvent(lobbyId, static_cast<int>(event), userId);
         });
         lobbies::SetSignOutListener([this] { OnSignedOut(); });
+        nametrace::Start();
     }
 
     void SessionStore::SetHandlers(ChangedHandler changed, std::function<void()> subscriptionLost)

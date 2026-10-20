@@ -83,6 +83,7 @@ namespace pdnet
                 else if (key == "control_port") c.controlPort = static_cast<uint16_t>(std::stoul(value));
                 else if (key == "qos_probes") c.qosProbes = (std::max)(1ul, std::stoul(value));
                 else if (key == "test_peer") c.testPeer = _stricmp(value.c_str(), "on") == 0;
+                else if (key == "name_trace") c.nameTrace = _stricmp(value.c_str(), "on") == 0;
                 else if (key == "eos_test") c.eosTest = _stricmp(value.c_str(), "on") == 0;
                 else if (key == "eos") c.eos = _stricmp(value.c_str(), "on") == 0;
                 else if (key == "xbox") c.xboxOff = _stricmp(value.c_str(), "off") == 0;
@@ -93,6 +94,7 @@ namespace pdnet
                 }
             }
             if (c.testPeer) Log(L"config: test_peer=on (fake second player starts when a lobby is created)");
+            if (c.nameTrace) Log(L"config: name_trace=on (logs which game code reads other players' names; debug only)");
             if (c.p2p && !c.eos)
             {
                 Log(L"config: network_mode=eos needs eos=on; using direct");
