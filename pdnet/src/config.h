@@ -14,6 +14,7 @@ namespace pdnet
         uint16_t controlPort = 43211;       // pdnet control channel (connect handshake, pings)
         uint32_t qosProbes = 5;
         bool testPeer = false;              // test_peer=on: in-process fake second player (debug, see testpeer.h)
+        bool nametagsOnBodies = true;       // nametags_on_bodies=on: keep nametags over dead players (game code patch, see gamepatches.h)
         int nameTrace = 0;                  // name_trace=draw|on (2): log game text draws of other players' names; memory (1): log reads of name copies (debug, see xsapi/nametrace.h)
         bool eosTest = false;               // eos_test=on: one-shot Epic Online Services feasibility check (see eostest.h)
         bool eos = false;                   // eos=on: stay signed in to Epic Online Services (see eos.h)

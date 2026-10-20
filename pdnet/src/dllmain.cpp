@@ -5,6 +5,7 @@
 #include "config.h"
 #include "eos.h"
 #include "eostest.h"
+#include "gamepatches.h"
 #include "hooks.h"
 #include "log.h"
 #include "../xsapi/xsapi.h"
@@ -24,6 +25,7 @@ namespace
             wchar_t path[MAX_PATH];
             GetModuleFileNameW(g_self, path, MAX_PATH);
             pdnet::Log(L"pdnet loaded from %s (pid %lu)%s", path, GetCurrentProcessId(), g_injected ? L", injected by pdlaunch" : L"");
+            pdnet::gamepatches::Apply();
 
             if (g_injected)
             {

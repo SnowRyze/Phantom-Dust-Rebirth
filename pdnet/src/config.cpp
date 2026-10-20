@@ -83,6 +83,7 @@ namespace pdnet
                 else if (key == "control_port") c.controlPort = static_cast<uint16_t>(std::stoul(value));
                 else if (key == "qos_probes") c.qosProbes = (std::max)(1ul, std::stoul(value));
                 else if (key == "test_peer") c.testPeer = _stricmp(value.c_str(), "on") == 0;
+                else if (key == "nametags_on_bodies") c.nametagsOnBodies = _stricmp(value.c_str(), "off") != 0;
                 else if (key == "name_trace") c.nameTrace = _stricmp(value.c_str(), "memory") == 0 ? 1 : (_stricmp(value.c_str(), "draw") == 0 || _stricmp(value.c_str(), "on") == 0) ? 2 : 0;
                 else if (key == "eos_test") c.eosTest = _stricmp(value.c_str(), "on") == 0;
                 else if (key == "eos") c.eos = _stricmp(value.c_str(), "on") == 0;
