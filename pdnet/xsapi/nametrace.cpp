@@ -10,7 +10,8 @@ namespace pdnet::nametrace
     namespace
     {
         constexpr int kFrames = 8;
-        constexpr int kMaxRecords = 512;
+        constexpr int kMaxRecords = 4096;
+        constexpr int kKeyFrames = 3; // code paths are grouped by their first three PDUWP.exe frames
         constexpr uint64_t kGhidraBase = 0x140000000;
 
         // One distinct way the game read a watched name: which watch slot fired and the PDUWP.exe call chain.
@@ -21,6 +22,7 @@ namespace pdnet::nametrace
             uint64_t frames[kFrames];
             int frameCount;
             volatile LONG hits;
+            LONG reported; // hits already included in a timeline line
             bool logged;
         };
 
@@ -70,7 +72,8 @@ namespace pdnet::nametrace
             for (LONG i = 0; i < count; ++i)
             {
                 Record& r = g_records[i];
-                if (r.watched == g_watched[slot] && r.frameCount == n && memcmp(r.frames, frames, n * sizeof(uint64_t)) == 0)
+                int key = (std::min)(n, kKeyFrames);
+                if ((std::min)(r.frameCount, kKeyFrames) == key && memcmp(r.frames, frames, key * sizeof(uint64_t)) == 0)
                 {
                     ++r.hits;
                     ReleaseSRWLockExclusive(&g_recordLock);
@@ -85,6 +88,7 @@ namespace pdnet::nametrace
                 memcpy(r.frames, frames, n * sizeof(uint64_t));
                 r.frameCount = n;
                 r.hits = 1;
+                r.reported = 0;
                 r.logged = false;
                 g_recordCount = count + 1;
             }
@@ -248,14 +252,29 @@ namespace pdnet::nametrace
             ReleaseSRWLockShared(&g_recordLock);
         }
 
-        void LogSummary()
+        // Timeline: how often each code path read a watched name since the last line. A path that stops when a player dies
+        // shows up as reads that drop to zero at that time.
+        void LogTimeline()
         {
             AcquireSRWLockShared(&g_recordLock);
+            int lines = 0;
             for (LONG i = 0; i < g_recordCount; ++i)
             {
                 Record& r = g_records[i];
-                Log(L"nametrace: summary %s first frame %llx: %ld read(s)", Where(r.watched).c_str(), r.frameCount ? Ghidra(r.frames[0]) : 0, r.hits);
+                LONG delta = r.hits - r.reported;
+                if (delta <= 0) continue;
+                r.reported = r.hits;
+                if (++lines > 60) continue;
+                std::wstring chain;
+                for (int f = 0; f < r.frameCount && f < kKeyFrames; ++f)
+                {
+                    wchar_t frame[24];
+                    swprintf_s(frame, L"%s%llx", f ? L" <- " : L"", Ghidra(r.frames[f]));
+                    chain += frame;
+                }
+                Log(L"nametrace: window +%ld reads by %s (%s)", delta, chain.c_str(), Where(r.watched).c_str());
             }
+            if (lines > 60) Log(L"nametrace: window: %d more paths not listed", lines - 60);
             ReleaseSRWLockShared(&g_recordLock);
         }
 
@@ -270,7 +289,7 @@ namespace pdnet::nametrace
 
             std::vector<std::wstring> names;
             std::vector<Hit> hits;
-            ULONGLONG nextScan = 0, nextSummary = GetTickCount64() + 60000;
+            ULONGLONG nextScan = 0, nextSummary = GetTickCount64() + 15000;
             size_t rotation = 0;
             bool armed = false;
             for (;;)
@@ -303,10 +322,20 @@ namespace pdnet::nametrace
                 }
                 if (hits.empty()) continue;
 
+                // Copies in the game's own tables stay watched; heap copies come and go, so they are only rotated
+                // through when there are no static ones.
                 uint64_t addrs[4] = {};
-                for (int i = 0; i < 4 && i < static_cast<int>(hits.size()); ++i)
-                    addrs[i] = hits[(rotation + i) % hits.size()].addr & ~7ull;
-                rotation = (rotation + 4) % hits.size();
+                size_t statics = std::count_if(hits.begin(), hits.end(), [](const Hit& h) { return InExe(h.addr); });
+                if (statics)
+                {
+                    for (size_t i = 0; i < 4 && i < statics; ++i) addrs[i] = hits[i].addr & ~7ull;
+                }
+                else
+                {
+                    for (int i = 0; i < 4 && i < static_cast<int>(hits.size()); ++i)
+                        addrs[i] = hits[(rotation + i) % hits.size()].addr & ~7ull;
+                    rotation = (rotation + 4) % hits.size();
+                }
                 for (int i = 0; i < 4; ++i) g_watched[i] = addrs[i];
                 Arm(addrs);
                 armed = true;
@@ -314,8 +343,8 @@ namespace pdnet::nametrace
                 LogNewRecords(hits);
                 if (now >= nextSummary)
                 {
-                    LogSummary();
-                    nextSummary = now + 60000;
+                    LogTimeline();
+                    nextSummary = now + 15000;
                 }
             }
         }
