@@ -1,14 +1,19 @@
 // Replacement for Windows.Networking.XboxLive (Secure Device Association over Teredo).
 //
-// A device address is a pdnet snapshot (IP + ports + random device id). Creating an endpoint pair runs a
-// CONNECT/ACK handshake on the pdnet control port; afterwards the game's own UDP socket talks to the peer's
-// real address directly. Quality-of-service measurements are real pings over the control channel.
+// A device address is a pdnet snapshot (IP + ports + random device id, plus the EOS product user id in v2).
+// Creating an endpoint pair runs a CONNECT/ACK handshake; afterwards the game's own UDP socket sends to the address
+// the pair reports. Two ways:
+//   - direct: handshake on the pdnet control port, and the game talks to the peer's real address;
+//   - EOS P2P (network_mode=eos, both peers have v2 addresses): handshake over EOS, and the game talks to a local
+//     "link" socket that pdnet bridges to the peer through EOS (NAT traversal, Epic relays; see p2p.h).
+// Quality-of-service measurements are real pings over whichever path the peer uses.
 #include "pch.h"
 #include "sda.h"
 #include "net.h"
 #include "log.h"
 #include "config.h"
 #include "testpeer.h"
+#include "p2p.h"
 #include <winrt/Windows.Networking.h>
 #include <winrt/Windows.Networking.XboxLive.h>
 
@@ -159,6 +164,8 @@ namespace pdnet
             winrt::com_ptr<Template> m_template;
             Snapshot m_remote;
             std::array<uint8_t, 16> m_remoteIp; // the address the peer's packets actually come from
+            std::string m_peer;                 // EOS product user id when the pair runs over EOS P2P
+            uint16_t m_linkPort = 0;            // then: the local link socket the game sends to
             std::atomic<xl::XboxLiveEndpointPairState> m_state{ xl::XboxLiveEndpointPairState::Ready };
             winrt::event<wf::TypedEventHandler<xl::XboxLiveEndpointPair, xl::XboxLiveEndpointPairStateChangedEventArgs>> m_stateChanged;
 
@@ -192,18 +199,19 @@ namespace pdnet
                 memcpy(out.data(), &a, sizeof(a));
             }
 
-            void GetRemoteSocketAddressBytes(winrt::array_view<uint8_t> out) const { WriteSockAddr(out, net::GameSockAddr(m_remoteIp, m_remote.gamePort)); }
+            uint16_t RemoteGamePort() const { return m_linkPort ? m_linkPort : m_remote.gamePort; }
+            void GetRemoteSocketAddressBytes(winrt::array_view<uint8_t> out) const { WriteSockAddr(out, net::GameSockAddr(m_remoteIp, RemoteGamePort())); }
             void GetLocalSocketAddressBytes(winrt::array_view<uint8_t> out) const { WriteSockAddr(out, net::GameSockAddr(net::Local().ip, net::Local().gamePort)); }
 
             xl::XboxLiveEndpointPairState State() const { return m_state; }
             xl::XboxLiveEndpointPairTemplate Template() const;
             xl::XboxLiveDeviceAddress RemoteDeviceAddress() const { return MakeAddress(m_remote); }
             winrt::Windows::Networking::HostName RemoteHostName() const { return winrt::Windows::Networking::HostName(net::IpToString(m_remoteIp)); }
-            hstring RemotePort() const { return winrt::to_hstring(m_remote.gamePort); }
+            hstring RemotePort() const { return winrt::to_hstring(RemoteGamePort()); }
             winrt::Windows::Networking::HostName LocalHostName() const { return winrt::Windows::Networking::HostName(net::IpToString(net::Local().ip)); }
             hstring LocalPort() const { return winrt::to_hstring(net::Local().gamePort); }
 
-            bool Matches(const std::array<uint8_t, 16>& ip, uint16_t port) const { return ip == m_remoteIp && port == m_remote.gamePort; }
+            bool Matches(const std::array<uint8_t, 16>& ip, uint16_t port) const { return ip == m_remoteIp && port == RemoteGamePort(); }
         };
 
         struct CreationResult : winrt::implements<CreationResult, xl::IXboxLiveEndpointPairCreationResult>
@@ -248,16 +256,29 @@ namespace pdnet
             }
 
             // Returns the pair for a peer, creating it if needed. `created` reports whether it is new.
-            winrt::com_ptr<EndpointPair> GetOrAdd(const Snapshot& remote, const std::array<uint8_t, 16>& observedIp, bool& created)
+            // `eosPeer` set: the pair runs over EOS P2P through a local link socket.
+            winrt::com_ptr<EndpointPair> GetOrAdd(const Snapshot& remote, const std::array<uint8_t, 16>& observedIp, bool& created, const std::string& eosPeer = {})
             {
+                uint16_t linkPort = eosPeer.empty() ? 0 : p2p::OpenLink(eosPeer);
+                std::array<uint8_t, 16> ip = linkPort ? net::InterfaceIp() : observedIp;
                 std::lock_guard guard(g_lock);
                 if (auto existing = FindLocked(remote.deviceId))
                 {
-                    existing->m_remoteIp = observedIp;
+                    existing->m_remoteIp = ip;
+                    if (linkPort)
+                    {
+                        existing->m_peer = eosPeer;
+                        existing->m_linkPort = linkPort;
+                    }
                     created = false;
                     return existing;
                 }
-                auto pair = winrt::make_self<EndpointPair>(get_strong(), remote, observedIp);
+                auto pair = winrt::make_self<EndpointPair>(get_strong(), remote, ip);
+                if (linkPort)
+                {
+                    pair->m_peer = eosPeer;
+                    pair->m_linkPort = linkPort;
+                }
                 m_pairs.push_back(pair);
                 created = true;
                 return pair;
@@ -305,13 +326,29 @@ namespace pdnet
                     }
                 }
 
-                Log(L"sda: connecting to %s (template %s)", remote.Describe().c_str(), m_name.c_str());
                 auto body = net::Local().Serialize();
                 std::string name = winrt::to_string(m_name);
                 body.push_back(static_cast<uint8_t>(name.size()));
                 body.insert(body.end(), name.begin(), name.end());
 
                 net::Message reply;
+                if (!remote.eosUser.empty() && p2p::Enabled())
+                {
+                    Log(L"sda: connecting to %s over EOS P2P (template %s)", remote.Describe().c_str(), m_name.c_str());
+                    if (p2p::Request(remote.eosUser, net::MsgType::Connect, body, 20000, reply))
+                    {
+                        bool created;
+                        auto pair = GetOrAdd(remote, net::InterfaceIp(), created, remote.eosUser);
+                        if (pair->m_linkPort)
+                        {
+                            Log(L"sda: connected to %s over EOS P2P, game packets go to local link port %u", remote.Describe().c_str(), pair->m_linkPort);
+                            co_return Make<xl::XboxLiveEndpointPairCreationResult, CreationResult>(address, Status::Succeeded, !created, As<xl::XboxLiveEndpointPair>(pair));
+                        }
+                    }
+                    Log(L"sda: EOS P2P connect to %s failed; trying direct UDP", remote.Describe().c_str());
+                }
+
+                Log(L"sda: connecting to %s (template %s)", remote.Describe().c_str(), m_name.c_str());
                 if (!net::Request(remote, net::MsgType::Connect, body, 10000, 250, reply))
                 {
                     Log(L"sda: connect to %s TIMED OUT - check the other PC is running pdnet and UDP %u/%u are reachable", remote.Describe().c_str(), remote.gamePort, remote.controlPort);
@@ -371,7 +408,15 @@ namespace pdnet
             std::string name = winrt::to_string(m_template->m_name);
             body.push_back(static_cast<uint8_t>(name.size()));
             body.insert(body.end(), name.begin(), name.end());
-            net::Send(m_remote, net::MsgType::Delete, net::NewNonce(), body);
+            if (!m_peer.empty())
+            {
+                p2p::SendControl(m_peer, net::MsgType::Delete, net::NewNonce(), body);
+                p2p::CloseLink(m_peer);
+            }
+            else
+            {
+                net::Send(m_remote, net::MsgType::Delete, net::NewNonce(), body);
+            }
             m_template->Remove(this);
             SetState(xl::XboxLiveEndpointPairState::Deleted);
         }
@@ -415,21 +460,25 @@ namespace pdnet
             std::array<uint8_t, 16> observed;
             memcpy(observed.data(), &m.from.sin6_addr, 16);
 
+            size_t nameAt = remote.eosUser.empty() ? Snapshot::kSize : Snapshot::kSizeV2;
             if (m.type == net::MsgType::Connect)
             {
-                auto t = GetTemplate(readName(Snapshot::kSize));
+                auto t = GetTemplate(readName(nameAt));
                 bool created;
-                auto pair = t->GetOrAdd(remote, observed, created);
-                net::SendTo(m.from, net::MsgType::Ack, m.nonce, net::Local().Serialize());
+                auto pair = t->GetOrAdd(remote, observed, created, m.peer);
+                if (!m.peer.empty()) p2p::SendControl(m.peer, net::MsgType::Ack, m.nonce, net::Local().Serialize());
+                else net::SendTo(m.from, net::MsgType::Ack, m.nonce, net::Local().Serialize());
                 if (created)
                 {
-                    Log(L"sda: inbound connection from %s (seen as %s)", remote.Describe().c_str(), net::IpToString(observed).c_str());
+                    if (!m.peer.empty()) Log(L"sda: inbound connection from %s over EOS P2P (local link port %u)", remote.Describe().c_str(), pair->m_linkPort);
+                    else Log(L"sda: inbound connection from %s (seen as %s)", remote.Describe().c_str(), net::IpToString(observed).c_str());
                     t->RaiseInbound(pair);
                 }
             }
             else if (m.type == net::MsgType::Delete)
             {
-                auto t = GetTemplate(readName(Snapshot::kSize));
+                if (!m.peer.empty()) p2p::CloseLink(m.peer);
+                auto t = GetTemplate(readName(nameAt));
                 winrt::com_ptr<EndpointPair> pair;
                 {
                     std::lock_guard guard(g_lock);
@@ -448,6 +497,7 @@ namespace pdnet
         void EnsureNetwork()
         {
             net::Start(OnControlMessage);
+            if (GetConfig().p2p) p2p::Start(OnControlMessage);
         }
 
         struct TemplateStatics : winrt::implements<TemplateStatics, wf::IActivationFactory, xl::IXboxLiveEndpointPairTemplateStatics>
@@ -594,7 +644,16 @@ namespace pdnet
                     Snapshot s;
                     std::vector<uint64_t> rtts;
                     std::vector<uint8_t> payload;
-                    if (SnapshotOf(device, s))
+                    if (SnapshotOf(device, s) && !s.eosUser.empty() && p2p::Enabled())
+                    {
+                        uint32_t perProbe = (std::max)(200u, m_timeoutMs / probes);
+                        for (uint32_t i = 0; i < probes; ++i)
+                        {
+                            int rtt = p2p::Ping(s.eosUser, perProbe, &payload);
+                            if (rtt >= 0) rtts.push_back(static_cast<uint64_t>(rtt));
+                        }
+                    }
+                    else if (SnapshotOf(device, s))
                     {
                         uint32_t perProbe = (std::max)(100u, m_timeoutMs / probes);
                         for (uint32_t i = 0; i < probes; ++i)

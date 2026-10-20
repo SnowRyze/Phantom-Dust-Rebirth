@@ -72,7 +72,12 @@ namespace pdnet
                 auto eq = line.find('=');
                 if (eq == std::string::npos) continue;
                 std::string key = Trim(line.substr(0, eq)), value = Trim(line.substr(eq + 1));
-                if (key == "network_mode") c.teredo = _stricmp(value.c_str(), "teredo") == 0;
+                if (key == "network_mode")
+                {
+                    c.teredo = _stricmp(value.c_str(), "teredo") == 0;
+                    c.p2p = _stricmp(value.c_str(), "eos") == 0;
+                }
+                else if (key == "p2p_relay") c.p2pRelay = std::wstring(value.begin(), value.end());
                 else if (key == "advertise_ip") c.advertiseIp = std::wstring(value.begin(), value.end());
                 else if (key == "game_port") c.gamePort = static_cast<uint16_t>(std::stoul(value));
                 else if (key == "control_port") c.controlPort = static_cast<uint16_t>(std::stoul(value));
@@ -88,8 +93,14 @@ namespace pdnet
                 }
             }
             if (c.testPeer) Log(L"config: test_peer=on (fake second player starts when a lobby is created)");
-            Log(L"config: network_mode=%s advertise_ip=%s game_port=%u control_port=%u qos_probes=%u",
-                c.teredo ? L"teredo" : L"direct", c.advertiseIp.c_str(), c.gamePort, c.controlPort, c.qosProbes);
+            if (c.p2p && !c.eos)
+            {
+                Log(L"config: network_mode=eos needs eos=on; using direct");
+                c.p2p = false;
+            }
+            Log(L"config: network_mode=%s advertise_ip=%s game_port=%u control_port=%u qos_probes=%u%s%s",
+                c.teredo ? L"teredo" : c.p2p ? L"eos" : L"direct", c.advertiseIp.c_str(), c.gamePort, c.controlPort, c.qosProbes,
+                c.p2p ? L" p2p_relay=" : L"", c.p2p ? c.p2pRelay.c_str() : L"");
             return c;
         }
     }

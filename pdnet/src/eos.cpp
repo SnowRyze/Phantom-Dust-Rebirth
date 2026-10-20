@@ -13,6 +13,8 @@ namespace pdnet::eos
     std::wstring DisplayName() { return GetConfig().displayName; }
     void Post(std::function<void(void*)>) {}
     void SetSignInListener(std::function<void(bool)>) {}
+    void SetPump(std::function<void(void*)>) {}
+    void Wake() {}
 }
 
 #else
@@ -20,6 +22,8 @@ namespace pdnet::eos
 #include "eossdk.h"
 #include <deque>
 #include <thread>
+#include <timeapi.h>
+#pragma comment(lib, "winmm.lib")
 
 namespace pdnet::eos
 {
@@ -33,6 +37,8 @@ namespace pdnet::eos
         std::atomic<bool> g_needSignIn{ true };
         std::wstring g_userId;
         std::function<void(bool)> g_signInListener; // guarded by g_lock
+        std::function<void(void*)> g_pump;           // guarded by g_lock
+        HANDLE g_wake = CreateEventW(nullptr, FALSE, FALSE, nullptr);
         bool g_lostSignIn = false;                  // EOS thread only
 
         void NotifySignIn(bool signedIn)
@@ -198,8 +204,15 @@ namespace pdnet::eos
                     catch (...) { Log(L"eos: posted work threw 0x%08X", winrt::to_hresult()); }
                 }
 
+                std::function<void(void*)> pump;
+                {
+                    std::lock_guard guard(g_lock);
+                    pump = g_pump;
+                }
+                if (pump) pump(platform);
                 api.EOS_Platform_Tick(platform);
-                Sleep(20);
+                if (pump) pump(platform);
+                WaitForSingleObject(g_wake, pump ? 2 : 20);
             }
         }
     }
@@ -239,6 +252,19 @@ namespace pdnet::eos
         std::lock_guard guard(g_lock);
         g_signInListener = std::move(listener);
     }
+
+    void SetPump(std::function<void(void*)> pump)
+    {
+        static std::once_flag timer;
+        if (pump) std::call_once(timer, [] { timeBeginPeriod(1); }); // 2 ms waits really are 2 ms (default timer is ~15.6 ms)
+        {
+            std::lock_guard guard(g_lock);
+            g_pump = std::move(pump);
+        }
+        SetEvent(g_wake);
+    }
+
+    void Wake() { SetEvent(g_wake); }
 }
 
 #endif

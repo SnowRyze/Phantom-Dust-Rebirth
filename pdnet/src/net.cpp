@@ -2,6 +2,7 @@
 #include "net.h"
 #include "config.h"
 #include "log.h"
+#include "eos.h"
 #include <bcrypt.h>
 #include <thread>
 
@@ -111,18 +112,16 @@ namespace pdnet::net
                     s.ip = Mapped(in_addr{});
                 }
             }
+            if (config.p2p)
+            {
+                // Peers reach us through EOS P2P by product user id, so wait for the EOS sign-in (normally long done).
+                for (int i = 0; i < 150 && !eos::SignedIn(); ++i) Sleep(100);
+                std::string user = winrt::to_string(eos::LocalUserId());
+                if (user.size() == 32) s.eosUser = user;
+                else Log(L"net: network_mode=eos but EOS is not signed in; other players will use direct UDP to reach this PC");
+            }
             Log(L"net: local device %s", s.Describe().c_str());
             return s;
-        }
-
-        std::vector<uint8_t> Encode(MsgType type, uint32_t nonce, const std::vector<uint8_t>& body)
-        {
-            std::vector<uint8_t> packet(kMsgMagic, kMsgMagic + 4);
-            packet.push_back(static_cast<uint8_t>(type));
-            auto n = reinterpret_cast<const uint8_t*>(&nonce);
-            packet.insert(packet.end(), n, n + 4);
-            packet.insert(packet.end(), body.begin(), body.end());
-            return packet;
         }
 
         void ReceiveLoop()
@@ -141,12 +140,8 @@ namespace pdnet::net
                     Log(L"net: control socket receive failed (%d), stopping", err);
                     return;
                 }
-                if (n < static_cast<int>(kHeader) || memcmp(buffer.data(), kMsgMagic, 4) != 0) continue;
-
                 Message m;
-                m.type = static_cast<MsgType>(buffer[4]);
-                memcpy(&m.nonce, &buffer[5], 4);
-                m.body.assign(buffer.begin() + kHeader, buffer.begin() + n);
+                if (!Decode(buffer.data(), static_cast<size_t>(n), m)) continue;
                 m.from = from;
 
                 if (m.type == MsgType::Ack || m.type == MsgType::Pong)
@@ -180,33 +175,75 @@ namespace pdnet::net
         }
     }
 
+    std::vector<uint8_t> Encode(MsgType type, uint32_t nonce, const std::vector<uint8_t>& body)
+    {
+        std::vector<uint8_t> packet(kMsgMagic, kMsgMagic + 4);
+        packet.push_back(static_cast<uint8_t>(type));
+        auto n = reinterpret_cast<const uint8_t*>(&nonce);
+        packet.insert(packet.end(), n, n + 4);
+        packet.insert(packet.end(), body.begin(), body.end());
+        return packet;
+    }
+
+    bool Decode(const uint8_t* data, size_t size, Message& out)
+    {
+        if (size < kHeader || memcmp(data, kMsgMagic, 4) != 0) return false;
+        out.type = static_cast<MsgType>(data[4]);
+        memcpy(&out.nonce, data + 5, 4);
+        out.body.assign(data + kHeader, data + size);
+        return true;
+    }
+
+    std::array<uint8_t, 16> InterfaceIp()
+    {
+        static std::array<uint8_t, 16> ip = []
+        {
+            Local(); // WSAStartup
+            in_addr v4{};
+            if (!PrimaryIpv4(v4)) inet_pton(AF_INET, "127.0.0.1", &v4);
+            return Mapped(v4);
+        }();
+        return ip;
+    }
+
     std::vector<uint8_t> Snapshot::Serialize() const
     {
         std::vector<uint8_t> b(kSnapshotMagic, kSnapshotMagic + 4);
-        b.push_back(1); // version
+        b.push_back(eosUser.size() == 32 ? 2 : 1); // version
         b.push_back(0); // reserved
         Put16(b, gamePort);
         Put16(b, controlPort);
         b.insert(b.end(), ip.begin(), ip.end());
         for (int shift = 56; shift >= 0; shift -= 8) b.push_back(static_cast<uint8_t>(deviceId >> shift));
+        if (eosUser.size() == 32)
+            for (size_t i = 0; i < 32; i += 2) b.push_back(static_cast<uint8_t>(std::stoul(eosUser.substr(i, 2), nullptr, 16)));
         return b;
     }
 
     bool Snapshot::Parse(const uint8_t* data, size_t size, Snapshot& out)
     {
-        if (size < kSize || memcmp(data, kSnapshotMagic, 4) != 0 || data[4] != 1) return false;
+        if (size < kSize || memcmp(data, kSnapshotMagic, 4) != 0 || (data[4] != 1 && data[4] != 2)) return false;
+        if (data[4] == 2 && size < kSizeV2) return false;
         out.gamePort = Get16(data + 6);
         out.controlPort = Get16(data + 8);
         memcpy(out.ip.data(), data + 10, 16);
         out.deviceId = 0;
         for (size_t i = 26; i < kSize; ++i) out.deviceId = out.deviceId << 8 | data[i];
+        out.eosUser.clear();
+        if (data[4] == 2)
+        {
+            char hex[33];
+            for (size_t i = 0; i < 16; ++i) sprintf_s(hex + i * 2, 3, "%02x", data[kSize + i]);
+            out.eosUser = hex;
+        }
         return true;
     }
 
     std::wstring Snapshot::Describe() const
     {
         wchar_t text[160];
-        swprintf_s(text, L"%016llX @ %s game:%u ctl:%u", deviceId, IpToString(ip).c_str(), gamePort, controlPort);
+        swprintf_s(text, L"%016llX @ %s game:%u ctl:%u%s%S", deviceId, IpToString(ip).c_str(), gamePort, controlPort,
+            eosUser.empty() ? L"" : L" eos:", eosUser.empty() ? "" : eosUser.substr(0, 8).c_str());
         return text;
     }
 

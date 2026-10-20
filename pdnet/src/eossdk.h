@@ -23,7 +23,14 @@ namespace pdnet::eossdk
         X(EOS_Connect_AddNotifyLoginStatusChanged) X(EOS_Connect_RemoveNotifyLoginStatusChanged)                  \
         X(EOS_ProductUserId_ToString) X(EOS_ProductUserId_FromString) X(EOS_P2P_QueryNATType)                     \
         X(EOS_EResult_ToString)                                                                                   \
-        PDNET_EOS_LOBBY_FUNCTIONS(X)
+        PDNET_EOS_LOBBY_FUNCTIONS(X) PDNET_EOS_P2P_FUNCTIONS(X)
+// P2P interface (stage C: match traffic through EOS P2P, see p2p.h).
+#define PDNET_EOS_P2P_FUNCTIONS(X)                                                                                \
+        X(EOS_P2P_SendPacket) X(EOS_P2P_GetNextReceivedPacketSize) X(EOS_P2P_ReceivePacket)                       \
+        X(EOS_P2P_AcceptConnection) X(EOS_P2P_CloseConnection) X(EOS_P2P_SetRelayControl)                         \
+        X(EOS_P2P_SetPacketQueueSize) X(EOS_P2P_GetNATType)                                                       \
+        X(EOS_P2P_AddNotifyPeerConnectionRequest) X(EOS_P2P_AddNotifyPeerConnectionEstablished)                   \
+        X(EOS_P2P_AddNotifyPeerConnectionInterrupted) X(EOS_P2P_AddNotifyPeerConnectionClosed)
 // Lobby interface (stage B: multiplayer sessions shared through EOS lobbies, see lobbies.h).
 #define PDNET_EOS_LOBBY_FUNCTIONS(X)                                                                              \
         X(EOS_Lobby_CreateLobby) X(EOS_Lobby_DestroyLobby) X(EOS_Lobby_JoinLobbyById) X(EOS_Lobby_LeaveLobby)     \

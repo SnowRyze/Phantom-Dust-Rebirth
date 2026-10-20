@@ -19,4 +19,9 @@ namespace pdnet::eos
 
     // Called on the EOS thread when the sign-in is lost (false) and when it comes back afterwards (true).
     void SetSignInListener(std::function<void(bool signedIn)> listener);
+
+    // P2P packet pump: runs on the EOS thread before and after every tick. While one is set the thread ticks every
+    // ~2 ms instead of 20 ms, and Wake() runs it at once (a game packet is waiting to be sent).
+    void SetPump(std::function<void(void* platform)> pump);
+    void Wake();
 }

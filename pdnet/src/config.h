@@ -7,6 +7,8 @@ namespace pdnet
     struct Config
     {
         bool teredo = false;                // network_mode=teredo: leave Xbox networking (Teredo/SDA) to Windows
+        bool p2p = false;                   // network_mode=eos: match traffic through EOS P2P (NAT traversal + relays, see p2p.h)
+        std::wstring p2pRelay = L"allow";   // p2p_relay=allow|force|off: EOS relay use (force = always relay, for testing)
         std::wstring advertiseIp = L"auto"; // address peers use to reach this PC, or "auto" (primary IPv4)
         uint16_t gamePort = 43210;          // must match networkmanifest.xml (PeerSocketUDP)
         uint16_t controlPort = 43211;       // pdnet control channel (connect handshake, pings)
