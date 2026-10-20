@@ -242,13 +242,13 @@ Game mesh facts found for it (PDUWP.exe, Microsoft's sample MeshManager):
   and Xbox-free mode up to stage A (create match works). The fourth classifier stop came at the start of stage B; then this update.
 - **2026-10-19 (session 3):** stage B from `STAGE_B_GUIDE.md`: EOS lobby layer, EOS-backed session store, search handles, change events,
   `lobbytool` (second EOS client) and its self-test against EOS. No classifier stop this time. Not yet run in the game (§4.9).
-- **2026-10-19 (session 3, later):** stage B tester kit for unpacked copies: `testkit-stageb\` + `make-testkit-stageb.ps1` →
+- **2026-10-19 (session 3, later):** stage B tester kit for unpacked copies: `testkit-stageb\` + `make-testkit.ps1 -Stage B` →
   `D:\PhantomDust-pdnet-StageB-TestKit-2026-10-19.zip` (DLL `A3755102`, the one tested in game and installed in the Direct build; **no eos.ini
   inside** — send a tester client's eos.ini separately). Also started, **untested and parked**: running pdnet in an unmodified Microsoft Store
   install via a launcher (`pdnet\tools\pdlaunch.cpp`, `testkit-store\store-setup.ps1`/`store-remove.ps1`): Windows' package-debugger setting
   starts `pdlaunch.exe`, which injects `pdnet.dll` and calls its new `PdInjectedInit` export; with `xbox=off` the activation hook then answers
   `Microsoft.Xbox.Services.*` itself. Not needed now (the tester has an unpacked copy). Note: `pdnet\build-stageb` now holds a rebuild with
-  this injected-mode code (dump mode unchanged in intent, but not re-run in game); rerunning `make-testkit-stageb.ps1` would package it.
+  this injected-mode code (dump mode unchanged in intent, but not re-run in game); rerunning `make-testkit.ps1 -Stage B` would package it.
 - **2026-10-19 (session 3): FIRST TWO-PC TEST PASSED (stage B + direct UDP), user + one tester on different home networks.** Kit
   `PhantomDust-pdnet-StageB-TestKit-WITH-EOS.zip` (DLL `A3755102`, tester EOS client). Run 1: user joined the tester's lobby through the EOS
   browser and lobby join worked, but the match connection timed out (host's advertised address was a private LAN address on another network).
@@ -265,3 +265,6 @@ Game mesh facts found for it (PDUWP.exe, Microsoft's sample MeshManager):
   heartbeats, delete), ping 3–4 ms, 0 loss. `lobbytool p2ppeer 30 force` (Epic relays only) = 4/4 PASS, ping ~42 ms, 0 loss.
   Known issue: the direct/relayed label is unreliable (EOS reported "direct" with forced relays; the game side kept a stale label because no
   close event came between runs) — use the ping. Next: two-PC test with no port forwarding, then measure real matches; redundancy later.
+- **2026-10-20: stage C tester kit** `testkit-stagec\` (README for no port forwarding, `network_mode=eos`) built with
+  `make-testkit.ps1 -Stage C -EosIni .\eos.tester.ini` → `D:\PhantomDust-pdnet-StageC-TestKit-C5F9697B-with-eos.zip`. Kit zips are now named
+  after the DLL's MD5 prefix (the clock jumps made dated names ambiguous). Both players need stage C; the user's Direct build already matches.
