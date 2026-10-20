@@ -284,3 +284,12 @@ Game mesh facts found for it (PDUWP.exe, Microsoft's sample MeshManager):
   Installed in the Direct build (61C45C57) and packaged as `D:\PhantomDust-pdnet-StageC-TestKit-61C45C57-with-eos.zip` (replaces the
   C5F9697B kit, which has the leave crash).
   **Confirmed by the user (2026-10-19): leaving a lobby no longer crashes; stage C kit 61C45C57 works between the two PCs.**
+- **2026-10-20: nametag investigation (user wants nametags kept on dead bodies).** The over-head nametag is the white gamertag (from the
+  session, i.e. pdnet). Ghidra: players in a 4-entry table `DAT_1404bc9d8` (position at +0x12e40, flags +0x10/+0x20/+0x24), names for HUD
+  panels in `DAT_1404bca30` (65 bytes each); HUD panels/scoreboard (`FUN_140155310`, `FUN_140150c30`, `FUN_1401ca1e0`) draw via
+  `FUN_1402477e0` — none of that is the floating nametag, which is probably remaster code reading the gamertag via the XSAPI classes.
+  New debug option `name_trace=on` (`xsapi\nametrace.*`, commit `9acf2fe`, DLL `pdnet\build-nametrace` 7D824149, not shipped): hardware
+  breakpoints on copies of other players' gamertags, logs the PDUWP.exe call chains that read them. One-PC check (lobbytool in the lobby):
+  works, no crash, 23 heap copies, reads from chains under `140009b06 <- 140008953 <- 1400c58f6`. Next: a real match with the tester while
+  name_trace is on (only the PC that should see the tags needs it), someone dies, then compare chains during life vs after death.
+  The Direct build currently runs build-nametrace with name_trace=on; switch back to build-stagec (61C45C57) for normal play.
