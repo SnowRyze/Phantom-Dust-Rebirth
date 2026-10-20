@@ -2,7 +2,7 @@
 # Usage: right-click > Run with PowerShell, or
 #   powershell -ExecutionPolicy Bypass -File install.ps1 -GameFolder "D:\Games\PhantomDust" -Name "MyName"
 # Undo with uninstall.ps1. Nothing outside the game folder is changed except the app registration
-# (and, if you agree, Windows' "don't suspend this app" setting for Phantom Dust).
+# and Windows' "don't suspend this app" setting for Phantom Dust (so it keeps running when minimized).
 param([string]$GameFolder, [string]$Name)
 $ErrorActionPreference = 'Stop'
 $kit = $PSScriptRoot
@@ -91,9 +91,9 @@ if ($existing -and $existing.InstallLocation -ne $GameFolder) {
 Add-AppxPackage -Register "$GameFolder\AppxManifest.xml"
 $p = Get-AppxPackage $package
 
-# Windows pauses Store apps when they're minimized, which drops you from the lobby. Offer to switch that off.
-Write-Host "`nWindows pauses Phantom Dust when it's minimized or in the background, which can drop you from a lobby."
-if ((Read-Host 'Keep it running in the background? Recommended for this test (y/n)') -eq 'y') { & "$kit\nosuspend.ps1" }
+# Windows pauses Store apps when they're minimized, which drops you from the lobby. Always switch that off.
+try { & "$kit\nosuspend.ps1" | Out-Null; Write-Host 'Phantom Dust will keep running when minimized or in the background.' }
+catch { Write-Host "Warning: could not stop Windows from pausing the game when minimized ($_). Alt-tabbing may drop you from lobbies; run nosuspend.ps1 later to retry." -ForegroundColor Yellow }
 
 Write-Host "`nInstalled the pdnet stage C test build in $GameFolder as '$Name'" -ForegroundColor Green
 Write-Host "Start menu: 'Phantom Dust (pdnet test)'   or run:  explorer.exe shell:AppsFolder\$($p.PackageFamilyName)!App"

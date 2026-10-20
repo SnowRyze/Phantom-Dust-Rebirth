@@ -21,7 +21,7 @@ What's in the kit
   README.txt                   this guide
   install.ps1 / uninstall.ps1  put pdnet into your game folder / take it out again
   collect-log.ps1              copies the log to your Desktop after a test
-  nosuspend.ps1                keeps the game running when minimized (install.ps1 offers it)
+  nosuspend.ps1                keeps the game running when minimized (install.ps1 runs it for you)
   pdnet.ini                    settings (copied into your game folder)
   pdnet\Microsoft.Xbox.Services.dll   the pdnet build
   EOSSDK-Win64-Shipping.dll    Epic Online Services runtime
@@ -46,7 +46,7 @@ STEP 1 - Install (each tester, once)
 3. Right-click install.ps1 > "Run with PowerShell".
    - Enter the path to your game folder.
    - Enter a player name, DIFFERENT from the other tester's.
-   - Answer "y" to "Keep it running in the background?".
+   It also sets Windows to keep the game running when minimized, so alt-tabbing doesn't drop you from lobbies.
    (Or from a PowerShell window:
     powershell -ExecutionPolicy Bypass -File install.ps1 -GameFolder "D:\Games\PhantomDust" -Name "Alice")
    It backs up everything it changes into <game folder>\_pdnet_backup. If an earlier pdnet kit is installed,
