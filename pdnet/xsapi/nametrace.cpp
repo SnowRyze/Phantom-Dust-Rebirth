@@ -24,6 +24,9 @@ namespace pdnet::nametrace
             volatile LONG hits;
             LONG reported; // hits already included in a timeline line
             bool logged;
+            // draw mode: which text routine, the text it drew (start) and the last two int arguments (screen x, y)
+            char text[48];
+            int x, y;
         };
 
         Record g_records[kMaxRecords];
@@ -31,6 +34,14 @@ namespace pdnet::nametrace
         SRWLOCK g_recordLock = SRWLOCK_INIT;
         uint64_t g_watched[4] = {}; // addresses currently watched (set before arming, read by the handler)
         uint64_t g_exeBase = 0, g_exeEnd = 0;
+        bool g_drawMode = false;
+        // Other players' names as UTF-8, for the draw-mode check inside the exception handler (no allocation there).
+        SRWLOCK g_namesLock = SRWLOCK_INIT;
+        char g_names[4][64] = {};
+        int g_nameCount = 0;
+        // The game's text routines (Ghidra addresses): FUN_1402477e0 (x, y, text, ...) used by the HUD, and
+        // FUN_140247f70 used by the menu/text system.
+        constexpr uint64_t kDrawFunctions[2] = { 0x1402477e0, 0x140247f70 };
 
         bool InExe(uint64_t a) { return a >= g_exeBase && a < g_exeEnd; }
         uint64_t Ghidra(uint64_t a) { return a - g_exeBase + kGhidraBase; }
@@ -65,7 +76,7 @@ namespace pdnet::nametrace
             __except (EXCEPTION_EXECUTE_HANDLER) { return 0; }
         }
 
-        void Remember(int slot, const uint64_t* frames, int n)
+        void Remember(int slot, const uint64_t* frames, int n, const char* text = nullptr, int x = 0, int y = 0)
         {
             AcquireSRWLockExclusive(&g_recordLock);
             LONG count = g_recordCount;
@@ -76,6 +87,8 @@ namespace pdnet::nametrace
                 if ((std::min)(r.frameCount, kKeyFrames) == key && memcmp(r.frames, frames, key * sizeof(uint64_t)) == 0)
                 {
                     ++r.hits;
+                    r.x = x;
+                    r.y = y;
                     ReleaseSRWLockExclusive(&g_recordLock);
                     return;
                 }
@@ -90,9 +103,72 @@ namespace pdnet::nametrace
                 r.hits = 1;
                 r.reported = 0;
                 r.logged = false;
+                r.x = x;
+                r.y = y;
+                r.text[0] = 0;
+                if (text) strncpy_s(r.text, text, _TRUNCATE);
                 g_recordCount = count + 1;
             }
             ReleaseSRWLockExclusive(&g_recordLock);
+        }
+
+        // Does `p` point at text (up to 160 bytes) that contains one of the names? Copies the text into `out` if so.
+        bool MatchName(const char* p, char* out, size_t outSize)
+        {
+            if (reinterpret_cast<uint64_t>(p) < 0x10000) return false;
+            __try
+            {
+                size_t len = 0;
+                while (len < 160 && p[len]) ++len;
+                if (len < 3) return false;
+                for (int i = 0; i < g_nameCount; ++i)
+                {
+                    size_t nl = strlen(g_names[i]);
+                    for (size_t at = 0; nl && at + nl <= len; ++at)
+                        if (memcmp(p + at, g_names[i], nl) == 0)
+                        {
+                            size_t copy = (std::min)(len, outSize - 1);
+                            memcpy(out, p, copy);
+                            out[copy] = 0;
+                            for (size_t k = 0; k < copy; ++k)
+                                if (static_cast<unsigned char>(out[k]) < 0x20) out[k] = '.'; // the game's colour codes
+                            return true;
+                        }
+                }
+            }
+            __except (EXCEPTION_EXECUTE_HANDLER) {}
+            return false;
+        }
+
+        uint64_t SafeRead64(uint64_t address)
+        {
+            __try { return *reinterpret_cast<uint64_t*>(address); }
+            __except (EXCEPTION_EXECUTE_HANDLER) { return 0; }
+        }
+
+        // Draw mode: an execute breakpoint on a text routine's first instruction. Check the arguments for a name.
+        LONG OnDrawCall(CONTEXT* c, int slot)
+        {
+            uint64_t args[6] = { c->Rcx, c->Rdx, c->R8, c->R9, SafeRead64(c->Rsp + 0x28), SafeRead64(c->Rsp + 0x30) };
+            char text[48];
+            bool matched = false;
+            AcquireSRWLockShared(&g_namesLock);
+            for (uint64_t a : args)
+                if (MatchName(reinterpret_cast<const char*>(a), text, sizeof(text)))
+                {
+                    matched = true;
+                    break;
+                }
+            ReleaseSRWLockShared(&g_namesLock);
+            if (matched)
+            {
+                uint64_t frames[kFrames] = {};
+                int n = SafeWalk(c, frames);
+                if (n > 0) Remember(slot, frames, n, text, static_cast<int>(c->Rcx), static_cast<int>(c->Rdx));
+            }
+            c->Dr6 = 0;
+            c->EFlags |= 0x10000; // resume flag: run the instruction without hitting the breakpoint again
+            return EXCEPTION_CONTINUE_EXECUTION;
         }
 
         // Hardware breakpoints arrive as single-step exceptions with the slot's bit set in DR6.
@@ -104,6 +180,7 @@ namespace pdnet::nametrace
             if ((dr6 & 0xF) == 0) return EXCEPTION_CONTINUE_SEARCH;
             int slot = 0;
             while (slot < 3 && !(dr6 & (1ull << slot))) ++slot;
+            if (g_drawMode) return OnDrawCall(c, slot);
             uint64_t frames[kFrames] = {};
             int n = SafeWalk(c, frames);
             if (n > 0) Remember(slot, frames, n);
@@ -112,11 +189,11 @@ namespace pdnet::nametrace
         }
 
         // Sets DR0-DR3 (read/write watch, 8 bytes each) on every thread of the process except this one.
-        void Arm(const uint64_t (&addrs)[4])
+        void Arm(const uint64_t (&addrs)[4], bool execute = false)
         {
             DWORD64 dr7 = 0;
             for (int i = 0; i < 4; ++i)
-                if (addrs[i]) dr7 |= (1ull << (2 * i)) | (3ull << (16 + 4 * i)) | (2ull << (18 + 4 * i));
+                if (addrs[i]) dr7 |= (1ull << (2 * i)) | (execute ? 0ull : (3ull << (16 + 4 * i)) | (2ull << (18 + 4 * i)));
 
             std::vector<DWORD> threads;
             HANDLE snap = CreateToolhelp32Snapshot(TH32CS_SNAPTHREAD, 0);
@@ -247,7 +324,10 @@ namespace pdnet::nametrace
                 }
                 for (auto& h : hits)
                     if ((h.addr & ~7ull) == r.watched) name = h.name;
-                Log(L"nametrace: '%s' at %s read by %s", name.c_str(), Where(r.watched).c_str(), chain.c_str());
+                if (g_drawMode)
+                    Log(L"nametrace: draw of '%S' at x=%d y=%d by %s", r.text, r.x, r.y, chain.c_str());
+                else
+                    Log(L"nametrace: '%s' at %s read by %s", name.c_str(), Where(r.watched).c_str(), chain.c_str());
             }
             ReleaseSRWLockShared(&g_recordLock);
         }
@@ -272,10 +352,63 @@ namespace pdnet::nametrace
                     swprintf_s(frame, L"%s%llx", f ? L" <- " : L"", Ghidra(r.frames[f]));
                     chain += frame;
                 }
-                Log(L"nametrace: window +%ld reads by %s (%s)", delta, chain.c_str(), Where(r.watched).c_str());
+                if (g_drawMode)
+                    Log(L"nametrace: window +%ld draws of '%S' at x=%d y=%d by %s", delta, r.text, r.x, r.y, chain.c_str());
+                else
+                    Log(L"nametrace: window +%ld reads by %s (%s)", delta, chain.c_str(), Where(r.watched).c_str());
             }
             if (lines > 60) Log(L"nametrace: window: %d more paths not listed", lines - 60);
             ReleaseSRWLockShared(&g_recordLock);
+        }
+
+        // Draw mode: execute breakpoints on the text routines, re-applied every 3 s so new threads get them too.
+        void RunDraw()
+        {
+            g_drawMode = true;
+            uint64_t addrs[4] = { g_exeBase + (kDrawFunctions[0] - kGhidraBase), g_exeBase + (kDrawFunctions[1] - kGhidraBase), 0, 0 };
+            g_watched[0] = addrs[0];
+            g_watched[1] = addrs[1];
+            Log(L"nametrace: draw mode (PDUWP.exe at %llx): watching text routines %llx and %llx for other players' names",
+                g_exeBase, kDrawFunctions[0], kDrawFunctions[1]);
+            std::vector<std::wstring> shown;
+            ULONGLONG nextTimeline = GetTickCount64() + 15000;
+            bool armed = false;
+            for (;;)
+            {
+                Sleep(3000);
+                auto names = RemoteNames();
+                if (names != shown)
+                {
+                    AcquireSRWLockExclusive(&g_namesLock);
+                    g_nameCount = 0;
+                    for (auto& n : names)
+                        if (g_nameCount < 4) strncpy_s(g_names[g_nameCount++], winrt::to_string(n).c_str(), _TRUNCATE);
+                    ReleaseSRWLockExclusive(&g_namesLock);
+                    std::wstring list;
+                    for (auto& n : names) list += L" '" + n + L"'";
+                    Log(L"nametrace: watching for%s", names.empty() ? L" nobody (no other players)" : list.c_str());
+                    shown = names;
+                }
+                if (names.empty())
+                {
+                    if (armed)
+                    {
+                        uint64_t none[4] = {};
+                        Arm(none, true);
+                        armed = false;
+                    }
+                    continue;
+                }
+                Arm(addrs, true);
+                armed = true;
+                std::vector<Hit> none;
+                LogNewRecords(none);
+                if (GetTickCount64() >= nextTimeline)
+                {
+                    LogTimeline();
+                    nextTimeline = GetTickCount64() + 15000;
+                }
+            }
         }
 
         void Run()
@@ -285,6 +418,11 @@ namespace pdnet::nametrace
             auto nt = reinterpret_cast<IMAGE_NT_HEADERS*>(g_exeBase + reinterpret_cast<IMAGE_DOS_HEADER*>(g_exeBase)->e_lfanew);
             g_exeEnd = g_exeBase + nt->OptionalHeader.SizeOfImage;
             AddVectoredExceptionHandler(1, OnException);
+            if (GetConfig().nameTrace == 2)
+            {
+                RunDraw();
+                return;
+            }
             Log(L"nametrace: on (PDUWP.exe at %llx, Ghidra addresses = 0x140000000 + offset); waiting for other players", g_exeBase);
 
             std::vector<std::wstring> names;
