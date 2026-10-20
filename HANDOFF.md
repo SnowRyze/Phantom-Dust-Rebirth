@@ -256,3 +256,12 @@ Game mesh facts found for it (PDUWP.exe, Microsoft's sample MeshManager):
   (`sda: inbound connection ... (seen as <tester's public IP>)`), and **the user reports everything running correctly** (lobby and match).
   Remaining: automatic internet connectivity without port forwarding (stage C, e.g. EOS P2P relays — see §8 before starting), longer soak,
   `xbox=on`/Teredo regression check.
+- **2026-10-20 (session 3): stage C — match traffic through EOS P2P (`network_mode=eos`), commit `76c4d44`, DLL `pdnet\build-stagec`
+  (MD5 `C5F9697B`), design at the top of `src\p2p.h`.** Device addresses v2 carry the EOS product user id; pairs to v2 peers handshake over
+  EOS P2P and the game sends to a local "link" socket that pdnet bridges to the peer (Epic does NAT traversal, relays as fallback). v1 peers
+  (older kits, other modes) keep direct UDP — so both players need this build in `network_mode=eos`. EOS thread pumps every ~2 ms
+  (`timeBeginPeriod(1)`). Every 10 s each link logs ping/jitter/loss/path/traffic (`p2p: link ...`).
+  **One-PC test passed in game (Direct build, 00:09):** `lobbytool p2ppeer 20` = 4/4 PASS over EOS P2P (ping, connect/ack, HELLO both ways,
+  heartbeats, delete), ping 3–4 ms, 0 loss. `lobbytool p2ppeer 30 force` (Epic relays only) = 4/4 PASS, ping ~42 ms, 0 loss.
+  Known issue: the direct/relayed label is unreliable (EOS reported "direct" with forced relays; the game side kept a stale label because no
+  close event came between runs) — use the ping. Next: two-PC test with no port forwarding, then measure real matches; redundancy later.
