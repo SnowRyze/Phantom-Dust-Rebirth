@@ -19,9 +19,10 @@ This kit does NOT include the game. You need your own unpacked copy.
 What's in the kit
 -----------------
   README.txt                   this guide
-  install.ps1 / uninstall.ps1  put pdnet into your game folder / take it out again
-  collect-log.ps1              copies the log to your Desktop after a test
-  nosuspend.ps1                keeps the game running when minimized (install.ps1 runs it for you)
+  Install.bat                  double-click to install (runs install.ps1)
+  Uninstall.bat                double-click to remove pdnet again (runs uninstall.ps1)
+  Collect-Log.bat              double-click after a test: copies the log to your Desktop (runs collect-log.ps1)
+  install.ps1, uninstall.ps1, collect-log.ps1, nosuspend.ps1   the scripts behind them
   pdnet.ini                    settings (copied into your game folder)
   pdnet\Microsoft.Xbox.Services.dll   the pdnet build
   EOSSDK-Win64-Shipping.dll    Epic Online Services runtime
@@ -43,14 +44,13 @@ STEP 1 - Install (each tester, once)
 ------------------------------------
 1. Close Phantom Dust.
 2. Unzip the whole kit into a folder (right-click the zip > Extract All...). Make sure eos.ini is in it.
-3. Right-click install.ps1 > "Run with PowerShell".
+3. Double-click Install.bat in the kit folder.
    - Enter the path to your game folder.
    - Enter a player name, DIFFERENT from the other tester's.
-   It also sets Windows to keep the game running when minimized, so alt-tabbing doesn't drop you from lobbies.
-   (Or from a PowerShell window:
-    powershell -ExecutionPolicy Bypass -File install.ps1 -GameFolder "D:\Games\PhantomDust" -Name "Alice")
-   It backs up everything it changes into <game folder>\_pdnet_backup. If an earlier pdnet kit is installed,
-   or you switched to Teredo, that's fine: this kit replaces it.
+   It installs the game with Windows (replacing any earlier install, saves are kept) and sets Windows to keep
+   the game running when minimized, so alt-tabbing doesn't drop you from lobbies.
+   If Windows asks whether to run it, click "Run" (or "More info" then "Run anyway" on a blue warning).
+   It backs up everything it changes into <game folder>\_pdnet_backup. Running it again is safe.
 4. Start "Phantom Dust (pdnet test)" from the Start menu.
 5. Check: the game reaches the main menu WITHOUT asking you to sign in to Xbox, and your profile loads.
    If it hangs or crashes here, stop and go to STEP 6 (send the log).
@@ -96,7 +96,7 @@ STEP 5 - Play, then leave and rejoin
 STEP 6 - Send the results (each tester)
 ---------------------------------------
 1. Close the game.
-2. Right-click collect-log.ps1 > "Run with PowerShell". It saves pdnet-log-<PC name>-<date>.txt on your
+2. Double-click Collect-Log.bat in the kit folder. It saves pdnet-log-<PC name>-<date>.txt on your
    Desktop and shows a short summary.
 3. Send that file, plus your notes from steps 2-5, the player names you both used, the countries/regions
    you're in, and wired or Wi-Fi. Screenshots of the lobby screens are welcome.
@@ -107,10 +107,10 @@ lost pings and traffic). That's what will tell us where any lag comes from, so p
 
 If something goes wrong
 -----------------------
-- "eos.ini is missing": put the eos.ini you were sent next to install.ps1 and run it again.
-- "Developer Mode is off" / "Missing Microsoft.VCLibs": follow the message, then run install.ps1 again.
-- The game drops you from the lobby when you alt-tab: run nosuspend.ps1 once, then restart the game.
-- Want your normal setup back: close the game and run uninstall.ps1 (restores your original files;
+- "eos.ini is missing": put the eos.ini you were sent in the kit folder and double-click Install.bat again.
+- "Developer Mode is off" / "Missing Microsoft.VCLibs": follow the message, then double-click Install.bat again.
+- The game drops you from the lobby when you alt-tab: double-click Install.bat again, then restart the game.
+- Want your normal setup back: close the game and double-click Uninstall.bat (restores your original files;
   local saves are kept). Or, to go back to Xbox Live with Microsoft's Teredo networking but keep local saves,
   edit pdnet.ini in the game folder:  xbox=on  eos=off  network_mode=teredo
 

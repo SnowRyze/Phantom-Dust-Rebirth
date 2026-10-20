@@ -77,18 +77,21 @@ if ($xml -notmatch 'internetClientServer') {
 Set-Content "$GameFolder\AppxManifest.xml" $xml -Encoding UTF8 -NoNewline
 
 # --- register with Windows ------------------------------------------------------------------------
+# Windows only reads AppxManifest.xml when the game is registered, and it refuses to register a changed manifest over an
+# existing registration (0x80073CFB), even from the same folder. So any earlier registration is removed first.
 $existing = Get-AppxPackage $package
-if ($existing -and $existing.InstallLocation -ne $GameFolder) {
+if ($existing) {
     if ($existing.SignatureKind -eq 'Store') {
-        Write-Host "The Microsoft Store version of Phantom Dust is installed. It has to be uninstalled to register this copy." -ForegroundColor Yellow
+        Write-Host "The Microsoft Store version of Phantom Dust is installed. It has to be uninstalled to install this copy." -ForegroundColor Yellow
         if ((Read-Host 'Uninstall the Store version now? (y/n)') -ne 'y') { exit 1 }
         Remove-AppxPackage $existing.PackageFullName
     } else {
-        Write-Host "Replacing the registration from $($existing.InstallLocation) (save data is kept)."
+        Write-Host "Replacing the existing Phantom Dust install from $($existing.InstallLocation) (save data is kept)."
         Remove-AppxPackage $existing.PackageFullName -PreserveApplicationData
     }
 }
-Add-AppxPackage -Register "$GameFolder\AppxManifest.xml"
+try { Add-AppxPackage -Register "$GameFolder\AppxManifest.xml" }
+catch { Fail "Windows refused to install the game: $($_.Exception.Message)" }
 $p = Get-AppxPackage $package
 
 # Windows pauses Store apps when they're minimized, which drops you from the lobby. Always switch that off.
