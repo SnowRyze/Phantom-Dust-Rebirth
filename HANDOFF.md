@@ -283,3 +283,4 @@ Game mesh facts found for it (PDUWP.exe, Microsoft's sample MeshManager):
   **Not yet confirmed in game.** Other stand-ins still use plain coroutines; wrap any that crash the same way.
   Installed in the Direct build (61C45C57) and packaged as `D:\PhantomDust-pdnet-StageC-TestKit-61C45C57-with-eos.zip` (replaces the
   C5F9697B kit, which has the leave crash).
+  **Confirmed by the user (2026-10-19): leaving a lobby no longer crashes; stage C kit 61C45C57 works between the two PCs.**
