@@ -369,3 +369,4 @@ Import fallback (build-import5): unpacked copies read the local Xbox save cache 
 - Tag Team switching crash, client-side lobby limit: only relevant if the lobby settings change comes back.
 
 Loading watchdog (build-watch1, loading_watchdog=on default, observe only): stubs on both script command tables (menu 0x1403eefe0 x136, session 0x1403f1150 x196) report each command's result; a command polled non-stop (gaps < 1 s) with the same result for 30 s on one menu is logged once ('watchdog: ... waiting on it?'), plus 'menu N has been on screen for 60 s'. Normal screens log a few constant getters; a hang adds the stuck one. Step 2 (time out those specific waits) once hang logs exist.
+Watchdog baseline (normal play, 35 menu changes incl. a lobby): only the title/start screen (menu 7) idle logged menu commands 6 and 109 = 1 for 30 s+ - normal, not a hang. Everything else quiet.
