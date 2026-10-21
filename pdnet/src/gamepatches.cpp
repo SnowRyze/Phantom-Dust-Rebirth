@@ -483,14 +483,39 @@ namespace pdnet::gamepatches
         // 47 itself). It edits the live values directly with the game's own rules about which rule fits which game
         // type (FUN_140183010): game type DAT_14050d2d8, rule DAT_140518cf0; the stage is DAT_14051775c (stage set
         // entry), DAT_140527bc8 (stage id) and DAT_140527c54 (layout). Confirming (the menu moving on to the next
-        // creation step) returns to the lobby and re-publishes; going back restores the saved values. Game type
-        // changes are refused for now (player counts and teams differ).
+        // creation step) returns to the lobby and re-publishes; going back restores the saved values. The menu's
+        // set-up resets type and rule to defaults (session command 80); while it is opened from the lobby the
+        // lobby's values are put back right after. A game type that the current players don't fit is refused.
         constexpr int kStageMenu = 47, kRuleMenu = 48;
         std::atomic<bool> g_ruleFromLobby{ false };
         int32_t g_savedType = 0, g_savedRule = 0, g_savedStage[3] = {};
         constexpr uint64_t kStageVars[3] = { 0x14051775c, 0x140527bc8, 0x140527c54 };
         int32_t& GameType() { return *reinterpret_cast<int32_t*>(At(0x14050d2d8)); }
         int32_t& GameRule() { return *reinterpret_cast<int32_t*>(At(0x140518cf0)); }
+
+        using ScriptCommandFn = int64_t (*)(int32_t* args);
+        ScriptCommandFn g_resetSettings = nullptr; // session command 80 (0x140213f00)
+
+        int64_t HookedResetSettings(int32_t* args)
+        {
+            int64_t result = g_resetSettings(args);
+            if (g_ruleFromLobby && CurrentMenu(MenuManager()) == kRuleMenu)
+            {
+                GameType() = g_savedType;
+                GameRule() = g_savedRule;
+            }
+            return result;
+        }
+
+        void HookResetSettings()
+        {
+            auto entry = reinterpret_cast<uint64_t*>(At(0x1403f1150) + 80 * 8);
+            DWORD old = 0;
+            if (!VirtualProtect(entry, 8, PAGE_READWRITE, &old)) return;
+            g_resetSettings = reinterpret_cast<ScriptCommandFn>(*entry);
+            *entry = reinterpret_cast<uint64_t>(&HookedResetSettings);
+            VirtualProtect(entry, 8, old, &old);
+        }
 
         void PublishRule()
         {
@@ -541,9 +566,21 @@ namespace pdnet::gamepatches
                 g_ruleFromLobby = false;
                 if (GameType() != g_savedType)
                 {
-                    Log(L"menu: changing the game type in a lobby isn't supported yet - keeping type %d rule %d", g_savedType, g_savedRule);
-                    GameType() = g_savedType;
-                    GameRule() = g_savedRule;
+                    // One-on-One holds 2 players, Battle Royale and Tag Team 4 (DAT_14051c0a4 = the session's
+                    // player limit, as FUN_140181ba0 sets it). DAT_140594ea4 = players in the session now.
+                    int players = *reinterpret_cast<int32_t*>(At(0x140594ea4));
+                    int limit = GameType() == 2 ? 2 : 4;
+                    if (players > limit)
+                    {
+                        Log(L"menu: %d players don't fit game type %d (max %d) - keeping type %d rule %d", players, GameType(), limit, g_savedType, g_savedRule);
+                        GameType() = g_savedType;
+                        GameRule() = g_savedRule;
+                    }
+                    else
+                    {
+                        *reinterpret_cast<int32_t*>(At(0x14051c0a4)) = limit;
+                        Log(L"menu: game type %d -> %d (%d players, limit %d)", g_savedType, GameType(), players, limit);
+                    }
                 }
                 PublishRule();
                 return g_popMenu();
@@ -667,6 +704,7 @@ namespace pdnet::gamepatches
             g_pushMenu = push;
             Log(L"gamepatch: lobby Arsenal editor ready (the lobby's invite button opens it)");
             RenameLobbyInvite(); // again whenever the lobby opens, in case the strings were loaded later
+            HookResetSettings(); // before the debug wrappers, so they wrap this one
             if (GetConfig().menuDebug) ScriptCommandLog();
         }
     }
