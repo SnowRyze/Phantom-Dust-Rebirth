@@ -2,6 +2,8 @@
 #include "gamepatches.h"
 #include "config.h"
 #include "log.h"
+#include <set>
+#include <tuple>
 
 namespace pdnet::gamepatches
 {
@@ -554,6 +556,65 @@ namespace pdnet::gamepatches
             return trampoline;
         }
 
+        // menu_debug=on: while the lobby menu (44) is on screen, logs each script command (menu table 0x1403eefe0 x136,
+        // session table 0x1403f1150 x196) the first time it's called and whenever its result or first argument
+        // changes - to see what the lobby script checks (e.g. what greys out an option).
+
+        void LogLobbyCommand(uint32_t id, int64_t result, const int32_t* args)
+        {
+            static std::atomic<int> logged{ 0 };
+            uint32_t table = id >> 16, index = id & 0xffff;
+            if (table > 1 || index > 255 || CurrentMenu(MenuManager()) != kLobbyMenu || logged > 5000) return;
+            int32_t arg = 0;
+            if (args && !IsBadReadPtr(args, 4)) arg = args[0];
+            // Each command + argument + result once: some are called every frame with alternating arguments.
+            static std::mutex lock;
+            static std::set<std::tuple<uint32_t, int32_t, int64_t>> seen;
+            {
+                std::lock_guard guard(lock);
+                if (!seen.emplace(id, arg, result).second) return;
+            }
+            ++logged;
+            Log(L"menu-debug: %s cmd %u(arg %d) -> %lld", table ? L"session" : L"menu", index, arg, result);
+        }
+
+        void MenuDebug()
+        {
+            const struct { uint64_t address; int count; } tables[2] = { { 0x1403eefe0, 136 }, { 0x1403f1150, 196 } };
+            for (uint32_t t = 0; t < 2; ++t)
+            {
+                int count = tables[t].count;
+                auto stubs = static_cast<uint8_t*>(VirtualAlloc(nullptr, count * 64, MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE));
+                auto table = reinterpret_cast<uint64_t*>(At(tables[t].address));
+                DWORD old = 0;
+                if (!stubs || !VirtualProtect(table, count * 8, PAGE_READWRITE, &old)) return;
+                for (int i = 0; i < count; ++i)
+                {
+                    std::vector<uint8_t> s = { 0x48, 0x83, 0xec, 0x38,          // sub rsp, 0x38
+                                               0x48, 0x89, 0x4c, 0x24, 0x20,    // mov [rsp+0x20], rcx (the script's arguments)
+                                               0x48, 0xb8 };                    // mov rax, original
+                    Put64(s, table[i]);
+                    s.insert(s.end(), { 0xff, 0xd0,                             // call rax
+                                        0x48, 0x89, 0x44, 0x24, 0x28,           // mov [rsp+0x28], rax
+                                        0xb9 });                                // mov ecx, table << 16 | index
+                    Put32(s, static_cast<int32_t>(t << 16 | i));
+                    s.insert(s.end(), { 0x48, 0x89, 0xc2,                       // mov rdx, rax
+                                        0x4c, 0x8b, 0x44, 0x24, 0x20,           // mov r8, [rsp+0x20]
+                                        0x48, 0xb8 });                          // mov rax, LogLobbyCommand
+                    Put64(s, reinterpret_cast<uint64_t>(&LogLobbyCommand));
+                    s.insert(s.end(), { 0xff, 0xd0,                             // call rax
+                                        0x48, 0x8b, 0x44, 0x24, 0x28,           // mov rax, [rsp+0x28]
+                                        0x48, 0x83, 0xc4, 0x38,                 // add rsp, 0x38
+                                        0xc3 });                                // ret
+                    memcpy(stubs + i * 64, s.data(), s.size());
+                    table[i] = reinterpret_cast<uint64_t>(stubs + i * 64);
+                }
+                VirtualProtect(table, count * 8, old, &old);
+                FlushInstructionCache(GetCurrentProcess(), stubs, count * 64);
+            }
+            Log(L"gamepatch: menu_debug - logging the lobby script's commands");
+        }
+
         void LobbyArsenalEditor()
         {
             auto pop = reinterpret_cast<PopMenuFn>(InlineHook(0x1402461f0, reinterpret_cast<void*>(&HookedPopMenu), L"menu back"));
@@ -564,6 +625,7 @@ namespace pdnet::gamepatches
             g_pushMenu = push;
             Log(L"gamepatch: lobby Arsenal editor ready (the lobby's invite button opens it)");
             RenameStrings(); // again whenever a menu opens, in case the strings were loaded later
+            if (GetConfig().menuDebug) MenuDebug();
         }
     }
 

@@ -388,3 +388,5 @@ Parked ideas and half-finished features, newest first. Each has its notes earlie
    testable offline; a non-playing seat is hard (4 fixed player slots). Suggested order: camera/HUD test, spectate-after-
    elimination, then a spare-slot spectator.
 6. **Tag Team lobby crash / team data** - only matters if 3 comes back.
+
+Lobby Gamertag option (backlog 4): greyed (with Kick Player) when nobody else is in the lobby - not an Xbox privilege (CheckGamingPrivilege* never called). The lobby script asks session command 28 (0x140213a80: 1 if the slot is this PC or found in the peer list DAT_140595ea8/0x298 entries) for each slot; Gamertag and Kick share that. menu_debug=on (off by default) logs each distinct lobby script command+arg+result once while menu 44 is up. Making Gamertag alone always available needs the lobby script's bytecode (enable check) patched.
