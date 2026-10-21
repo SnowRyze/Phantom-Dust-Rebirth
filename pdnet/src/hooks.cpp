@@ -178,6 +178,12 @@ namespace pdnet
             {
                 continue;
             }
+            // The real Xbox save service (used only by the Xbox save import) must reach Windows directly.
+            if (!checked.count(m) && GetModuleHandleW(L"Windows.Gaming.XboxLive.Storage.dll") == m)
+            {
+                checked.insert(m);
+                continue;
+            }
             // Injected mode patches modules again on every pass: a module found before the loader filled in its
             // imports gets our hook overwritten by the real address. PatchModule only writes when the slot differs.
             if (!PatchModule(m))

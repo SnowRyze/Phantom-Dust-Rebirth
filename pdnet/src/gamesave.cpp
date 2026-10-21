@@ -4,6 +4,7 @@
 #include <fstream>
 #include <condition_variable>
 #include <winrt/Windows.System.h>
+#include <winrt/Windows.ApplicationModel.h>
 #include <winrt/Windows.UI.Notifications.h>
 #include <winrt/Windows.Data.Xml.Dom.h>
 
@@ -592,7 +593,12 @@ namespace pdnet
                 staging += L".xbox-import";
                 std::wstring problem;
                 size_t containers = 0, blobs = 0, bytes = 0;
+                bool store = false;
+                try { store = winrt::Windows::ApplicationModel::Package::Current().SignatureKind() == winrt::Windows::ApplicationModel::PackageSignatureKind::Store; }
+                catch (...) {}
                 if (!user) problem = L"the game hasn't opened its saves yet";
+                // An unpacked copy can't sign in to Xbox, and waking the real save service there was followed by a crash.
+                else if (!store) problem = L"this needs the Microsoft Store version of Phantom Dust, signed in to Xbox";
                 else
                 {
                     Log(L"GameSave: import: reading the Xbox cloud save into %s ...", staging.c_str());
