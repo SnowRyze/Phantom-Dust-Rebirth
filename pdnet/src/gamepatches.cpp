@@ -10,6 +10,7 @@ namespace pdnet::gamepatches
         constexpr uint64_t kGhidraBase = 0x140000000;
 
         std::atomic<uint8_t> g_bodyTags{ 0 }; // read by the game's nametag code through the routine below
+        std::atomic<uint8_t> g_playDead[4]{}; // per player slot: lying in Play Dead (TrackPlayDead), read by the colour routine
 
         uint8_t* Image() { return reinterpret_cast<uint8_t*>(GetModuleHandleW(nullptr)); }
         uint8_t* At(uint64_t ghidra) { return Image() + (ghidra - kGhidraBase); }
@@ -54,17 +55,12 @@ namespace pdnet::gamepatches
         // The nametag is drawn white: right before the draw call the game stores 0xffffffff in its text colour
         // (two qwords at 0x14054c9b0 / 0x14054c9b8). Those two stores become a call to a small routine that stores
         // `argb` instead, while nametags on dead bodies are on (g_bodyTags, the lobby host's setting), for a player
-        // who is dead (health +0x0c of DAT_1404bc608[r15], the record the game's health check uses) or playing dead,
-        // checked in that record and in the drawn slot's (rbx; the two differ in some battle types). Playing dead:
-        // Play Dead (skill 360) is the current action (+0x4b4), and either
-        //   - its phase (+0x4ac) is 1: lying down. Only this PC's own player has this; getting up or a hit changes it.
-        //   - or the skill's 30 s slow-down is still on (status effect 1, value +0x61c8 < 0). Other players' records
-        //     on this PC never show the pose, so this is the best sign there: it ends after 30 s or at their next skill.
+        // who is dead (health +0x0c of DAT_1404bc608[r15], the record the game's health check uses) or playing dead
+        // (g_playDead[slot], set by TrackPlayDead, for r15 or the drawn slot rbx; the two differ in some battle types).
         // A fake death then looks like a real one.
         void DeadNametagColor(uint32_t argb)
         {
             constexpr uint64_t kSite = 0x1401512cf;
-            constexpr int32_t kPlayDead = 360;
             const std::vector<uint8_t> expected = { 0x48, 0xc7, 0x05, 0xd6, 0xb6, 0x3f, 0x00, 0xff, 0xff, 0xff, 0xff,
                                                     0x48, 0xc7, 0x05, 0xd3, 0xb6, 0x3f, 0x00, 0xff, 0xff, 0xff, 0xff };
             uint8_t* site = At(kSite);
@@ -92,7 +88,7 @@ namespace pdnet::gamepatches
                 to.push_back(code.size());
                 Put32(code, 0);
             };
-            constexpr uint8_t kJe = 0x84, kJne = 0x85, kJa = 0x87, kJl = 0x8c, kJmp = 0;
+            constexpr uint8_t kJe = 0x84, kJne = 0x85, kJa = 0x87, kJmp = 0;
             auto label = [&](std::vector<size_t>& from)
             {
                 for (size_t at : from)
@@ -102,18 +98,6 @@ namespace pdnet::gamepatches
                 }
                 from.clear();
             };
-            auto playingDead = [&](std::vector<size_t>& notPlayingDead)
-            {
-                code.insert(code.end(), { 0x81, 0xb8, 0xb4, 0x04, 0x00, 0x00 });       // cmp dword [rax+0x4b4], 360
-                Put32(code, kPlayDead);
-                jump(kJne, notPlayingDead);
-                code.insert(code.end(), { 0x83, 0xb8, 0xac, 0x04, 0x00, 0x00, 0x01 }); // cmp dword [rax+0x4ac], 1
-                jump(kJe, toDead);
-                code.insert(code.end(), { 0x83, 0xb8, 0xc8, 0x61, 0x00, 0x00, 0x00 }); // cmp dword [rax+0x61c8], 0
-                jump(kJl, toDead);
-                jump(kJmp, notPlayingDead);
-            };
-
             code.insert(code.end(), { 0x48, 0xb8 });                 // mov rax, &g_bodyTags
             Put64(code, reinterpret_cast<uint64_t>(&g_bodyTags));
             code.insert(code.end(), { 0x80, 0x38, 0x00 });           // cmp byte [rax], 0
@@ -125,16 +109,18 @@ namespace pdnet::gamepatches
             jump(kJe, toWhite);
             code.insert(code.end(), { 0x83, 0x78, 0x0c, 0x00 });     // cmp dword [rax+0xc], 0
             jump(kJe, toDead);
-            playingDead(toNext);                                     // the health record (r15)
+            code.insert(code.end(), { 0x48, 0xb8 });                 // mov rax, &g_playDead
+            Put64(code, reinterpret_cast<uint64_t>(&g_playDead[0]));
+            code.insert(code.end(), { 0x49, 0x83, 0xff, 0x03 });     // cmp r15, 3
+            jump(kJa, toNext);
+            code.insert(code.end(), { 0x42, 0x80, 0x3c, 0x38, 0x00 }); // cmp byte [rax + r15], 0
+            jump(kJne, toDead);
             label(toNext);
-            code.insert(code.end(), { 0x48, 0x8d, 0x05 });           // lea rax, [DAT_1404bc608]
-            Put32(code, Rel32(rip(4), At(0x1404bc608)));
             code.insert(code.end(), { 0x83, 0xfb, 0x03 });           // cmp ebx, 3 (the drawn slot, as the game checks it)
             jump(kJa, toWhite);
-            code.insert(code.end(), { 0x48, 0x8b, 0x04, 0xd8 });     // mov rax, [rax + rbx*8]
-            code.insert(code.end(), { 0x48, 0x85, 0xc0 });           // test rax, rax
-            jump(kJe, toWhite);
-            playingDead(toWhite);                                    // the drawn slot's record (rbx)
+            code.insert(code.end(), { 0x80, 0x3c, 0x18, 0x00 });     // cmp byte [rax + rbx], 0
+            jump(kJne, toDead);
+            jump(kJmp, toWhite);
             label(toDead);
             code.insert(code.end(), { 0x48, 0xb8 });                 // dead: mov rax, colour
             Put64(code, (static_cast<uint64_t>(argb) << 32) | argb);
@@ -254,6 +240,81 @@ namespace pdnet::gamepatches
             }
         }
 
+        // Sets g_playDead[slot] while a player lies in Play Dead (skill 360), for the colour routine. Other players'
+        // records on this PC never show the lying pose itself, so it is tracked from what they do show:
+        //   on:  their current action (status +0x4b4) becomes 360, or their skill-use counter (+0x4a4) moves on while
+        //        it stays 360 (Play Dead used again)
+        //   off: they move (position +0xa0/+0xa4/+0xa8 leaves the spot where they lay down, after the fall), take damage
+        //        (health +0x0c drops; Play Dead's own regeneration raises it), die, or use another skill.
+        void TrackPlayDead()
+        {
+            std::thread([]
+            {
+                constexpr int32_t kPlayDead = 360;
+                constexpr DWORD kFallMs = 1000;    // the lie-down animation may still move them a little
+                constexpr float kMoved = 0.75f;    // world units from the spot they lay down on
+                constexpr size_t kInts = 0x4b8 / 4;
+                struct Track { bool seen = false, on = false, based = false; int32_t action = 0, counter = 0, hp = 0; float pos[3]{}; DWORD since = 0; };
+                Track tracks[4];
+                std::vector<int32_t> rec(kInts);
+                auto stop = [](int slot, Track& t, const wchar_t* why)
+                {
+                    t.on = false;
+                    g_playDead[slot] = 0;
+                    Log(L"gamepatch: P%d stopped playing dead (%s)", slot + 1, why);
+                };
+                for (;;)
+                {
+                    Sleep(20);
+                    for (int slot = 0; slot < 4; ++slot)
+                    {
+                        Track& t = tracks[slot];
+                        auto base = *reinterpret_cast<uint8_t**>(At(0x1404bc608) + slot * 8);
+                        if (!base || !CopyMemory32(base, rec.data(), kInts))
+                        {
+                            if (t.on) stop(slot, t, L"left the battle");
+                            t = Track{};
+                            continue;
+                        }
+                        int32_t hp = rec[0x0c / 4], action = rec[0x4b4 / 4], counter = rec[0x4a4 / 4];
+                        float pos[3];
+                        memcpy(pos, &rec[0xa0 / 4], sizeof(pos));
+                        bool used = t.seen && action == kPlayDead && (t.action != kPlayDead || counter != t.counter);
+                        if (t.on)
+                        {
+                            float d2 = 0;
+                            for (int k = 0; k < 3; ++k) d2 += (pos[k] - t.pos[k]) * (pos[k] - t.pos[k]);
+                            if (hp <= 0) stop(slot, t, L"died");
+                            else if (action != kPlayDead || counter != t.counter) stop(slot, t, L"used another skill");
+                            else if (hp < t.hp) stop(slot, t, L"took damage");
+                            else if (t.based && d2 > kMoved * kMoved) stop(slot, t, L"moved");
+                            else
+                            {
+                                t.hp = hp; // regeneration while lying
+                                if (!t.based && GetTickCount() - t.since >= kFallMs)
+                                {
+                                    memcpy(t.pos, pos, sizeof(pos));
+                                    t.based = true;
+                                }
+                            }
+                        }
+                        if (used && hp > 0)
+                        {
+                            t.on = true;
+                            t.based = false;
+                            t.hp = hp;
+                            t.since = GetTickCount();
+                            g_playDead[slot] = 1;
+                            Log(L"gamepatch: P%d is playing dead", slot + 1);
+                        }
+                        t.seen = true;
+                        t.action = action;
+                        t.counter = counter;
+                    }
+                }
+            }).detach();
+        }
+
         // nametag_debug=deep: also every int32 of each player's object (DAT_1404bc9d8[i], 0x14000 bytes; it holds the
         // status record at +0x40) that changes rarely: each offset is logged for its first 12 changes, so constantly
         // changing values (positions, timers) drop out within a second.
@@ -344,7 +405,11 @@ namespace pdnet::gamepatches
         std::call_once(once, []
         {
             g_bodyTags = GetConfig().nametagsOnBodies ? 1 : 0;
-            if (NametagsOnBodies()) DeadNametagColor(GetConfig().deadNametagColor);
+            if (NametagsOnBodies())
+            {
+                DeadNametagColor(GetConfig().deadNametagColor);
+                TrackPlayDead();
+            }
             if (GetConfig().nametagDebug) NametagDebug();
         });
     }
