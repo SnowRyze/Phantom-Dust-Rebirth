@@ -344,3 +344,4 @@ Lobby settings change (build-rule6, 7AA5EF89) works solo 2026-10-22: the host's 
 Game type change also resizes the hosted Epic lobby (xsapi::SetHostedSessionsMaxMembers -> SessionStore::SetHostedMaxMembers, owner Push with the new maxMembers), on a background thread. build-rule7.
 
 Live test 2026-10-21 (3 players): Tag Team -> Battle Royale worked; Battle Royale -> Tag Team crashed the other players' games (no client log: Collect-Log failed while the game held pdnet.log open). Changes into Tag Team are now refused (build-rule8). Collect-Log scripts copy the log with FileShare.ReadWrite.
+Backing out of the settings menu runs session cmd 29 (wait) then cmd 190 (0x140216150 -> FUN_140181d70, abandon the session being created) and opens 36: from the lobby that tore the lobby down (endless loading). cmd 190 is now a no-op while the menu is opened from the lobby, and 48 -> 36 is a cancel (restore + back). build-rule9.

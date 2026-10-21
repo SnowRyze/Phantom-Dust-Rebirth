@@ -487,7 +487,7 @@ namespace pdnet::gamepatches
         // creation step) returns to the lobby and re-publishes; going back restores the saved values. The menu's
         // set-up resets type and rule to defaults (session command 80); while it is opened from the lobby the
         // lobby's values are put back right after. A game type that the current players don't fit is refused.
-        constexpr int kStageMenu = 47, kRuleMenu = 48;
+        constexpr int kSessionMenu = 36, kStageMenu = 47, kRuleMenu = 48;
         std::atomic<bool> g_ruleFromLobby{ false };
         int32_t g_savedType = 0, g_savedRule = 0, g_savedStage[3] = {};
         constexpr uint64_t kStageVars[3] = { 0x14051775c, 0x140527bc8, 0x140527c54 };
@@ -508,14 +508,36 @@ namespace pdnet::gamepatches
             return result;
         }
 
+        // Session command 190 (0x140216150) abandons the session being created (FUN_140181d70, as a failed create
+        // does); the settings menu runs it when backing out. Opened from the lobby, that would tear down the live
+        // lobby (other players dropped, endless loading), so it does nothing then.
+        ScriptCommandFn g_abandonSession = nullptr;
+
+        int64_t HookedAbandonSession(int32_t* args)
+        {
+            if (g_ruleFromLobby && CurrentMenu(MenuManager()) == kRuleMenu)
+            {
+                Log(L"menu: backing out of the settings menu - keeping the lobby (not abandoning the session)");
+                return 0;
+            }
+            return g_abandonSession(args);
+        }
+
+        ScriptCommandFn ReplaceSessionCommand(int index, ScriptCommandFn hook)
+        {
+            auto entry = reinterpret_cast<uint64_t*>(At(0x1403f1150) + index * 8);
+            DWORD old = 0;
+            if (!VirtualProtect(entry, 8, PAGE_READWRITE, &old)) return nullptr;
+            auto original = reinterpret_cast<ScriptCommandFn>(*entry);
+            *entry = reinterpret_cast<uint64_t>(hook);
+            VirtualProtect(entry, 8, old, &old);
+            return original;
+        }
+
         void HookResetSettings()
         {
-            auto entry = reinterpret_cast<uint64_t*>(At(0x1403f1150) + 80 * 8);
-            DWORD old = 0;
-            if (!VirtualProtect(entry, 8, PAGE_READWRITE, &old)) return;
-            g_resetSettings = reinterpret_cast<ScriptCommandFn>(*entry);
-            *entry = reinterpret_cast<uint64_t>(&HookedResetSettings);
-            VirtualProtect(entry, 8, old, &old);
+            g_resetSettings = ReplaceSessionCommand(80, &HookedResetSettings);
+            g_abandonSession = ReplaceSessionCommand(190, &HookedAbandonSession);
         }
 
         void PublishRule()
@@ -561,6 +583,16 @@ namespace pdnet::gamepatches
                 *reinterpret_cast<int32_t*>(At(0x14051775c)) = -1;
                 g_ruleFromLobby = true;
                 return g_pushMenu(manager, kRuleMenu, force);
+            }
+            if (g_ruleFromLobby && current == kRuleMenu && menu == kSessionMenu)
+            {
+                // Backing out: the menu returns to the session menu (36). Restore everything and go back to the lobby.
+                g_ruleFromLobby = false;
+                GameType() = g_savedType;
+                GameRule() = g_savedRule;
+                for (int k = 0; k < 3; ++k) *reinterpret_cast<int32_t*>(At(kStageVars[k])) = g_savedStage[k];
+                Log(L"menu: lobby settings change cancelled");
+                return g_popMenu();
             }
             if (g_ruleFromLobby && current == kRuleMenu && menu != kRuleMenu && menu != kStageMenu)
             {
