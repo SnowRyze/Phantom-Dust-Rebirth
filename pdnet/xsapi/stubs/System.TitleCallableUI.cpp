@@ -18,7 +18,9 @@ namespace winrt::Microsoft::Xbox::Services::System::implementation
     }
     Windows::Foundation::IAsyncAction TitleCallableUI::ShowProfileCardUIAsync(hstring targetXboxUserId)
     {
-        PDNET_XSAPI_STUB_DEFAULT("TitleCallableUI::ShowProfileCardUIAsync"); co_return;
+        // No Xbox profiles: in the multiplayer lobby the Gamertag option opens the rule menu for the host instead.
+        if (!pdnet::gamepatches::OpenLobbyRuleMenu()) PDNET_XSAPI_STUB_DEFAULT("TitleCallableUI::ShowProfileCardUIAsync");
+        co_return;
     }
     Windows::Foundation::IAsyncAction TitleCallableUI::ShowChangeFriendRelationshipUIAsync(hstring targetXboxUserId)
     {
@@ -46,7 +48,9 @@ namespace winrt::Microsoft::Xbox::Services::System::implementation
     }
     Windows::Foundation::IAsyncAction TitleCallableUI::ShowProfileCardUIForUserAsync(hstring targetXboxUserId, Windows::System::User user)
     {
-        PDNET_XSAPI_STUB_DEFAULT("TitleCallableUI::ShowProfileCardUIForUserAsync"); co_return;
+        // No Xbox profiles: in the multiplayer lobby the Gamertag option opens the rule menu for the host instead.
+        if (!pdnet::gamepatches::OpenLobbyRuleMenu()) PDNET_XSAPI_STUB_DEFAULT("TitleCallableUI::ShowProfileCardUIForUserAsync");
+        co_return;
     }
     Windows::Foundation::IAsyncAction TitleCallableUI::ShowChangeFriendRelationshipUIForUserAsync(hstring targetXboxUserId, Windows::System::User user)
     {

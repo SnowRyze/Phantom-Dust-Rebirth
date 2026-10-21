@@ -478,11 +478,57 @@ namespace pdnet::gamepatches
             }
         }
 
+        // Lobby rule change (host only): the lobby's Gamertag option (Xbox profile cards, gone) opens the rule menu
+        // (liverulesel, 48) over the lobby. That menu edits the live values directly with the game's own rules about
+        // which rule fits which game type (FUN_140183010): game type DAT_14050d2d8, rule DAT_140518cf0. Confirming
+        // (the menu moving on to the next creation step) returns to the lobby and re-publishes; going back restores
+        // the saved values. Game type changes are refused for now (player counts and teams differ).
+        constexpr int kRuleMenu = 48;
+        std::atomic<bool> g_ruleFromLobby{ false };
+        int32_t g_savedType = 0, g_savedRule = 0;
+        int32_t& GameType() { return *reinterpret_cast<int32_t*>(At(0x14050d2d8)); }
+        int32_t& GameRule() { return *reinterpret_cast<int32_t*>(At(0x140518cf0)); }
+
+        void PublishRule()
+        {
+            int32_t type = GameType(), rule = GameRule();
+            *reinterpret_cast<int32_t*>(At(0x1405277b4)) = type; // the host's settings message (FUN_1401910a0)
+            *reinterpret_cast<int32_t*>(At(0x1405277fc)) = rule;
+            *reinterpret_cast<int32_t*>(At(0x140527ab8)) = rule; // the battle's rule (set from it on session start)
+            // The session property table (DAT_14051ef80: 18 entries of 0x18 bytes, id in the low 16 bits at +0,
+            // value at +8): id 3 = game type, id 4 = rule.
+            for (int k = 0; k < 18; ++k)
+            {
+                uint8_t* entry = At(0x14051ef80) + k * 0x18;
+                uint32_t id = *reinterpret_cast<uint32_t*>(entry) & 0xffff;
+                if (id == 3) *reinterpret_cast<int64_t*>(entry + 8) = type;
+                if (id == 4) *reinterpret_cast<int64_t*>(entry + 8) = rule;
+            }
+            int updated = reinterpret_cast<int (*)()>(At(0x140283220))(); // session property update
+            reinterpret_cast<void (*)()>(At(0x140191210))();              // settings message to every other player
+            Log(L"menu: lobby rule changed to %d (game type %d); session update %d, sent to the other players", rule, type, updated);
+        }
+
         int HookedPushMenu(int64_t manager, int menu, char force)
         {
             int current = CurrentMenu(manager);
             if (menu == kLobbyMenu) RenameLobbyInvite();
             if (menu != current) Log(L"menu: open %d (from %d)", menu, current);
+            if (g_ruleFromLobby && current == kRuleMenu && menu != kRuleMenu)
+            {
+                g_ruleFromLobby = false;
+                if (GameType() != g_savedType)
+                {
+                    Log(L"menu: changing the game type in a lobby isn't supported yet - keeping type %d rule %d", g_savedType, g_savedRule);
+                    GameType() = g_savedType;
+                    GameRule() = g_savedRule;
+                }
+                else if (GameRule() != g_savedRule)
+                {
+                    PublishRule();
+                }
+                return g_popMenu();
+            }
             if (g_editorFromLobby && current == kEditorMenu && menu != kEditorMenu && menu != kStockMenu)
             {
                 Log(L"menu: leaving the Arsenal editor opened from the lobby - back to the lobby instead of menu %d", menu);
@@ -497,6 +543,12 @@ namespace pdnet::gamepatches
             int current = CurrentMenu(MenuManager());
             Log(L"menu: back (from %d)", current);
             if (current == kEditorMenu) g_editorFromLobby = false;
+            if (current == kRuleMenu && g_ruleFromLobby.exchange(false))
+            {
+                GameType() = g_savedType; // cancelled: the menu changed the live values while browsing
+                GameRule() = g_savedRule;
+                Log(L"menu: lobby rule change cancelled");
+            }
             return g_popMenu();
         }
 
@@ -560,6 +612,24 @@ namespace pdnet::gamepatches
         g_editorFromLobby = true;
         *At(0x1404bbc34) = 0; // as the script's own "open menu" command does
         g_pushMenu(manager, kEditorMenu, 0);
+        return true;
+    }
+
+    bool OpenLobbyRuleMenu()
+    {
+        int64_t manager = MenuManager();
+        if (!g_pushMenu || CurrentMenu(manager) != kLobbyMenu) return false;
+        if (*reinterpret_cast<int32_t*>(At(0x140527bc4)) != 0) // this PC's player slot; the host is slot 0
+        {
+            Log(L"menu: only the host can change the lobby's rule");
+            return true;
+        }
+        g_savedType = GameType();
+        g_savedRule = GameRule();
+        Log(L"menu: Gamertag option in the lobby - opening the rule menu (game type %d, rule %d)", g_savedType, g_savedRule);
+        g_ruleFromLobby = true;
+        *At(0x1404bbc34) = 0;
+        g_pushMenu(manager, kRuleMenu, 0);
         return true;
     }
 

@@ -13,4 +13,8 @@ namespace pdnet::gamepatches
     // The lobby's invite button (no Xbox Live invites any more) opens the Arsenal editor; leaving it returns to the
     // lobby. Returns false when not in the lobby menu (or the menu hooks aren't installed).
     bool OpenLobbyArsenalEditor();
+
+    // The lobby's Gamertag option (Xbox profile cards, gone) opens the rule menu for the host; the new rule is
+    // published to the session and sent to the other players. Returns false outside the lobby menu.
+    bool OpenLobbyRuleMenu();
 }
