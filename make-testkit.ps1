@@ -3,7 +3,7 @@
 # The name carries the DLL's fingerprint (not the date: this PC's clock jumps) and says whether eos.ini is inside.
 #   .\make-testkit.ps1 -Stage C -EosIni .\eos.tester.ini     stage C kit (EOS P2P), credentials inside
 #   .\make-testkit.ps1 -Stage B                              stage B kit (direct UDP), no eos.ini (send it separately)
-#   -Build <folder under pdnet>   default build-stageb-tested (B) / build-stagec (C)
+#   -Build <folder under pdnet>   default build-discord4
 # eos.ini holds an EOS client id and secret. Use the tester client (eos.tester.ini), not the development client
 # in _netmod\eos.local.ini (see HANDOFF §9).
 #   -Webhook <Discord webhook URL>   stage C: players' games announce the lobbies they host there
@@ -11,7 +11,7 @@
 param([ValidateSet('B', 'C')][string]$Stage = 'C', [string]$EosIni, [string]$Build, [string]$Webhook)
 $ErrorActionPreference = 'Stop'
 $root = $PSScriptRoot
-if (-not $Build) { $Build = if ($Stage -eq 'B') { 'build-stageb-tested' } else { 'build-stagec' } }
+if (-not $Build) { $Build = 'build-discord4' }
 $kitSource = "$root\testkit-stage$($Stage.ToLower())"
 
 $dll = "$root\pdnet\$Build\Microsoft.Xbox.Services.dll"
