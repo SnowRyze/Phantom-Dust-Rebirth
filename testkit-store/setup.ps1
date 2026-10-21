@@ -133,7 +133,7 @@ else {
     }
     if ($Mic -eq 'yes') {
         if (-not (Test-Path "$kit\mic-permission-before.txt")) { Set-Content "$kit\mic-permission-before.txt" $(if ($current) { $current } else { 'none' }) }
-        New-Item $appConsent -Force | Out-Null
+        if (-not (Test-Path $appConsent)) { New-Item $appConsent -Force | Out-Null } # -Force on an existing key would wipe its values
         Set-ItemProperty $appConsent -Name Value -Value 'Allow' -Type String
         Write-Host 'Microphone allowed for Phantom Dust.'
     }
