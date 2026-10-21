@@ -3,22 +3,25 @@
 # The name carries the DLL's fingerprint (not the date: this PC's clock jumps) and says whether eos.ini is inside.
 #   .\make-testkit.ps1 -Stage C -EosIni .\eos.tester.ini     stage C kit (EOS P2P), credentials inside
 #   .\make-testkit.ps1 -Stage B                              stage B kit (direct UDP), no eos.ini (send it separately)
-#   .\make-testkit.ps1 -Stage Store -EosIni .\eos.tester.ini stage C for the Microsoft Store install (pdlaunch, testkit-store\)
+#   .\make-testkit.ps1 -EosIni .\eos.tester.ini              the kit (default, -Stage Kit): Store install AND unpacked copies, no game
+#                                                            files changed (pdlaunch, testkit-store\) -> D:\PhantomDust-pdnet-TestKit-<md5>...
+#   -Stage C / B: the older kits that replace Microsoft.Xbox.Services.dll in an unpacked copy (testkit-stagec\ / b\)
 #   -Build <folder under pdnet>   default build-discord4
 # eos.ini holds an EOS client id and secret. Use the tester client (eos.tester.ini), not the development client
 # in _netmod\eos.local.ini (see HANDOFF §9).
 #   -Webhook <Discord webhook URL>   stage C: players' games announce the lobbies they host there
 #            (default: webhook_url from pdnet\tools\out\lobbywatch.ini; -Webhook none = no Discord messages)
-param([ValidateSet('B', 'C', 'Store')][string]$Stage = 'C', [string]$EosIni, [string]$Build, [string]$Webhook)
+param([ValidateSet('B', 'C', 'Store', 'Kit')][string]$Stage = 'Kit', [string]$EosIni, [string]$Build, [string]$Webhook)
 $ErrorActionPreference = 'Stop'
 $root = $PSScriptRoot
 if (-not $Build) { $Build = 'build-discord4' }
-$kitSource = if ($Stage -eq 'Store') { "$root\testkit-store" } else { "$root\testkit-stage$($Stage.ToLower())" }
+$launcherKit = $Stage -in 'Store', 'Kit'
+$kitSource = if ($launcherKit) { "$root\testkit-store" } else { "$root\testkit-stage$($Stage.ToLower())" }
 
 $dll = "$root\pdnet\$Build\Microsoft.Xbox.Services.dll"
 if (-not (Test-Path $dll)) { throw "No DLL at $dll. Build it first: pdnet\build.cmd $Build" }
 $md5 = (Get-FileHash $dll -Algorithm MD5).Hash
-$name = "PhantomDust-pdnet-$(if ($Stage -eq 'Store') { 'StageC-Store' } else { "Stage$Stage" })-TestKit-$($md5.Substring(0, 8))" + $(if ($EosIni) { '-with-eos' } else { '' })
+$name = "PhantomDust-pdnet-$(if ($Stage -eq 'Kit') { 'TestKit' } elseif ($Stage -eq 'Store') { 'StageC-Store-TestKit' } else { "Stage$Stage-TestKit" })-$($md5.Substring(0, 8))" + $(if ($EosIni) { '-with-eos' } else { '' })
 $out = "D:\$name"
 $zip = "D:\$name.zip"
 $sdkDll = Get-ChildItem 'C:\Users\ryhol\tools\downloads\eos-sdk' -Recurse -Filter 'EOSSDK-Win64-Shipping.dll' | Select-Object -First 1
@@ -32,7 +35,7 @@ if ($EosIni) {
 }
 
 if (Test-Path $out) { Remove-Item $out -Recurse -Force }
-if ($Stage -eq 'Store') {
+if ($launcherKit) {
     # pdnet.dll + pdlaunch.exe next to the scripts; settings are the stage C ones.
     $launcher = "$root\pdnet\tools\out\pdlaunch.exe"
     if (-not (Test-Path $launcher)) { throw "No $launcher. Build it first: pdnet\tools\build-pdlaunch.cmd" }

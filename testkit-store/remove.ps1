@@ -1,5 +1,5 @@
-# Undoes store-setup.ps1: Phantom Dust starts normally again (Xbox Live, no pdnet). The game's files were never changed.
-#   Double-click Remove.bat (or: powershell -ExecutionPolicy Bypass -File store-remove.ps1)
+# Undoes setup.ps1: Phantom Dust starts without pdnet again. The game's files were never changed.
+#   Double-click Remove.bat (or: powershell -ExecutionPolicy Bypass -File remove.ps1)
 $ErrorActionPreference = 'Stop'
 Add-Type -TypeDefinition @'
 using System;
@@ -24,6 +24,7 @@ if ($hr -ne 0) { Write-Host ('Windows reported 0x{0:X8}.' -f $hr) -ForegroundCol
 Write-Host 'Windows will ask for administrator permission to remove the local-connection exemption store-setup added.'
 try { Start-Process CheckNetIsolation.exe -Verb RunAs -Wait -WindowStyle Hidden -ArgumentList "LoopbackExempt -d -n=$($pkg.PackageFamilyName)" }
 catch { Write-Host "Skipped ($_). It is harmless to leave." }
-Write-Host 'Done. Phantom Dust starts normally again (Xbox Live, cloud saves). You can delete this folder.'
+if ($pkg.SignatureKind -eq 'Store') { Write-Host 'Done. Phantom Dust starts normally again (Xbox Live, cloud saves). You can delete this folder.' }
+else { Write-Host 'Done. pdnet no longer loads. Note: an unpacked copy without pdnet may hang on "retrieving profile" (Xbox cloud saves).' }
 Write-Host 'Your pdnet test saves stay in the game''s local data (pdnet\saves) and are not used by the normal game.'
 Read-Host 'Press Enter to close'
