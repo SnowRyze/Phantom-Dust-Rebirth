@@ -524,7 +524,12 @@ namespace pdnet::gamepatches
                 g_savedType = GameType();
                 g_savedRule = GameRule();
                 for (int k = 0; k < 3; ++k) g_savedStage[k] = *reinterpret_cast<int32_t*>(At(kStageVars[k]));
-                Log(L"menu: Change Stage in the lobby - opening the settings menu (game type %d, rule %d)", g_savedType, g_savedRule);
+                // The menu's page (DAT_140518ce4, a script variable; the session set-up command 0x140213cd0 resets it)
+                // still says "done" from creating the lobby, which makes the menu skip straight to the next step.
+                auto var = [](uint64_t a) { return *reinterpret_cast<int32_t*>(At(a)); };
+                Log(L"menu: Change Stage in the lobby - opening the settings menu (game type %d, rule %d; page %d, c0e4 %d, c04c %d, c0ec %d, c12c %d)",
+                    g_savedType, g_savedRule, var(0x140518ce4), var(0x14051c0e4), var(0x14051c04c), var(0x14051c0ec), var(0x14051c12c));
+                *reinterpret_cast<int32_t*>(At(0x140518ce4)) = 0;
                 g_ruleFromLobby = true;
                 return g_pushMenu(manager, kRuleMenu, force);
             }
