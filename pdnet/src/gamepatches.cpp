@@ -1,6 +1,7 @@
 #include "pch.h"
 #include "gamepatches.h"
 #include "config.h"
+#include "lobbies.h"
 #include "log.h"
 #include <set>
 #include <tuple>
@@ -479,6 +480,18 @@ namespace pdnet::gamepatches
             {
                 char key[64], value[512];
                 if (!CopyString(t.keys[i], key, sizeof(key))) return;
+                // icon_gallery=on: the main menu's hint line (Import Xbox Save highlighted) shows every inline icon
+                // (text code 0x07 N '#', icons 0-36) with its number, to pick one for voice_talk_mark.
+                if (GetConfig().iconGallery && strcmp(key, "help_hint") == 0)
+                {
+                    static std::string gallery;
+                    if (gallery.empty())
+                        for (int n = 0; n <= 36; ++n)
+                            gallery += "\a" + std::to_string(n) + "#" + std::to_string(n) + (n % 10 == 9 ? "\n" : "  ");
+                    if (t.values[i] != gallery.data()) Log(L"gamepatch: icon gallery in the main menu's hint line");
+                    t.values[i] = gallery.data();
+                    continue;
+                }
                 for (auto& r : kRenames)
                 {
                     if (strcmp(key, r.key) != 0) continue;
@@ -723,6 +736,46 @@ namespace pdnet::gamepatches
             Log(L"gamepatch: lobby script watcher started (Gamertag option %s, Mic label %s)", gamertag ? L"on" : L"off", micLabel ? L"on" : L"off");
         }
 
+        // Lobby talking indicator (voice_chat=on), as the original Xbox game had: while a player speaks in the voice
+        // room, their name in the lobby's player list blinks a mark after it. The list gets each name from session
+        // command 23 (0x1402139d0: a pointer to the slot's name, lobby names at 0x140527ac0 + slot*64); its table
+        // entry is wrapped so that, in the lobby, a talking player's name comes back with the mark added.
+        // voice_talk_mark: plain UTF-8 text, or #N for the game's inline icon N (text code 0x07 N '#').
+        using SessionCommandFn = int64_t (*)(int32_t* args);
+        SessionCommandFn g_playerName = nullptr;
+        std::string g_talkMark;
+
+        int64_t HookedPlayerName(int32_t* args)
+        {
+            int64_t result = g_playerName(args);
+            int slot = args ? args[0] : -1;
+            if (!result || slot < 0 || slot >= 8 || CurrentMenu(MenuManager()) != kLobbyMenu) return result;
+            if ((GetTickCount64() / 300) % 2) return result; // blink: the mark shows 300 ms, hides 300 ms
+            static char named[8][160];
+            if (!CopyString(reinterpret_cast<const char*>(result), named[slot], 64) || !named[slot][0] || !lobbies::IsTalking(named[slot])) return result;
+            strcat_s(named[slot], " ");
+            strcat_s(named[slot], g_talkMark.c_str());
+            return reinterpret_cast<int64_t>(named[slot]);
+        }
+
+        void LobbyTalkIndicator()
+        {
+            const std::string& mark = GetConfig().voiceTalkMark;
+            g_talkMark = mark.size() > 1 && mark[0] == '#' && isdigit(static_cast<unsigned char>(mark[1])) ? "\a" + mark.substr(1) + "#" : mark;
+            auto entry = reinterpret_cast<SessionCommandFn*>(At(0x1403f1150) + 23 * 8);
+            DWORD old = 0;
+            if (*entry != reinterpret_cast<SessionCommandFn>(At(0x1402139d0)))
+            {
+                Log(L"gamepatch: lobby talking indicator skipped - the game code is not what this pdnet expects");
+                return;
+            }
+            if (!VirtualProtect(entry, 8, PAGE_READWRITE, &old)) return;
+            g_playerName = *entry;
+            *entry = &HookedPlayerName;
+            VirtualProtect(entry, 8, old, &old);
+            Log(L"gamepatch: lobby talking indicator ready (mark '%S')", mark.c_str());
+        }
+
         void LobbyArsenalEditor()
         {
             auto pop = reinterpret_cast<PopMenuFn>(InlineHook(0x1402461f0, reinterpret_cast<void*>(&HookedPopMenu), L"menu back"));
@@ -762,6 +815,7 @@ namespace pdnet::gamepatches
             }
             if (GetConfig().nametagDebug) NametagDebug();
             if (GetConfig().lobbyArsenalEditor) LobbyArsenalEditor();
+            if (GetConfig().voiceChat) LobbyTalkIndicator();
             if (GetConfig().lobbyGamertagOption || GetConfig().voiceChat) LobbyScriptPatches(GetConfig().lobbyGamertagOption, GetConfig().voiceChat);
         });
     }

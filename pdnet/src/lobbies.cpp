@@ -72,6 +72,7 @@ namespace pdnet::lobbies
 {
     bool Available() { return false; }
     std::string LocalUserId() { return {}; }
+    bool IsTalking(const char*) { return false; }
     std::optional<Lobby> Create(const std::string&, const std::string&, uint32_t, const Attributes&, const Attributes&) { return std::nullopt; }
     std::optional<Lobby> Join(const std::string&, const Attributes&) { return std::nullopt; }
     bool Update(const std::string&, const Changes&, const Changes&, uint32_t) { return false; }
@@ -473,7 +474,13 @@ namespace pdnet::lobbies
         // switches: the mic follows the game's own Voice Chat setting (shown as "Mic: On/Off" in the lobby, see
         // gamepatches::GameMicOn), hearing the others follows voice_listen. The game's original option muted both
         // ways; GameChat itself stays dead (it needs Xbox Live), so there is no second voice path.
-        struct VoiceRoom { std::string name; int mic = -1, listen = -1; EOS_NotificationId participants = EOS_INVALID_NOTIFICATIONID; };
+        struct VoiceRoom
+        {
+            std::string name;
+            int mic = -1, listen = -1;
+            EOS_NotificationId participants = EOS_INVALID_NOTIFICATIONID, speaking = EOS_INVALID_NOTIFICATIONID;
+            EOS_NotificationId sending = EOS_INVALID_NOTIFICATIONID, input = EOS_INVALID_NOTIFICATIONID;
+        };
         std::map<std::string, VoiceRoom> g_voiceRooms; // EOS thread only: connected rooms by lobby id
         EOS_HLobby g_lobbyHandle = nullptr;            // EOS thread only
         EOS_HPlatform g_voicePlatform = nullptr;
@@ -511,9 +518,103 @@ namespace pdnet::lobbies
             }
         }
 
+        // Who is talking, by the name the lobby shows (member attribute PD_NAME, the game's gamertag for the slot).
+        // Written on the EOS thread, read by the game's lobby drawing (gamepatches.cpp).
+        std::mutex g_talkLock;
+        std::map<std::string, std::string> g_talkers; // EOS user id -> display name, while speaking
+
+        // The display name of a voice room participant, from the lobby that owns the room.
+        std::string ParticipantName(const Api& api, EOS_ProductUserId me, const std::string& roomName, EOS_ProductUserId participant)
+        {
+            for (auto& [lobbyId, room] : g_voiceRooms)
+            {
+                if (room.name != roomName) continue;
+                Context c{ api, g_voicePlatform, g_lobbyHandle, me };
+                if (auto lobby = Local(c, lobbyId))
+                    for (auto& m : lobby->members)
+                        if (m.userId == Narrow(api, participant))
+                        {
+                            auto name = m.attributes.find("PD_NAME");
+                            return name != m.attributes.end() ? name->second : std::string();
+                        }
+            }
+            return {};
+        }
+
+        void EOS_CALL OnSpeaking(const EOS_RTCAudio_ParticipantUpdatedCallbackInfo* info)
+        {
+            const Api& api = *Sdk();
+            std::string id = Narrow(api, info->ParticipantId);
+            std::string name = info->bSpeaking ? ParticipantName(api, info->LocalUserId, info->RoomName ? info->RoomName : "", info->ParticipantId) : std::string();
+            std::lock_guard guard(g_talkLock);
+            auto was = g_talkers.find(id);
+            if (was != g_talkers.end() && !info->bSpeaking) name = was->second; // for the log line
+            bool wasTalking = was != g_talkers.end();
+            if (info->bSpeaking && !name.empty()) g_talkers[id] = name;
+            else g_talkers.erase(id);
+            if (wasTalking != (g_talkers.count(id) != 0)) Log(L"voice: %S %s talking", name.empty() ? id.c_str() : name.c_str(), info->bSpeaking ? L"started" : L"stopped");
+        }
+
+        // This PC's own talking: EOS reports speaking for the other participants, so the local indicator comes from
+        // the mic audio actually being sent (EOS's audio thread): loud enough = talking, for the next 400 ms.
+        std::string g_myName;                         // under g_talkLock
+        std::atomic<uint64_t> g_localTalkUntil{ 0 };
+        constexpr int kTalkLevel = 1200;              // peak sample (of 32767)
+
+        void EOS_CALL OnAudioBeforeSend(const EOS_RTCAudio_AudioBeforeSendCallbackInfo* info)
+        {
+            const EOS_RTCAudio_AudioBuffer* b = info->Buffer;
+            if (!b || !b->Frames) return;
+            int peak = 0;
+            for (uint32_t i = 0; i < b->FramesCount * (std::max)(1u, b->Channels); ++i) peak = (std::max)(peak, std::abs(static_cast<int>(b->Frames[i])));
+            if (peak >= kTalkLevel) g_localTalkUntil = GetTickCount64() + 400;
+            if (GetConfig().voiceDebug)
+            {
+                static uint64_t next = 0;
+                static int buffers = 0, loudest = 0;
+                ++buffers;
+                loudest = (std::max)(loudest, peak);
+                if (GetTickCount64() >= next)
+                {
+                    Log(L"voice-debug: mic audio %d buffers (%u Hz, %u ch), loudest %d (talking from %d)", buffers, b->SampleRate, b->Channels, loudest, kTalkLevel);
+                    buffers = loudest = 0;
+                    next = GetTickCount64() + 3000;
+                }
+            }
+        }
+
+        void EOS_CALL OnInputDevices(const EOS_RTCAudio_OnQueryInputDevicesInformationCallbackInfo* info)
+        {
+            const Api& api = *Sdk();
+            EOS_HRTCAudio audio = api.EOS_RTC_GetAudioInterface(api.EOS_Platform_GetRTCInterface(g_voicePlatform));
+            EOS_RTCAudio_GetInputDevicesCountOptions co{ EOS_RTCAUDIO_GETINPUTDEVICESCOUNT_API_LATEST };
+            uint32_t n = info->ResultCode == EOS_EResult::EOS_Success ? api.EOS_RTCAudio_GetInputDevicesCount(audio, &co) : 0;
+            Log(L"voice-debug: input devices: %s, %u found", Result(api, info->ResultCode).c_str(), n);
+            for (uint32_t i = 0; i < n; ++i)
+            {
+                EOS_RTCAudio_CopyInputDeviceInformationByIndexOptions o{ EOS_RTCAUDIO_COPYINPUTDEVICEINFORMATIONBYINDEX_API_LATEST, i };
+                EOS_RTCAudio_InputDeviceInformation* d = nullptr;
+                if (api.EOS_RTCAudio_CopyInputDeviceInformationByIndex(audio, &o, &d) != EOS_EResult::EOS_Success || !d) continue;
+                Log(L"voice-debug:   %s%s", Wide(d->DeviceName).c_str(), d->bDefaultDevice ? L" (default)" : L"");
+                api.EOS_RTCAudio_InputDeviceInformation_Release(d);
+            }
+        }
+
+        void EOS_CALL OnAudioInputState(const EOS_RTCAudio_AudioInputStateCallbackInfo* info)
+        {
+            static const wchar_t* names[] = { L"idle", L"recording", L"recording (silent)", L"recording, device disconnected", L"FAILED (no microphone access?)" };
+            int s = static_cast<int>(info->Status);
+            Log(L"voice: microphone %s", s >= 0 && s < 5 ? names[s] : L"in an unknown state");
+        }
+
         void EOS_CALL OnParticipant(const EOS_RTC_ParticipantStatusChangedCallbackInfo* info)
         {
             Log(L"voice: %s %s the voice room", UserId(*Sdk(), info->ParticipantId).c_str(), info->ParticipantStatus == EOS_ERTCParticipantStatus::EOS_RTCPS_Joined ? L"joined" : L"left");
+            if (info->ParticipantStatus != EOS_ERTCParticipantStatus::EOS_RTCPS_Joined)
+            {
+                std::lock_guard guard(g_talkLock);
+                g_talkers.erase(Narrow(*Sdk(), info->ParticipantId));
+            }
         }
 
         void EOS_CALL OnVoiceRoomConnection(const EOS_Lobby_RTCRoomConnectionChangedCallbackInfo* info)
@@ -522,10 +623,17 @@ namespace pdnet::lobbies
             std::string lobbyId = info->LobbyId ? info->LobbyId : "";
             EOS_HRTC rtc = api.EOS_Platform_GetRTCInterface(g_voicePlatform);
             auto found = g_voiceRooms.find(lobbyId);
+            EOS_HRTCAudio audio = api.EOS_RTC_GetAudioInterface(rtc);
             if (found != g_voiceRooms.end())
             {
                 if (found->second.participants != EOS_INVALID_NOTIFICATIONID) api.EOS_RTC_RemoveNotifyParticipantStatusChanged(rtc, found->second.participants);
+                if (found->second.speaking != EOS_INVALID_NOTIFICATIONID) api.EOS_RTCAudio_RemoveNotifyParticipantUpdated(audio, found->second.speaking);
+                if (found->second.sending != EOS_INVALID_NOTIFICATIONID) api.EOS_RTCAudio_RemoveNotifyAudioBeforeSend(audio, found->second.sending);
+                if (found->second.input != EOS_INVALID_NOTIFICATIONID) api.EOS_RTCAudio_RemoveNotifyAudioInputState(audio, found->second.input);
+                g_localTalkUntil = 0;
                 g_voiceRooms.erase(found);
+                std::lock_guard guard(g_talkLock);
+                g_talkers.clear();
             }
             if (!info->bIsConnected)
             {
@@ -545,6 +653,25 @@ namespace pdnet::lobbies
             room.name = name;
             EOS_RTC_AddNotifyParticipantStatusChangedOptions po{ EOS_RTC_ADDNOTIFYPARTICIPANTSTATUSCHANGED_API_LATEST, info->LocalUserId, room.name.c_str() };
             room.participants = api.EOS_RTC_AddNotifyParticipantStatusChanged(rtc, &po, nullptr, OnParticipant);
+            EOS_RTCAudio_AddNotifyParticipantUpdatedOptions so{ EOS_RTCAUDIO_ADDNOTIFYPARTICIPANTUPDATED_API_LATEST, info->LocalUserId, room.name.c_str() };
+            room.speaking = api.EOS_RTCAudio_AddNotifyParticipantUpdated(audio, &so, nullptr, OnSpeaking);
+            EOS_RTCAudio_AddNotifyAudioBeforeSendOptions bo{ EOS_RTCAUDIO_ADDNOTIFYAUDIOBEFORESEND_API_LATEST, info->LocalUserId, room.name.c_str() };
+            room.sending = api.EOS_RTCAudio_AddNotifyAudioBeforeSend(audio, &bo, nullptr, OnAudioBeforeSend);
+            EOS_RTCAudio_AddNotifyAudioInputStateOptions io{ EOS_RTCAUDIO_ADDNOTIFYAUDIOINPUTSTATE_API_LATEST, info->LocalUserId, room.name.c_str() };
+            room.input = api.EOS_RTCAudio_AddNotifyAudioInputState(audio, &io, nullptr, OnAudioInputState);
+            if (GetConfig().voiceDebug)
+            {
+                Log(L"voice-debug: notifications speaking %s, mic audio %s, mic state %s", room.speaking != EOS_INVALID_NOTIFICATIONID ? L"ok" : L"FAILED",
+                    room.sending != EOS_INVALID_NOTIFICATIONID ? L"ok" : L"FAILED", room.input != EOS_INVALID_NOTIFICATIONID ? L"ok" : L"FAILED");
+                EOS_RTCAudio_QueryInputDevicesInformationOptions qo{ EOS_RTCAUDIO_QUERYINPUTDEVICESINFORMATION_API_LATEST };
+                api.EOS_RTCAudio_QueryInputDevicesInformation(audio, &qo, nullptr, OnInputDevices);
+            }
+            {
+                std::string me = ParticipantName(api, info->LocalUserId, room.name, info->LocalUserId);
+                std::lock_guard guard(g_talkLock);
+                g_myName = me;
+                Log(L"voice: talking indicator for '%S' and the other members' PD_NAME", me.c_str());
+            }
             Log(L"voice: connected to the voice room of lobby %S", lobbyId.c_str());
             ApplyVoice(api, info->LocalUserId, room);
         }
@@ -577,12 +704,14 @@ namespace pdnet::lobbies
             });
         }
 
-        // Join settings for a lobby's voice room: joined with the lobby, the mic as the game's setting has it.
+        // Join settings for a lobby's voice room: joined with the lobby. The microphone always starts open: started
+        // muted, EOS never captured it again after sending was switched on. A Mic: Off setting is applied as "sending
+        // disabled" the moment the room connects (OnVoiceRoomConnection -> ApplyVoice).
         EOS_Lobby_LocalRTCOptions LocalVoiceOptions()
         {
             EOS_Lobby_LocalRTCOptions o{};
             o.ApiVersion = EOS_LOBBY_LOCALRTCOPTIONS_API_LATEST;
-            o.bLocalAudioDeviceInputStartsMuted = gamepatches::GameMicOn() ? EOS_FALSE : EOS_TRUE;
+            o.bLocalAudioDeviceInputStartsMuted = EOS_FALSE;
             return o;
         }
 
@@ -612,6 +741,15 @@ namespace pdnet::lobbies
 
     bool Available() { return eos::SignedIn(); }
     std::string LocalUserId() { return winrt::to_string(eos::LocalUserId()); }
+
+    bool IsTalking(const char* name)
+    {
+        std::lock_guard guard(g_talkLock);
+        if (!g_myName.empty() && g_myName == name) return GetTickCount64() < g_localTalkUntil;
+        for (auto& [id, talker] : g_talkers)
+            if (talker == name) return true;
+        return false;
+    }
 
     std::optional<Lobby> Create(const std::string& id, const std::string& bucket, uint32_t maxMembers, const Attributes& lobbyAttributes, const Attributes& memberAttributes)
     {

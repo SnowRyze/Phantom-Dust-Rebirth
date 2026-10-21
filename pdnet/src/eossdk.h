@@ -32,6 +32,11 @@ namespace pdnet::eossdk
         X(EOS_Platform_GetRTCInterface) X(EOS_RTC_GetAudioInterface)                                              \
         X(EOS_RTC_AddNotifyParticipantStatusChanged) X(EOS_RTC_RemoveNotifyParticipantStatusChanged)             \
         X(EOS_RTCAudio_UpdateSending) X(EOS_RTCAudio_UpdateReceiving)                                             \
+        X(EOS_RTCAudio_AddNotifyParticipantUpdated) X(EOS_RTCAudio_RemoveNotifyParticipantUpdated)               \
+        X(EOS_RTCAudio_AddNotifyAudioBeforeSend) X(EOS_RTCAudio_RemoveNotifyAudioBeforeSend)                     \
+        X(EOS_RTCAudio_AddNotifyAudioInputState) X(EOS_RTCAudio_RemoveNotifyAudioInputState)                     \
+        X(EOS_RTCAudio_QueryInputDevicesInformation) X(EOS_RTCAudio_GetInputDevicesCount)                       \
+        X(EOS_RTCAudio_CopyInputDeviceInformationByIndex) X(EOS_RTCAudio_InputDeviceInformation_Release)         \
         X(EOS_Lobby_GetRTCRoomName) X(EOS_Lobby_AddNotifyRTCRoomConnectionChanged)
 // P2P interface (stage C: match traffic through EOS P2P, see p2p.h).
 #define PDNET_EOS_P2P_FUNCTIONS(X)                                                                                \

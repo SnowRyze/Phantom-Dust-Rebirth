@@ -82,6 +82,7 @@ namespace pdnet::eossdk
         }
         api.EOS_Logging_SetCallback(OnSdkLog);
         api.EOS_Logging_SetLogLevel(EOS_ELogCategory::EOS_LC_ALL_CATEGORIES, EOS_ELogLevel::EOS_LOG_Warning);
+        if (GetConfig().voiceDebug) api.EOS_Logging_SetLogLevel(EOS_ELogCategory::EOS_LC_RTC, EOS_ELogLevel::EOS_LOG_Info);
         return true;
     }
 

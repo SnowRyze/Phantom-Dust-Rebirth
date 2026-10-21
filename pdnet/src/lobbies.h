@@ -44,6 +44,9 @@ namespace pdnet::lobbies
     bool Available();
     std::string LocalUserId();
 
+    // Voice: true while the lobby member shown as `name` (UTF-8, the lobby's player name) is speaking in the voice room.
+    bool IsTalking(const char* name);
+
     // Creates a public lobby with a fixed id (join by id enabled, host migration on, no presence) and sets the first
     // lobby and member attributes. Returns the lobby as EOS now reports it.
     std::optional<Lobby> Create(const std::string& id, const std::string& bucket, uint32_t maxMembers, const Attributes& lobbyAttributes, const Attributes& memberAttributes);

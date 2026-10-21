@@ -71,6 +71,9 @@ namespace pdnet
 
     // Desktop programs may use Credential Manager, so nothing is redirected (and the device ID differs from the game's).
     int RedirectCredentialStore(HMODULE, const std::wstring&) { return 0; }
+
+    // Voice: not the game, so its mic is simply on (lobbytool joins the lobby's voice room as a talking member).
+    namespace gamepatches { bool GameMicOn() { return true; } }
 }
 
 namespace
