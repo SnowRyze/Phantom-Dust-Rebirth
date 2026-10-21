@@ -2,6 +2,7 @@
 #include "gamepatches.h"
 #include "config.h"
 #include "log.h"
+#include "../xsapi/xsapi.h"
 
 namespace pdnet::gamepatches
 {
@@ -580,6 +581,8 @@ namespace pdnet::gamepatches
                     {
                         *reinterpret_cast<int32_t*>(At(0x14051c0a4)) = limit;
                         Log(L"menu: game type %d -> %d (%d players, limit %d)", g_savedType, GameType(), players, limit);
+                        // The Epic lobby keeps the limit it was created with; resize it (Epic calls wait, so not here).
+                        std::thread([limit] { xsapi::SetHostedSessionsMaxMembers(static_cast<uint32_t>(limit)); }).detach();
                     }
                 }
                 PublishRule();
