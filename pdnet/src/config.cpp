@@ -85,6 +85,7 @@ namespace pdnet
                 else if (key == "test_peer") c.testPeer = _stricmp(value.c_str(), "on") == 0;
                 else if (key == "menu_debug") c.menuDebug = _stricmp(value.c_str(), "on") == 0;
                 else if (key == "lobby_arsenal_editor") c.lobbyArsenalEditor = _stricmp(value.c_str(), "off") != 0;
+                else if (key == "lobby_gamertag_option") c.lobbyGamertagOption = _stricmp(value.c_str(), "off") != 0;
                 else if (key == "nametags_on_bodies") c.nametagsOnBodies = _stricmp(value.c_str(), "off") != 0;
                 else if (key == "dead_nametag_color" && value.size() == 6) c.deadNametagColor = 0xFF000000u | std::stoul(value, nullptr, 16);
                 else if (key == "nametag_debug") c.nametagDebug = _stricmp(value.c_str(), "deep") == 0 ? 2 : _stricmp(value.c_str(), "on") == 0 ? 1 : 0;

@@ -615,6 +615,91 @@ namespace pdnet::gamepatches
             Log(L"gamepatch: menu_debug - logging the lobby script's commands");
         }
 
+        // Lobby Gamertag option. livelobby.ssb greys out Options > Gamertag (and Kick Player) unless its
+        // player-count function says 2 or more, and the select handlers ignore the button below that. The script is
+        // loaded fresh each time the lobby opens (menu table entry +0x10, filled once the file has loaded), so a
+        // watcher patches each new copy in memory: Gamertag's draw check `count < 2` becomes `count < 0`, and its
+        // host and client select checks `count > 1` become `count > -1`. Kick Player keeps its own checks. Every site
+        // is matched on the exact bytecode first (any language's livelobby), so another game version is left alone.
+        // Script words: op = low byte; 0x03 call label (target = next word + imm*4), 0x0E push imm, 0x10 push result,
+        // 0x11 push string (pool offset), 0x17 compare, 0x07 jump.
+        constexpr uint32_t kPush2 = 0x0002000E, kPush1 = 0x0001000E, kPushResult = 0x00000010;
+
+        const uint32_t* LabelTarget(const uint32_t* word)
+        {
+            return (*word & 0xffff) == 0x0003 ? word + 1 + static_cast<int16_t>(*word >> 16) : nullptr;
+        }
+
+        int PatchLobbyGamertag(uint8_t* script)
+        {
+            __try
+            {
+                // Header: +0 code offset (0x20), +4 labels, +8 end of labels, +12 strings, as file offsets. Once
+                // loaded (FUN_1402aa620) +0 is reused by the game (e.g. 0x2FF) and the other three are relative to
+                // their own field.
+                auto code = reinterpret_cast<uint32_t*>(script);
+                constexpr uint32_t codeStart = 0x20;
+                uint32_t labels = code[1], strings = code[3];
+                if (code[0] != codeStart) labels += 4, strings += 12;
+                if (labels <= codeStart || labels > 0x40000 || strings < labels || strings > 0x80000) return -1;
+                uint32_t* end = code + labels / 4;
+                const char* pool = reinterpret_cast<const char*>(script + strings);
+                // The Gamertag window: `drop 2; push 1; push 5; open window` (window 5 = a player list, which Kick
+                // Player opens too), titled "Gamertag" 10 words on.
+                auto opensGamertag = [pool](const uint32_t* f)
+                {
+                    return f && f[0] == 0x00020006 && f[1] == 0x0001000E && f[2] == 0x0005000E && f[3] == 0x20610201 &&
+                           (f[10] & 0xffff) == 0x0011 && strcmp(pool + (f[10] >> 16), "Gamertag") == 0;
+                };
+                int patched = 0;
+                for (uint32_t* w = code + codeStart / 4; w + 40 < end; ++w)
+                {
+                    if (!LabelTarget(w) || w[1] != kPushResult) continue;
+                    // Draw: count; push 2; less-than; jump-if-zero +0x1C; ... push "$GAMERTAG" 0x98 bytes on.
+                    if (w[2] == kPush2 && w[3] == 0x00030017 && w[4] == 0x001C0207 && (w[38] & 0xffff) == 0x0011 &&
+                        strcmp(pool + (w[38] >> 16), "$GAMERTAG") == 0)
+                    {
+                        w[2] = 0x0000000E;
+                        ++patched;
+                    }
+                    // Select: count; push 1; greater-than; jump-if-zero +1; call the Gamertag window.
+                    else if (w[2] == kPush1 && w[3] == 0x00020017 && w[4] == 0x00010207 && opensGamertag(LabelTarget(w + 5)))
+                    {
+                        w[2] = 0xFFFF000E;
+                        ++patched;
+                    }
+                }
+                return patched;
+            }
+            __except (EXCEPTION_EXECUTE_HANDLER)
+            {
+                return -1;
+            }
+        }
+
+        void LobbyGamertagOption()
+        {
+            // Each load is patched once; the entry goes back to null when the lobby closes (QuitMenu frees the
+            // script), which also covers the next load reusing the same buffer.
+            std::thread([]
+            {
+                auto entry = reinterpret_cast<uint8_t* volatile*>(At(0x1403fa3d0) + kLobbyMenu * 0x18 + 0x10);
+                uint8_t* done = nullptr;
+                for (;;)
+                {
+                    Sleep(50);
+                    uint8_t* script = *entry;
+                    if (script == done) continue;
+                    done = script;
+                    if (!script) continue;
+                    int n = PatchLobbyGamertag(script);
+                    if (n == 3) Log(L"gamepatch: lobby Gamertag option enabled (3 script checks)");
+                    else Log(L"gamepatch: lobby Gamertag option - %d of 3 script checks matched (script at %p)", n, script);
+                }
+            }).detach();
+            Log(L"gamepatch: lobby Gamertag option watcher started");
+        }
+
         void LobbyArsenalEditor()
         {
             auto pop = reinterpret_cast<PopMenuFn>(InlineHook(0x1402461f0, reinterpret_cast<void*>(&HookedPopMenu), L"menu back"));
@@ -654,6 +739,7 @@ namespace pdnet::gamepatches
             }
             if (GetConfig().nametagDebug) NametagDebug();
             if (GetConfig().lobbyArsenalEditor) LobbyArsenalEditor();
+            if (GetConfig().lobbyGamertagOption) LobbyGamertagOption();
         });
     }
 
