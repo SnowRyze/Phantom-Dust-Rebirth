@@ -54,9 +54,10 @@ namespace pdnet::gamepatches
         // The nametag is drawn white: right before the draw call the game stores 0xffffffff in its text colour
         // (two qwords at 0x14054c9b0 / 0x14054c9b8). Those two stores become a call to a small routine that stores
         // `argb` instead, while nametags on dead bodies are on (g_bodyTags, the lobby host's setting), for a player
-        // (status record = DAT_1404bc608[r15]) who is dead (health +0x0c is 0) or playing dead: the Play Dead skill
-        // (id 360) is their current action (+0x4b4) and that action is still running (+0x4ac = 1; getting up or being
-        // hit changes both). A fake death then looks like a real one.
+        // who is dead (health +0x0c of DAT_1404bc608[r15], the record the game's health check uses) or playing dead:
+        // the Play Dead skill (id 360) is the current action (+0x4b4) and still running (+0x4ac = 1; getting up or
+        // being hit changes both), in that record or the drawn slot's (rbx; the two differ in some battle types).
+        // A fake death then looks like a real one.
         void DeadNametagColor(uint32_t argb)
         {
             constexpr uint64_t kSite = 0x1401512cf;
@@ -69,7 +70,7 @@ namespace pdnet::gamepatches
                 Log(L"gamepatch: dead nametag colour skipped - the game code is not what this pdnet expects");
                 return;
             }
-            constexpr size_t kCaveSize = 128;
+            constexpr size_t kCaveSize = 176;
             uint8_t* cave = CodeCave(kCaveSize);
             if (!cave)
             {
@@ -93,11 +94,29 @@ namespace pdnet::gamepatches
             jump(0x74, toWhite);                                     // jz white
             code.insert(code.end(), { 0x83, 0x78, 0x0c, 0x00 });     // cmp dword [rax+0xc], 0
             jump(0x74, toDead);                                      // je dead
-            code.insert(code.end(), { 0x81, 0xb8, 0xb4, 0x04, 0x00, 0x00 }); // cmp dword [rax+0x4b4], 360
-            Put32(code, kPlayDead);
-            jump(0x75, toWhite);                                     // jne white
-            code.insert(code.end(), { 0x83, 0xb8, 0xac, 0x04, 0x00, 0x00, 0x01 }); // cmp dword [rax+0x4ac], 1
-            jump(0x75, toWhite);                                     // jne white
+            std::vector<size_t> toNext;
+            auto playingDead = [&](std::vector<size_t>& notPlayingDead)
+            {
+                code.insert(code.end(), { 0x81, 0xb8, 0xb4, 0x04, 0x00, 0x00 }); // cmp dword [rax+0x4b4], 360
+                Put32(code, kPlayDead);
+                jump(0x75, notPlayingDead);                                       // jne
+                code.insert(code.end(), { 0x83, 0xb8, 0xac, 0x04, 0x00, 0x00, 0x01 }); // cmp dword [rax+0x4ac], 1
+                jump(0x74, toDead);                                               // je dead
+                code.push_back(0xeb);                                             // jmp (not playing dead)
+                notPlayingDead.push_back(code.size());
+                code.push_back(0);
+            };
+            playingDead(toNext);                                     // the health record (R15)
+            size_t next = code.size();
+            for (size_t at : toNext) code[at] = static_cast<uint8_t>(next - (at + 1));
+            code.insert(code.end(), { 0x48, 0x8d, 0x05 });           // lea rax, [DAT_1404bc608]
+            Put32(code, Rel32(rip(4), At(0x1404bc608)));
+            code.insert(code.end(), { 0x83, 0xfb, 0x03 });           // cmp ebx, 3 (the drawn slot, as the game checks it)
+            jump(0x77, toWhite);                                     // ja white
+            code.insert(code.end(), { 0x48, 0x8b, 0x04, 0xd8 });     // mov rax, [rax + rbx*8]
+            code.insert(code.end(), { 0x48, 0x85, 0xc0 });           // test rax, rax
+            jump(0x74, toWhite);                                     // jz white
+            playingDead(toWhite);                                    // the drawn slot's record (RBX)
             size_t dead = code.size();
             code.insert(code.end(), { 0x48, 0xb8 });                 // dead: mov rax, colour
             Put64(code, (static_cast<uint64_t>(argb) << 32) | argb);
@@ -111,8 +130,10 @@ namespace pdnet::gamepatches
             code.insert(code.end(), { 0x48, 0x89, 0x05 });           // mov [0x14054c9b8], rax
             Put32(code, Rel32(rip(4), At(0x14054c9b8)));
             code.push_back(0xc3);                                    // ret
+            for (size_t at : toWhite) if (white - (at + 1) > 127) { Log(L"gamepatch: dead nametag colour skipped - routine too long for short jumps"); return; }
             for (size_t at : toWhite) code[at] = static_cast<uint8_t>(white - (at + 1));
             for (size_t at : toDead) code[at] = static_cast<uint8_t>(dead - (at + 1));
+            if (code.size() > kCaveSize) { Log(L"gamepatch: dead nametag colour skipped - routine larger than its space"); return; }
             code[toStore] = static_cast<uint8_t>(store - (toStore + 1));
 
             std::vector<uint8_t> call = { 0xe8 };
@@ -180,7 +201,7 @@ namespace pdnet::gamepatches
         // nametag_debug=on: the fields FUN_140150c30 checks before drawing a player's nametag, per player status
         // record (DAT_1404bc608[i]): health +0x0c, +0x54, +0x58, +0x5c, +0x60, the +0xf8 pointer and what it points
         // to, and the 16 status-effect values (+0x61b8/+0x61bc per 0xc entry; effect 8 hides the nametag).
-        constexpr int kFields = 7, kEffects = 16;
+        constexpr int kFields = 9, kEffects = 16;
         struct Snapshot { int32_t f[kFields]; int32_t effect[kEffects]; };
 
         bool ReadSnapshot(const uint8_t* rec, Snapshot& s)
@@ -192,6 +213,8 @@ namespace pdnet::gamepatches
                 auto p = *reinterpret_cast<int32_t* const*>(rec + 0xf8);
                 s.f[5] = p != nullptr;
                 s.f[6] = p ? *p : 0;
+                s.f[7] = *reinterpret_cast<const int32_t*>(rec + 0x4b4);
+                s.f[8] = *reinterpret_cast<const int32_t*>(rec + 0x4ac);
                 for (int k = 0; k < kEffects; ++k)
                     s.effect[k] = *reinterpret_cast<const int32_t*>(rec + 0x61b8 + k * 0xc) + *reinterpret_cast<const int32_t*>(rec + 0x61bc + k * 0xc);
                 return true;
@@ -286,8 +309,8 @@ namespace pdnet::gamepatches
                             if (s.effect[k]) swprintf_s(effects + wcslen(effects), _countof(effects) - wcslen(effects), L" e%d=%d", k, s.effect[k]);
                         char name[0x41] = {};
                         memcpy(name, At(0x1404bca30) + i * 0x41, 0x40);
-                        Log(L"nametag-debug: P%d '%S' hp=%d 54=%d 58=0x%X 5c=%d 60=%d f8=%s%d effects:%s", i + 1, name, s.f[0], s.f[1], s.f[2], s.f[3], s.f[4],
-                            s.f[5] ? L"*" : L"null ", s.f[6], effects[0] ? effects : L" none");
+                        Log(L"nametag-debug: P%d '%S' hp=%d 54=%d 58=0x%X 5c=%d 60=%d f8=%s%d action=%d phase=%d effects:%s", i + 1, name, s.f[0], s.f[1], s.f[2], s.f[3], s.f[4],
+                            s.f[5] ? L"*" : L"null ", s.f[6], s.f[7], s.f[8], effects[0] ? effects : L" none");
                         last[i] = s;
                         had[i] = true;
                     }
