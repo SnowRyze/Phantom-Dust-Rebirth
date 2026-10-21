@@ -8,9 +8,10 @@ unpacked copy, and it does NOT change any of the game's files: when the game sta
 from this folder, which loads pdnet into the game.
 - No Xbox sign-in. Your player name comes from this kit (you choose it during setup).
 - Lobbies and matches go through Epic Online Services (EOS). No Epic account needed, no port forwarding.
-- Saves are stored locally while pdnet is set up. On the first start pdnet copies your Xbox cloud save
-  (story progress, collection, arsenals, play time) into them, if you're signed in to Xbox and have no pdnet
-  saves yet. The cloud save itself is never changed, and later progress stays local.
+- Saves are stored locally while pdnet is set up. To bring your Xbox progress over (story, collection,
+  arsenals, play time), use IMPORT XBOX SAVE in the game's menu (it was Help & Support), then restart the game.
+  Your previous pdnet saves are kept in a backup folder, and the Xbox cloud save itself is never changed.
+  This needs the Microsoft Store version signed in to Xbox.
 - Everyone you play with needs this kit (or a newer one).
 
 What's in the kit
@@ -53,7 +54,6 @@ Edit with Notepad, then restart the game.
   dead_nametag_color=    colour of a defeated player's nametag (RRGGBB), FFE600 = yellow
                          (also shown on a player lying in Play Dead, until they move or are hit)
   lobby_arsenal_editor=  on/off: the lobby's Arsenal Lab button (was Invite) opens the Arsenal editor
-  cloud_save_import=     on/off: copy the Xbox cloud save on the first start (once)
   discord_*              lobby announcements in Discord when you host
 
 If something goes wrong
