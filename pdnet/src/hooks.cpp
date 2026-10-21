@@ -39,6 +39,12 @@ namespace pdnet
                 HRESULT hr = xsapi::GetActivationFactory(classId, xsapi.put());
                 return SUCCEEDED(hr) ? xsapi->QueryInterface(iid, factory) : hr;
             }
+            if (cls == L"Windows.System.Launcher")
+            {
+                static auto launcher = CreateLauncherFactory(); // the Help button imports the Xbox save (gamesave.cpp)
+                handled = true;
+                return static_cast<IUnknown*>(winrt::get_abi(launcher))->QueryInterface(iid, factory);
+            }
             if (cls == L"Windows.Gaming.XboxLive.Storage.GameSaveProvider")
             {
                 static auto saves = CreateGameSaveProviderFactory();

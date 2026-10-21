@@ -1,8 +1,11 @@
 #include "pch.h"
 #include "gamesave.h"
 #include "log.h"
-#include "config.h"
 #include <fstream>
+#include <condition_variable>
+#include <winrt/Windows.System.h>
+#include <winrt/Windows.UI.Notifications.h>
+#include <winrt/Windows.Data.Xml.Dom.h>
 
 namespace wf = winrt::Windows::Foundation;
 namespace wfc = winrt::Windows::Foundation::Collections;
@@ -19,6 +22,9 @@ namespace pdnet
         std::mutex g_io;
         constexpr int64_t kQuotaBytes = 256ll * 1024 * 1024;
         constexpr wchar_t kDisplayNameFile[] = L"_displayname";
+        // After an import the game's in-memory copy of the save is the old one; its writes are ignored until the game
+        // restarts, so it can't overwrite what was imported.
+        std::atomic<bool> g_writesBlocked{ false };
 
         // Container and blob names may hold characters that are not valid in file names.
         std::wstring Escape(std::wstring_view name)
@@ -225,6 +231,11 @@ namespace pdnet
 
             Status Write(const std::vector<std::pair<std::wstring, wss::IBuffer>>& writes, wfc::IIterable<hstring> const& deletes, std::wstring const& displayName) const
             {
+                if (g_writesBlocked)
+                {
+                    Log(L"GameSave: not saving %s - an Xbox save was imported; restart the game to play with it", m_name.c_str());
+                    return Status::Ok;
+                }
                 std::lock_guard guard(g_io);
                 fs::path dir = ContainerDir(m_name);
                 for (auto& [name, buffer] : writes)
@@ -482,7 +493,13 @@ namespace pdnet
             ws::GameSaveProvider Value() const { return m_value; }
         };
 
-        // ---------------------------------------------------------------- one-time import from Xbox
+        // ---------------------------------------------------------------- import from Xbox (the Help button)
+
+        // The player and title the game opened its saves for (GetForUserAsync), for the import.
+        std::mutex g_userLock;
+        winrt::Windows::System::User g_user{ nullptr };
+        hstring g_scid;
+        std::atomic<bool> g_importing{ false };
 
         // Waits for an Xbox call, at most `seconds` (an unpacked copy can hang forever trying to sign in).
         template <typename Async>
@@ -493,76 +510,193 @@ namespace pdnet
             return false;
         }
 
-        // The first time the game asks for its saves, copy the player's Xbox cloud save (story progress, collection,
-        // arsenals, play time: every container and blob) into the local store, through the real Xbox save service.
-        // Once only (marker file), never over existing local saves, and read only: the cloud save is not changed.
-        void ImportCloudSaves(winrt::Windows::System::User const& user, hstring const& scid)
+        void Notify(const std::wstring& title, const std::wstring& text)
         {
-            std::error_code ec;
-            fs::path marker = SaveRoot() / L"_cloud_import.txt";
-            if (fs::exists(marker, ec)) return;
-            auto note = [&](const std::wstring& text)
-            {
-                std::lock_guard guard(g_io);
-                std::string line = winrt::to_string(text) + "\n";
-                WriteFileAtomic(marker, reinterpret_cast<const uint8_t*>(line.data()), line.size());
-                Log(L"GameSave: cloud import: %s", text.c_str());
-            };
-            for (auto& dir : fs::directory_iterator(SaveRoot(), ec))
-                if (dir.is_directory())
-                {
-                    note(L"skipped - local saves already exist (delete the saves folder and _cloud_import.txt to import again)");
-                    return;
-                }
             try
             {
-                Log(L"GameSave: cloud import: reading the Xbox cloud save (once)...");
-                auto getProvider = ws::GameSaveProvider::GetForUserAsync(user, scid); // the real service: pdnet's own calls aren't hooked
-                if (!Finished(getProvider, 20)) return note(L"skipped - Xbox didn't answer in 20 s (not signed in to Xbox?)");
-                auto got = getProvider.GetResults();
-                if (got.Status() != Status::Ok) return note(L"skipped - Xbox save service status " + std::to_wstring(static_cast<int>(got.Status())));
-                auto provider = got.Value();
-                auto queryInfos = provider.CreateContainerInfoQuery().GetContainerInfoAsync();
-                if (!Finished(queryInfos, 30)) return note(L"skipped - listing the cloud save timed out");
-                auto infos = queryInfos.GetResults();
-                if (infos.Status() != Status::Ok) return note(L"skipped - listing the cloud save failed, status " + std::to_wstring(static_cast<int>(infos.Status())));
-                size_t containers = 0, blobs = 0, bytes = 0;
-                for (auto const& info : infos.Value())
-                {
-                    std::wstring name{ info.Name() };
-                    auto container = provider.CreateContainer(info.Name());
-                    auto queryBlobs = container.CreateBlobInfoQuery(L"").GetBlobInfoAsync();
-                    if (!Finished(queryBlobs, 30) || queryBlobs.GetResults().Status() != Status::Ok) return note(L"stopped - listing container " + name + L" failed");
-                    auto names = winrt::single_threaded_vector<hstring>();
-                    for (auto const& blob : queryBlobs.GetResults().Value()) names.Append(blob.Name());
-                    if (names.Size() == 0) continue;
-                    auto read = container.GetAsync(names.GetView());
-                    if (!Finished(read, 60) || read.GetResults().Status() != Status::Ok) return note(L"stopped - reading container " + name + L" failed");
-                    std::lock_guard guard(g_io);
-                    fs::path dir = ContainerDir(name);
-                    for (auto const& blob : read.GetResults().Value())
-                    {
-                        auto buffer = blob.Value();
-                        if (!WriteFileAtomic(dir / Escape(blob.Key()), buffer ? buffer.data() : nullptr, buffer ? buffer.Length() : 0))
-                        {
-                            Log(L"GameSave: cloud import: writing %s/%s failed", name.c_str(), blob.Key().c_str());
-                            continue;
-                        }
-                        ++blobs;
-                        bytes += buffer ? buffer.Length() : 0;
-                        Log(L"GameSave: cloud import: %s/%s (%u bytes)", name.c_str(), blob.Key().c_str(), buffer ? buffer.Length() : 0);
-                    }
-                    std::wstring display{ info.DisplayName() };
-                    if (!display.empty()) WriteFileAtomic(dir / kDisplayNameFile, reinterpret_cast<const uint8_t*>(display.data()), display.size() * sizeof(wchar_t));
-                    ++containers;
-                }
-                note(L"done - " + std::to_wstring(containers) + L" container(s), " + std::to_wstring(blobs) + L" blob(s), " + std::to_wstring(bytes) + L" bytes copied from the Xbox cloud save");
+                namespace wun = winrt::Windows::UI::Notifications;
+                auto xml = wun::ToastNotificationManager::GetTemplateContent(wun::ToastTemplateType::ToastText02);
+                auto lines = xml.GetElementsByTagName(L"text");
+                lines.Item(0).AppendChild(xml.CreateTextNode(title));
+                lines.Item(1).AppendChild(xml.CreateTextNode(text));
+                wun::ToastNotificationManager::CreateToastNotifier().Show(wun::ToastNotification(xml));
             }
             catch (...)
             {
-                note(L"skipped - Xbox save service error 0x" + std::to_wstring(static_cast<uint32_t>(winrt::to_hresult())));
+                Log(L"GameSave: couldn't show a notification (0x%08X)", winrt::to_hresult());
             }
         }
+
+        // Copies every container and blob of the player's Xbox cloud save (story progress, collection, arsenals,
+        // play time) into `target` (a fresh folder, not the live saves), through the real Xbox save service. Read
+        // only: the cloud save is not changed. Stops writing once `cancelled` is set. Returns an empty string on
+        // success, else what went wrong.
+        std::wstring CopyCloudSave(winrt::Windows::System::User const& user, hstring const& scid, fs::path const& target,
+                                   std::atomic<bool> const& cancelled, size_t& containers, size_t& blobs, size_t& bytes)
+        {
+            auto getProvider = ws::GameSaveProvider::GetForUserAsync(user, scid); // the real service: pdnet's own calls aren't hooked
+            if (!Finished(getProvider, 20)) return L"Xbox didn't answer in 20 s (signed in to Xbox?)";
+            auto got = getProvider.GetResults();
+            if (got.Status() != Status::Ok) return L"Xbox save service status " + std::to_wstring(static_cast<int>(got.Status()));
+            auto provider = got.Value();
+            auto queryInfos = provider.CreateContainerInfoQuery().GetContainerInfoAsync();
+            if (!Finished(queryInfos, 30)) return L"listing the cloud save timed out";
+            auto infos = queryInfos.GetResults();
+            if (infos.Status() != Status::Ok) return L"listing the cloud save failed, status " + std::to_wstring(static_cast<int>(infos.Status()));
+            for (auto const& info : infos.Value())
+            {
+                std::wstring name{ info.Name() };
+                auto container = provider.CreateContainer(info.Name());
+                auto queryBlobs = container.CreateBlobInfoQuery(L"").GetBlobInfoAsync();
+                if (!Finished(queryBlobs, 30) || queryBlobs.GetResults().Status() != Status::Ok) return L"listing container " + name + L" failed";
+                auto names = winrt::single_threaded_vector<hstring>();
+                for (auto const& blob : queryBlobs.GetResults().Value()) names.Append(blob.Name());
+                if (names.Size() == 0) continue;
+                auto read = container.GetAsync(names.GetView());
+                if (!Finished(read, 60) || read.GetResults().Status() != Status::Ok) return L"reading container " + name + L" failed";
+                if (cancelled) return L"cancelled";
+                fs::path dir = target / Escape(name);
+                for (auto const& blob : read.GetResults().Value())
+                {
+                    auto buffer = blob.Value();
+                    if (!WriteFileAtomic(dir / Escape(blob.Key()), buffer ? buffer.data() : nullptr, buffer ? buffer.Length() : 0))
+                        return L"writing " + name + L"/" + std::wstring(blob.Key()) + L" failed";
+                    ++blobs;
+                    bytes += buffer ? buffer.Length() : 0;
+                    Log(L"GameSave: import: %s/%s (%u bytes)", name.c_str(), blob.Key().c_str(), buffer ? buffer.Length() : 0);
+                }
+                std::wstring display{ info.DisplayName() };
+                if (!display.empty()) WriteFileAtomic(dir / kDisplayNameFile, reinterpret_cast<const uint8_t*>(display.data()), display.size() * sizeof(wchar_t));
+                ++containers;
+            }
+            return containers ? L"" : L"the Xbox cloud save is empty";
+        }
+
+        // The whole import, off the game's thread. The cloud save is read into saves.xbox-import next to the live saves;
+        // only after a complete read do the folders swap (live saves -> a dated backup folder, import -> saves). The
+        // Xbox calls can hang outright (e.g. an unpacked copy waiting for a sign-in), so they run on their own thread
+        // and the import gives up after 90 s, leaving the live saves untouched.
+        void ImportCloudSave()
+        {
+            if (g_importing.exchange(true)) return;
+            std::thread([]
+            {
+                winrt::Windows::System::User user{ nullptr };
+                hstring scid;
+                {
+                    std::lock_guard guard(g_userLock);
+                    user = g_user;
+                    scid = g_scid;
+                }
+                fs::path root = SaveRoot(), staging = root;
+                staging += L".xbox-import";
+                std::wstring problem;
+                size_t containers = 0, blobs = 0, bytes = 0;
+                if (!user) problem = L"the game hasn't opened its saves yet";
+                else
+                {
+                    Log(L"GameSave: import: reading the Xbox cloud save into %s ...", staging.c_str());
+                    std::error_code ec;
+                    fs::remove_all(staging, ec); // a leftover from an earlier attempt
+                    struct Shared { std::mutex lock; std::condition_variable done; bool finished = false; std::wstring problem; std::atomic<bool> cancelled{ false }; size_t c = 0, b = 0, n = 0; };
+                    auto shared = std::make_shared<Shared>();
+                    std::thread([shared, user, scid, staging]
+                    {
+                        std::wstring result;
+                        size_t c = 0, b = 0, n = 0;
+                        try { result = CopyCloudSave(user, scid, staging, shared->cancelled, c, b, n); }
+                        catch (...) { result = L"Xbox save service error 0x" + std::to_wstring(static_cast<uint32_t>(winrt::to_hresult())); }
+                        std::lock_guard guard(shared->lock);
+                        shared->problem = result;
+                        shared->c = c, shared->b = b, shared->n = n;
+                        shared->finished = true;
+                        shared->done.notify_all();
+                    }).detach();
+                    std::unique_lock wait(shared->lock);
+                    if (!shared->done.wait_for(wait, std::chrono::seconds(90), [&] { return shared->finished; }))
+                    {
+                        shared->cancelled = true;
+                        problem = L"Xbox didn't answer in 90 s (signed in to Xbox? an unpacked copy usually can't be)";
+                    }
+                    else
+                    {
+                        problem = shared->problem;
+                        containers = shared->c, blobs = shared->b, bytes = shared->n;
+                    }
+                    wait.unlock();
+                    if (problem.empty())
+                    {
+                        g_writesBlocked = true; // from here on the game's in-memory save is stale
+                        SYSTEMTIME t;
+                        GetLocalTime(&t);
+                        wchar_t name[64];
+                        swprintf_s(name, L"saves.before-xbox-import-%04u%02u%02u-%02u%02u%02u", t.wYear, t.wMonth, t.wDay, t.wHour, t.wMinute, t.wSecond);
+                        fs::path backup = root.parent_path() / name;
+                        std::lock_guard guard(g_io);
+                        if (fs::exists(root, ec)) fs::rename(root, backup, ec);
+                        if (ec) problem = L"couldn't move the current saves aside (" + winrt::to_hstring(ec.message()) + L")";
+                        else
+                        {
+                            fs::rename(staging, root, ec);
+                            if (ec)
+                            {
+                                problem = L"couldn't put the imported save in place (" + winrt::to_hstring(ec.message()) + L")";
+                                std::error_code ec2;
+                                fs::rename(backup, root, ec2);
+                            }
+                            else Log(L"GameSave: import: previous saves kept in %s", backup.c_str());
+                        }
+                        if (!problem.empty()) g_writesBlocked = false;
+                    }
+                }
+                if (problem.empty())
+                {
+                    Log(L"GameSave: import done - %zu container(s), %zu blob(s), %zu bytes. Saving is paused until the game restarts.", containers, blobs, bytes);
+                    Notify(L"Xbox save imported", L"Restart Phantom Dust to play with it. Saving is paused until then.");
+                }
+                else
+                {
+                    Log(L"GameSave: import FAILED - %s. The current saves are unchanged.", problem.c_str());
+                    Notify(L"Xbox save import failed", problem);
+                }
+                g_importing = false;
+            }).detach();
+        }
+
+        // Stands in for Windows.System.Launcher: the old Help & Support button opens the Phantom Dust page on
+        // xbox.com; that request starts the Xbox save import instead. Everything else goes to the real Launcher.
+        struct LauncherFactory : winrt::implements<LauncherFactory, wf::IActivationFactory, winrt::Windows::System::ILauncherStatics>
+        {
+            winrt::Windows::System::ILauncherStatics m_real{ winrt::get_activation_factory<winrt::Windows::System::Launcher, winrt::Windows::System::ILauncherStatics>() };
+
+            wf::IInspectable ActivateInstance() const { throw winrt::hresult_not_implemented(); }
+
+            static bool IsHelpPage(wf::Uri const& uri)
+            {
+                std::wstring host{ uri ? uri.Host() : hstring{} };
+                for (auto& c : host) c = static_cast<wchar_t>(towlower(c));
+                return host == L"xbox.com" || (host.size() > 9 && host.compare(host.size() - 9, 9, L".xbox.com") == 0);
+            }
+
+            wf::IAsyncOperation<bool> LaunchFileAsync(winrt::Windows::Storage::IStorageFile const& file) const { return m_real.LaunchFileAsync(file); }
+            wf::IAsyncOperation<bool> LaunchFileAsync(winrt::Windows::Storage::IStorageFile const& file, winrt::Windows::System::LauncherOptions const& options) const { return m_real.LaunchFileAsync(file, options); }
+
+            wf::IAsyncOperation<bool> LaunchUriAsync(wf::Uri const& uri) const
+            {
+                if (!IsHelpPage(uri)) return m_real.LaunchUriAsync(uri);
+                Log(L"GameSave: Help button (%s) -> importing the Xbox save", uri.AbsoluteUri().c_str());
+                ImportCloudSave();
+                return Done();
+            }
+
+            wf::IAsyncOperation<bool> LaunchUriAsync(wf::Uri const& uri, winrt::Windows::System::LauncherOptions const& options) const
+            {
+                if (!IsHelpPage(uri)) return m_real.LaunchUriAsync(uri, options);
+                return LaunchUriAsync(uri);
+            }
+
+            static wf::IAsyncOperation<bool> Done() { co_return true; }
+        };
 
         struct ProviderFactory : winrt::implements<ProviderFactory, wf::IActivationFactory, ws::IGameSaveProviderStatics>
         {
@@ -574,10 +708,10 @@ namespace pdnet
             wf::IAsyncOperation<ws::GameSaveProviderGetResult> GetForUserAsync(winrt::Windows::System::User user, hstring scid)
             {
                 Log(L"GameSave: GetForUserAsync(scid=%s) -> local provider at %s", scid.c_str(), SaveRoot().c_str());
-                if (GetConfig().cloudSaveImport)
                 {
-                    co_await winrt::resume_background(); // the import waits on Xbox; never on the game's thread
-                    ImportCloudSaves(user, scid);
+                    std::lock_guard guard(g_userLock);
+                    g_user = user;
+                    g_scid = scid;
                 }
                 auto provider = Make<ws::GameSaveProvider, Provider>(user);
                 co_return Make<ws::GameSaveProviderGetResult, ProviderGetResult>(provider);
@@ -593,5 +727,10 @@ namespace pdnet
     wf::IActivationFactory CreateGameSaveProviderFactory()
     {
         return winrt::make<ProviderFactory>();
+    }
+
+    wf::IActivationFactory CreateLauncherFactory()
+    {
+        return winrt::make<LauncherFactory>();
     }
 }

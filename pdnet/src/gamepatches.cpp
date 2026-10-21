@@ -454,7 +454,19 @@ namespace pdnet::gamepatches
             }
         }
 
-        void RenameLobbyInvite()
+        // Text replacements in the string table, matched on key and on the English text (other languages are left).
+        struct Rename { const char* key; const char* find; const char* replace; };
+        constexpr Rename kRenames[] = {
+            { "lobby_normal", "#Invite", "#Arsenal Lab" },
+            { "lobby_team", "#Invite", "#Arsenal Lab" },
+            { "lobby_locked_out", "#Invite", "#Arsenal Lab" },
+            // The Help & Support button (the Phantom Dust page on xbox.com) imports the Xbox save (gamesave.cpp).
+            { "help_main", "HELP & SUPPORT", "IMPORT XBOX SAVE" },
+            { "help", "Help & Support", "Import Xbox Save" },
+            { "help_hint", "Go to the Phantom Dust page on Xbox.com.", "Copy your Xbox Live save (progress, arsenals, play time) into this game. Restart the game afterwards." },
+        };
+
+        void RenameStrings()
         {
             static std::mutex lock;
             static std::map<std::string, std::string> renamed; // stable storage for the new values
@@ -465,23 +477,27 @@ namespace pdnet::gamepatches
             {
                 char key[64], value[512];
                 if (!CopyString(t.keys[i], key, sizeof(key))) return;
-                if (strcmp(key, "lobby_normal") != 0 && strcmp(key, "lobby_team") != 0 && strcmp(key, "lobby_locked_out") != 0) continue;
-                if (!CopyString(t.values[i], value, sizeof(value))) return;
-                std::string text = value;
-                size_t at = text.find("#Invite");
-                if (at == std::string::npos) continue; // already renamed, or another language
-                text.replace(at, 7, "#Arsenal Lab");
-                std::string& stored = renamed[key];
-                stored = text;
-                t.values[i] = stored.data();
-                Log(L"gamepatch: lobby button '%S' renamed to Arsenal Lab", key);
+                for (auto& r : kRenames)
+                {
+                    if (strcmp(key, r.key) != 0) continue;
+                    if (!CopyString(t.values[i], value, sizeof(value))) return;
+                    std::string text = value;
+                    size_t at = text.find(r.find);
+                    if (at == std::string::npos) break; // already renamed, or another language
+                    text.replace(at, strlen(r.find), r.replace);
+                    std::string& stored = renamed[key];
+                    stored = text;
+                    t.values[i] = stored.data();
+                    Log(L"gamepatch: text '%S' now says %S", key, r.replace);
+                    break;
+                }
             }
         }
 
         int HookedPushMenu(int64_t manager, int menu, char force)
         {
             int current = CurrentMenu(manager);
-            if (menu == kLobbyMenu) RenameLobbyInvite();
+            RenameStrings(); // cheap; covers string tables loaded after start-up
             if (menu != current) Log(L"menu: open %d (from %d)", menu, current);
             if (g_editorFromLobby && current == kEditorMenu && menu != kEditorMenu && menu != kStockMenu)
             {
@@ -547,7 +563,7 @@ namespace pdnet::gamepatches
             if (!push) return;
             g_pushMenu = push;
             Log(L"gamepatch: lobby Arsenal editor ready (the lobby's invite button opens it)");
-            RenameLobbyInvite(); // again whenever the lobby opens, in case the strings were loaded later
+            RenameStrings(); // again whenever a menu opens, in case the strings were loaded later
         }
     }
 
