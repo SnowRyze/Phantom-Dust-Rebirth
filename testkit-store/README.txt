@@ -46,6 +46,8 @@ Edit with Notepad, then restart the game.
   display_name=          your name (Setup.bat sets it)
   nametags_on_bodies=    on/off: defeated players keep their nametag. In a lobby the HOST's setting applies.
   dead_nametag_color=    colour of a defeated player's nametag (RRGGBB), FFE600 = yellow
+                         (also shown on a player lying in Play Dead, until they move or are hit)
+  lobby_arsenal_editor=  on/off: the lobby's Invite button opens the Arsenal editor
   discord_*              lobby announcements in Discord when you host
 
 If something goes wrong
