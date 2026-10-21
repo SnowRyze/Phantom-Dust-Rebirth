@@ -316,3 +316,9 @@ Don't also run `lobbytool watch` on the same channel, or lobbies are announced t
 Discord messages: 'opened' is posted once the lobby has the game's search handle and names gametype (0 Battle Royale, 1 Tag Team, 2 One-on-One) and gamerule (0 Standard Battle ... 11 Annihilate the Odd One, order from Assets\Data\Menu\livesession_en.ssb); no rating. Confirmed in game with build-discord2 (7C6381D2), installed in the Direct build.
 
 Discord toggles (pdnet.ini, default on): discord_lobby_messages (opened/closed), discord_player_messages (<name> joined/left/full). Join/leave messages name players from each member's PD_NAME.
+
+## Stage / variant selection (RE notes, PDUWP Ghidra addresses)
+- Stage id = DAT_1403e0304 (0-29, names in Assets\Data\setup\stageset\stageset*.dat; files Map\stNN.alr/.dat; e.g. 02 Spiral / 12 Lightning / 22 Sunlight Highway). Units digit = arena (camera st%02dcam.alr uses id % 10).
+- Online: the host's stage menu picks a stage-set entry DAT_14051775c (FUN_140213c00); the table at DAT_140509bb8 (40-byte entries, filled at run time) gives [0] stage id and [1] layout count; the host rolls DAT_140527c54 = rand() % count (rolled again for each next round in FUN_140187b70).
+- That layout index (DAT_1404c51f0 / byte DAT_140531dcf) selects a section inside stNN.dat: header uint32 table, slot index+1 (falls back to slot 0 if FFFFFFFF), FUN_140203720. Arena 8 (Zain) forces 0.
+- Sync: not in the session or lobby. The host (slot 0) puts stage id + layout (+ 1405277b4/1405277fc/14051ede0/14050e13c) in its 0x80-byte peer message (FUN_1401910a0 -> FUN_140125430); clients copy them only from slot 0 (FUN_140191a60, "Recv Name %s"). The search handle's stage=3 is unrelated (always 3).
