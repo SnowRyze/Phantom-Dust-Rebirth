@@ -2,7 +2,6 @@
 #include "gamepatches.h"
 #include "config.h"
 #include "log.h"
-#include "../xsapi/xsapi.h"
 
 namespace pdnet::gamepatches
 {
@@ -479,166 +478,11 @@ namespace pdnet::gamepatches
             }
         }
 
-        // Lobby rule change (host only): the host's Change Stage (livestagesel, 47) opens the session settings menu
-        // (liverulesel, 48) instead; it shows the current game type and rule and has the stage list inside (it opens
-        // 47 itself). It edits the live values directly with the game's own rules about which rule fits which game
-        // type (FUN_140183010): game type DAT_14050d2d8, rule DAT_140518cf0; the stage is DAT_14051775c (stage set
-        // entry), DAT_140527bc8 (stage id) and DAT_140527c54 (layout). Confirming (the menu moving on to the next
-        // creation step) returns to the lobby and re-publishes; going back restores the saved values. The menu's
-        // set-up resets type and rule to defaults (session command 80); while it is opened from the lobby the
-        // lobby's values are put back right after. A game type that the current players don't fit is refused.
-        constexpr int kSessionMenu = 36, kStageMenu = 47, kRuleMenu = 48;
-        std::atomic<bool> g_ruleFromLobby{ false };
-        int32_t g_savedType = 0, g_savedRule = 0, g_savedStage[3] = {};
-        constexpr uint64_t kStageVars[3] = { 0x14051775c, 0x140527bc8, 0x140527c54 };
-        int32_t& GameType() { return *reinterpret_cast<int32_t*>(At(0x14050d2d8)); }
-        int32_t& GameRule() { return *reinterpret_cast<int32_t*>(At(0x140518cf0)); }
-
-        using ScriptCommandFn = int64_t (*)(int32_t* args);
-        ScriptCommandFn g_resetSettings = nullptr; // session command 80 (0x140213f00)
-
-        int64_t HookedResetSettings(int32_t* args)
-        {
-            int64_t result = g_resetSettings(args);
-            if (g_ruleFromLobby && CurrentMenu(MenuManager()) == kRuleMenu)
-            {
-                GameType() = g_savedType;
-                GameRule() = g_savedRule;
-            }
-            return result;
-        }
-
-        // Session command 190 (0x140216150) abandons the session being created (FUN_140181d70, as a failed create
-        // does); the settings menu runs it when backing out. Opened from the lobby, that would tear down the live
-        // lobby (other players dropped, endless loading), so it does nothing then.
-        ScriptCommandFn g_abandonSession = nullptr;
-        // Session command 29 (0x140213b00 -> FUN_1401824c0) runs before it, polled until it returns 0: it finishes or
-        // cancels every pending session task, runs the network shutdown callback and resets the session state to
-        // idle. Same treatment: from the lobby it reports "done" without running.
-        ScriptCommandFn g_shutDownSession = nullptr;
-
-        int64_t HookedShutDownSession(int32_t* args)
-        {
-            if (g_ruleFromLobby && CurrentMenu(MenuManager()) == kRuleMenu) return 0;
-            return g_shutDownSession(args);
-        }
-
-        int64_t HookedAbandonSession(int32_t* args)
-        {
-            if (g_ruleFromLobby && CurrentMenu(MenuManager()) == kRuleMenu)
-            {
-                Log(L"menu: backing out of the settings menu - keeping the lobby (not abandoning the session)");
-                return 0;
-            }
-            return g_abandonSession(args);
-        }
-
-        ScriptCommandFn ReplaceSessionCommand(int index, ScriptCommandFn hook)
-        {
-            auto entry = reinterpret_cast<uint64_t*>(At(0x1403f1150) + index * 8);
-            DWORD old = 0;
-            if (!VirtualProtect(entry, 8, PAGE_READWRITE, &old)) return nullptr;
-            auto original = reinterpret_cast<ScriptCommandFn>(*entry);
-            *entry = reinterpret_cast<uint64_t>(hook);
-            VirtualProtect(entry, 8, old, &old);
-            return original;
-        }
-
-        void HookResetSettings()
-        {
-            g_resetSettings = ReplaceSessionCommand(80, &HookedResetSettings);
-            g_abandonSession = ReplaceSessionCommand(190, &HookedAbandonSession);
-            g_shutDownSession = ReplaceSessionCommand(29, &HookedShutDownSession);
-        }
-
-        void PublishRule()
-        {
-            int32_t type = GameType(), rule = GameRule();
-            *reinterpret_cast<int32_t*>(At(0x1405277b4)) = type; // the host's settings message (FUN_1401910a0)
-            *reinterpret_cast<int32_t*>(At(0x1405277fc)) = rule;
-            *reinterpret_cast<int32_t*>(At(0x140527ab8)) = rule; // the battle's rule (set from it on session start)
-            // The session property table (DAT_14051ef80: 18 entries of 0x18 bytes, id in the low 16 bits at +0,
-            // value at +8): id 3 = game type, id 4 = rule.
-            for (int k = 0; k < 18; ++k)
-            {
-                uint8_t* entry = At(0x14051ef80) + k * 0x18;
-                uint32_t id = *reinterpret_cast<uint32_t*>(entry) & 0xffff;
-                if (id == 3) *reinterpret_cast<int64_t*>(entry + 8) = type;
-                if (id == 4) *reinterpret_cast<int64_t*>(entry + 8) = rule;
-            }
-            int updated = reinterpret_cast<int (*)()>(At(0x140283220))(); // session property update
-            reinterpret_cast<void (*)()>(At(0x140191210))();              // settings message to every other player
-            Log(L"menu: lobby settings published: game type %d, rule %d, stage %d layout %d; session update %d, sent to the other players",
-                type, rule, *reinterpret_cast<int32_t*>(At(0x140527bc8)), *reinterpret_cast<int32_t*>(At(0x140527c54)), updated);
-        }
-
         int HookedPushMenu(int64_t manager, int menu, char force)
         {
             int current = CurrentMenu(manager);
             if (menu == kLobbyMenu) RenameLobbyInvite();
             if (menu != current) Log(L"menu: open %d (from %d)", menu, current);
-            if (current == kLobbyMenu && menu == kStageMenu && !g_ruleFromLobby && *reinterpret_cast<int32_t*>(At(0x140527bc4)) == 0)
-            {
-                // The host (player slot 0) chose Change Stage: open the full settings menu instead.
-                g_savedType = GameType();
-                g_savedRule = GameRule();
-                for (int k = 0; k < 3; ++k) g_savedStage[k] = *reinterpret_cast<int32_t*>(At(kStageVars[k]));
-                // The menu's page (DAT_140518ce4, a script variable; the session set-up command 0x140213cd0 resets it)
-                // still says "done" from creating the lobby, which makes the menu skip straight to the next step.
-                auto var = [](uint64_t a) { return *reinterpret_cast<int32_t*>(At(a)); };
-                Log(L"menu: Change Stage in the lobby - opening the settings menu (game type %d, rule %d; page %d, c0e4 %d, c04c %d, c0ec %d, c12c %d)",
-                    g_savedType, g_savedRule, var(0x140518ce4), var(0x14051c0e4), var(0x14051c04c), var(0x14051c0ec), var(0x14051c12c));
-                *reinterpret_cast<int32_t*>(At(0x140518ce4)) = 0;
-                // The menu treats a chosen stage (session command 41 reads DAT_14051775c) as "settings complete" and
-                // moves on at once; while creating a lobby it is -1. Cancelling restores it.
-                *reinterpret_cast<int32_t*>(At(0x14051775c)) = -1;
-                g_ruleFromLobby = true;
-                return g_pushMenu(manager, kRuleMenu, force);
-            }
-            if (g_ruleFromLobby && current == kRuleMenu && menu == kSessionMenu)
-            {
-                // Backing out: the menu returns to the session menu (36). Restore everything and go back to the lobby.
-                g_ruleFromLobby = false;
-                GameType() = g_savedType;
-                GameRule() = g_savedRule;
-                for (int k = 0; k < 3; ++k) *reinterpret_cast<int32_t*>(At(kStageVars[k])) = g_savedStage[k];
-                Log(L"menu: lobby settings change cancelled");
-                return g_popMenu();
-            }
-            if (g_ruleFromLobby && current == kRuleMenu && menu != kRuleMenu && menu != kStageMenu)
-            {
-                g_ruleFromLobby = false;
-                if (GameType() != g_savedType)
-                {
-                    // One-on-One holds 2 players, Battle Royale and Tag Team 4 (DAT_14051c0a4 = the session's
-                    // player limit, as FUN_140181ba0 sets it). Players now: the lobby's members (pdnet's session).
-                    int players = static_cast<int>(xsapi::SharedSessionMembers());
-                    int limit = GameType() == 2 ? 2 : 4;
-                    if (GameType() == 1)
-                    {
-                        // Switching a live lobby into Tag Team crashed the other players' games (team lobby layout
-                        // without team data); leaving Tag Team works.
-                        Log(L"menu: switching a lobby into Tag Team isn't supported - keeping type %d rule %d", g_savedType, g_savedRule);
-                        GameType() = g_savedType;
-                        GameRule() = g_savedRule;
-                    }
-                    else if (players > limit)
-                    {
-                        Log(L"menu: %d players don't fit game type %d (max %d) - keeping type %d rule %d", players, GameType(), limit, g_savedType, g_savedRule);
-                        GameType() = g_savedType;
-                        GameRule() = g_savedRule;
-                    }
-                    else
-                    {
-                        *reinterpret_cast<int32_t*>(At(0x14051c0a4)) = limit;
-                        Log(L"menu: game type %d -> %d (%d players, limit %d)", g_savedType, GameType(), players, limit);
-                        // The Epic lobby keeps the limit it was created with; resize it (Epic calls wait, so not here).
-                        std::thread([limit] { xsapi::SetHostedSessionsMaxMembers(static_cast<uint32_t>(limit)); }).detach();
-                    }
-                }
-                PublishRule();
-                return g_popMenu();
-            }
             if (g_editorFromLobby && current == kEditorMenu && menu != kEditorMenu && menu != kStockMenu)
             {
                 Log(L"menu: leaving the Arsenal editor opened from the lobby - back to the lobby instead of menu %d", menu);
@@ -653,13 +497,6 @@ namespace pdnet::gamepatches
             int current = CurrentMenu(MenuManager());
             Log(L"menu: back (from %d)", current);
             if (current == kEditorMenu) g_editorFromLobby = false;
-            if (current == kRuleMenu && g_ruleFromLobby.exchange(false))
-            {
-                GameType() = g_savedType; // cancelled: the menu changed the live values while browsing
-                GameRule() = g_savedRule;
-                for (int k = 0; k < 3; ++k) *reinterpret_cast<int32_t*>(At(kStageVars[k])) = g_savedStage[k];
-                Log(L"menu: lobby settings change cancelled");
-            }
             return g_popMenu();
         }
 
@@ -701,92 +538,6 @@ namespace pdnet::gamepatches
             return trampoline;
         }
 
-        // menu_debug=on: wraps each of the 196 session script commands (table 0x1403f1150) in a stub that logs the
-        // command number, its first argument and its result while the settings menu (48) is on screen.
-        void LogScriptCommand(uint32_t index, int64_t result, const int32_t* args)
-        {
-            static std::atomic<int> logged{ 0 };
-            if (CurrentMenu(MenuManager()) != kRuleMenu || logged >= 3000) return;
-            ++logged;
-            int32_t first = 0;
-            if (args && !IsBadReadPtr(args, 4)) first = args[0];
-            Log(L"script: cmd %u(arg %d) -> %lld", index, first, result);
-        }
-
-        void ScriptCommandLog()
-        {
-            constexpr uint64_t kTable = 0x1403f1150;
-            constexpr int kCount = 196;
-            auto stubs = static_cast<uint8_t*>(VirtualAlloc(nullptr, kCount * 64, MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE));
-            if (!stubs) return;
-            auto table = reinterpret_cast<uint64_t*>(At(kTable));
-            DWORD old = 0;
-            if (!VirtualProtect(table, kCount * 8, PAGE_READWRITE, &old)) return;
-            for (int i = 0; i < kCount; ++i)
-            {
-                std::vector<uint8_t> s = { 0x48, 0x83, 0xec, 0x38,              // sub rsp, 0x38
-                                           0x48, 0x89, 0x4c, 0x24, 0x20,        // mov [rsp+0x20], rcx
-                                           0x48, 0xb8 };                        // mov rax, original
-                Put64(s, table[i]);
-                s.insert(s.end(), { 0xff, 0xd0,                                 // call rax
-                                    0x48, 0x89, 0x44, 0x24, 0x28,               // mov [rsp+0x28], rax
-                                    0xb9 });                                    // mov ecx, index
-                Put32(s, i);
-                s.insert(s.end(), { 0x48, 0x89, 0xc2,                           // mov rdx, rax
-                                    0x4c, 0x8b, 0x44, 0x24, 0x20,               // mov r8, [rsp+0x20]
-                                    0x48, 0xb8 });                              // mov rax, LogScriptCommand
-                Put64(s, reinterpret_cast<uint64_t>(&LogScriptCommand));
-                s.insert(s.end(), { 0xff, 0xd0,                                 // call rax
-                                    0x48, 0x8b, 0x44, 0x24, 0x28,               // mov rax, [rsp+0x28]
-                                    0x48, 0x83, 0xc4, 0x38,                     // add rsp, 0x38
-                                    0xc3 });                                    // ret
-                memcpy(stubs + i * 64, s.data(), s.size());
-                table[i] = reinterpret_cast<uint64_t>(stubs + i * 64);
-            }
-            VirtualProtect(table, kCount * 8, old, &old);
-            FlushInstructionCache(GetCurrentProcess(), stubs, kCount * 64);
-            Log(L"gamepatch: menu_debug - logging session script commands while the settings menu is open");
-        }
-
-        // Other players' PCs: the host's settings message (FUN_1401910a0 -> FUN_140191a60 on the receiving side)
-        // only updates 1405277b4 (type) / 1405277fc (rule), which the game uses for the next battle. The lobby itself
-        // keeps the type and player limit this PC joined with (DAT_14050d2d8, DAT_14051c0a4), so after the host
-        // turns a One-on-One into a 4-player lobby, a 3rd player who joins is never shown here. While in the lobby
-        // as a non-host (player slot DAT_140527bc4 != 0), apply the host's type and rule to this PC's lobby too.
-        void FollowHostSettings()
-        {
-            std::thread([]
-            {
-                // Only changes seen while in the lobby count: on arriving, the host's values may still be left over
-                // from an earlier session until the host's next message.
-                bool inLobby = false;
-                int32_t seenType = -1, seenRule = -1;
-                for (;;)
-                {
-                    Sleep(250);
-                    bool lobby = CurrentMenu(MenuManager()) == kLobbyMenu && *reinterpret_cast<int32_t*>(At(0x140527bc4)) != 0;
-                    int32_t type = *reinterpret_cast<int32_t*>(At(0x1405277b4)), rule = *reinterpret_cast<int32_t*>(At(0x1405277fc));
-                    if (!lobby || !inLobby)
-                    {
-                        inLobby = lobby;
-                        seenType = type;
-                        seenRule = rule;
-                        continue;
-                    }
-                    if (type == seenType && rule == seenRule) continue;
-                    seenType = type;
-                    seenRule = rule;
-                    if (type < 0 || type > 2 || rule < 0 || rule > 11) continue;
-                    if (type == GameType() && rule == GameRule()) continue;
-                    Log(L"menu: the host changed the lobby to game type %d rule %d (this PC had %d / %d) - following", type, rule, GameType(), GameRule());
-                    GameType() = type;
-                    GameRule() = rule;
-                    *reinterpret_cast<int32_t*>(At(0x140527ab8)) = rule;
-                    *reinterpret_cast<int32_t*>(At(0x14051c0a4)) = type == 2 ? 2 : 4;
-                }
-            }).detach();
-        }
-
         void LobbyArsenalEditor()
         {
             auto pop = reinterpret_cast<PopMenuFn>(InlineHook(0x1402461f0, reinterpret_cast<void*>(&HookedPopMenu), L"menu back"));
@@ -797,9 +548,6 @@ namespace pdnet::gamepatches
             g_pushMenu = push;
             Log(L"gamepatch: lobby Arsenal editor ready (the lobby's invite button opens it)");
             RenameLobbyInvite(); // again whenever the lobby opens, in case the strings were loaded later
-            HookResetSettings(); // before the debug wrappers, so they wrap this one
-            FollowHostSettings();
-            if (GetConfig().menuDebug) ScriptCommandLog();
         }
     }
 

@@ -1,6 +1,5 @@
 #include "xsapi_pch.h"
 #include "mpsd.h"
-#include "xsapi.h"
 #include "../src/lobbies.h"
 #include "../src/discord.h"
 #include "../src/config.h"
@@ -849,31 +848,6 @@ namespace pdnet::mpsd
         return out;
     }
 
-    int SessionStore::SetHostedMaxMembers(uint32_t maxMembers)
-    {
-        std::lock_guard writing(m_writeLock);
-        std::vector<SessionDoc> docs;
-        {
-            std::lock_guard guard(m_lock);
-            for (auto& [key, doc] : m_sessions)
-                if (doc.shared && doc.maxMembers != maxMembers) docs.push_back(doc);
-        }
-        int changed = 0;
-        std::string me = lobbies::LocalUserId();
-        for (auto& doc : docs)
-        {
-            auto live = lobbies::Read(U8(LobbyIdFor(doc.Key())));
-            if (!live || !live->joined || live->ownerId != me) continue;
-            doc.maxMembers = maxMembers;
-            Push(doc); // the owner's push applies a changed member limit to the lobby
-            Log(L"xsapi-pdnet: %s/%s now holds %u players", doc.templateName.c_str(), doc.sessionName.c_str(), maxMembers);
-            std::lock_guard guard(m_lock);
-            if (auto it = m_sessions.find(doc.Key()); it != m_sessions.end()) it->second = doc;
-            ++changed;
-        }
-        return changed;
-    }
-
     bool SessionStore::SetSearchHandle(const std::wstring& key, SearchHandle handle)
     {
         std::lock_guard writing(m_writeLock);
@@ -1008,24 +982,5 @@ namespace pdnet::mpsd
         }
         Log(L"xsapi-pdnet: EOS sign-in lost; %zu shared session(s) are now local only", count);
         if (count && lost) lost();
-    }
-}
-
-namespace pdnet::xsapi
-{
-    int SetHostedSessionsMaxMembers(uint32_t maxMembers) { return mpsd::SessionStore::Instance().SetHostedMaxMembers(maxMembers); }
-
-    uint32_t SharedSessionMembers()
-    {
-        uint32_t most = 0;
-        for (auto& doc : mpsd::SessionStore::Instance().All())
-            if (doc->shared)
-            {
-                uint32_t n = 0;
-                for (auto& m : doc->members)
-                    if (!m.reservation) ++n;
-                most = (std::max)(most, n);
-            }
-        return most;
     }
 }

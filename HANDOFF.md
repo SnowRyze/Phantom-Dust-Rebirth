@@ -354,3 +354,5 @@ Live test (1v1 -> BR, 3rd player joined): host fine, but player 2 (joined as 1v1
 
 Volume (pdlaunch, untested): pdlaunch now stays running until the game exits. It finds the game's audio session (IAudioSessionManager2, matched by process id), holds it at splash_volume% of the remembered level for splash_seconds, then the remembered level, and afterwards saves every Volume Mixer change to volume.txt next to pdlaunch.exe. Settings remember_volume / splash_volume / splash_seconds in pdnet.ini (kit folder).
 Volume fix confirmed in game 2026-10-21 (quieter splash, Volume Mixer level remembered). Kit D:\PhantomDust-pdnet-TestKit-0CD1AD37-with-eos.zip rebuilt with it.
+
+Reverted the lobby settings change (2026-10-21, user: 'isn't working well'): gamepatches.cpp/.h, config.cpp/.h, mpsd.cpp/.h and xsapi.h are back to cf94720 (Arsenal Lab + label rename, Play Dead, nametags kept). Kept: the one-kit launcher setup, pdlaunch volume fix, Collect-Log fix. The RE notes above (menu 48 / session commands 29, 41, 80, 190) stay for a later attempt. build-audio1 (E3E4A487).

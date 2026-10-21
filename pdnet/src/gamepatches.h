@@ -13,5 +13,4 @@ namespace pdnet::gamepatches
     // The lobby's invite button (no Xbox Live invites any more) opens the Arsenal editor; leaving it returns to the
     // lobby. Returns false when not in the lobby menu (or the menu hooks aren't installed).
     bool OpenLobbyArsenalEditor();
-
 }

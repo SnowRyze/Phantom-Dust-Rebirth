@@ -151,7 +151,6 @@ namespace pdnet::mpsd
 
         // Search handles: stored with the session (and its lobby), found by SearchHandles.
         bool SetSearchHandle(const std::wstring& key, SearchHandle handle);
-        int SetHostedMaxMembers(uint32_t maxMembers); // shared sessions whose lobby this PC owns
         bool ClearSearchHandle(const std::wstring& handleId);
         std::vector<SessionPtr> SearchHandles(const std::wstring& scid, const std::wstring& templateName);
 

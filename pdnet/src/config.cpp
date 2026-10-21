@@ -83,7 +83,6 @@ namespace pdnet
                 else if (key == "control_port") c.controlPort = static_cast<uint16_t>(std::stoul(value));
                 else if (key == "qos_probes") c.qosProbes = (std::max)(1ul, std::stoul(value));
                 else if (key == "test_peer") c.testPeer = _stricmp(value.c_str(), "on") == 0;
-                else if (key == "menu_debug") c.menuDebug = _stricmp(value.c_str(), "on") == 0;
                 else if (key == "lobby_arsenal_editor") c.lobbyArsenalEditor = _stricmp(value.c_str(), "off") != 0;
                 else if (key == "nametags_on_bodies") c.nametagsOnBodies = _stricmp(value.c_str(), "off") != 0;
                 else if (key == "dead_nametag_color" && value.size() == 6) c.deadNametagColor = 0xFF000000u | std::stoul(value, nullptr, 16);

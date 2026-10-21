@@ -50,9 +50,6 @@ Edit with Notepad, then restart the game.
   lobby_arsenal_editor=  on/off: the lobby's Arsenal Lab button (was Invite) opens the Arsenal editor
   discord_*              lobby announcements in Discord when you host
 
-In the lobby, the host's Change Stage opens the full settings menu (game type, rule and stage).
-Switching a lobby into Tag Team isn't supported yet.
-
 If something goes wrong
 -----------------------
 - The game starts with Xbox Live as usual: pdnet didn't load. Run Collect-Log.bat and send pdlaunch-log.
