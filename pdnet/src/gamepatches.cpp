@@ -158,6 +158,68 @@ namespace pdnet::gamepatches
         }
     }
 
+    namespace
+    {
+        // nametag_debug=on: the fields FUN_140150c30 checks before drawing a player's nametag, per player status
+        // record (DAT_1404bc608[i]): health +0x0c, +0x54, +0x58, +0x5c, +0x60, the +0xf8 pointer and what it points
+        // to, and the 16 status-effect values (+0x61b8/+0x61bc per 0xc entry; effect 8 hides the nametag).
+        constexpr int kFields = 7, kEffects = 16;
+        struct Snapshot { int32_t f[kFields]; int32_t effect[kEffects]; };
+
+        bool ReadSnapshot(const uint8_t* rec, Snapshot& s)
+        {
+            __try
+            {
+                const int offsets[] = { 0x0c, 0x54, 0x58, 0x5c, 0x60 };
+                for (int k = 0; k < 5; ++k) s.f[k] = *reinterpret_cast<const int32_t*>(rec + offsets[k]);
+                auto p = *reinterpret_cast<int32_t* const*>(rec + 0xf8);
+                s.f[5] = p != nullptr;
+                s.f[6] = p ? *p : 0;
+                for (int k = 0; k < kEffects; ++k)
+                    s.effect[k] = *reinterpret_cast<const int32_t*>(rec + 0x61b8 + k * 0xc) + *reinterpret_cast<const int32_t*>(rec + 0x61bc + k * 0xc);
+                return true;
+            }
+            __except (EXCEPTION_EXECUTE_HANDLER)
+            {
+                return false;
+            }
+        }
+
+        void NametagDebug()
+        {
+            std::thread([]
+            {
+                Log(L"nametag-debug: logging nametag fields of each player when they change");
+                Snapshot last[4]{};
+                bool had[4]{};
+                for (;;)
+                {
+                    Sleep(100);
+                    for (int i = 0; i < 4; ++i)
+                    {
+                        auto rec = *reinterpret_cast<uint8_t**>(At(0x1404bc608) + i * 8);
+                        Snapshot s{};
+                        if (!rec || !ReadSnapshot(rec, s))
+                        {
+                            had[i] = false;
+                            continue;
+                        }
+                        if (had[i] && memcmp(&s, &last[i], sizeof(s)) == 0) continue;
+                        wchar_t effects[256] = {};
+                        for (int k = 0; k < kEffects; ++k)
+                            if (s.effect[k]) swprintf_s(effects + wcslen(effects), _countof(effects) - wcslen(effects), L" e%d=%d", k, s.effect[k]);
+                        char name[0x41] = {};
+                        memcpy(name, At(0x1404bca30) + i * 0x41, 0x40);
+                        Log(L"nametag-debug: P%d '%S' hp=%d 54=%d 58=0x%X 5c=%d 60=%d f8=%s%d effects:%s", i + 1, name, s.f[0], s.f[1], s.f[2], s.f[3], s.f[4],
+                            s.f[5] ? L"*" : L"null ", s.f[6], effects[0] ? effects : L" none");
+                        last[i] = s;
+                        had[i] = true;
+                    }
+                }
+            }).detach();
+        }
+    }
+
     void Apply()
     {
         static std::once_flag once;
@@ -165,6 +227,7 @@ namespace pdnet::gamepatches
         {
             g_bodyTags = GetConfig().nametagsOnBodies ? 1 : 0;
             if (NametagsOnBodies()) DeadNametagColor(GetConfig().deadNametagColor);
+            if (GetConfig().nametagDebug) NametagDebug();
         });
     }
 
