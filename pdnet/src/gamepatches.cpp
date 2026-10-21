@@ -185,8 +185,67 @@ namespace pdnet::gamepatches
             }
         }
 
+        bool CopyMemory32(const uint8_t* from, int32_t* to, size_t count)
+        {
+            __try
+            {
+                memcpy(to, from, count * 4);
+                return true;
+            }
+            __except (EXCEPTION_EXECUTE_HANDLER)
+            {
+                return false;
+            }
+        }
+
+        // nametag_debug=deep: also every int32 of player 1's status record (DAT_1404bc608[0], 0x6400 bytes) and
+        // player object (DAT_1404bc9d8[0], 0x14000 bytes) that changes rarely: each offset is logged for its first
+        // 8 changes, so constantly changing values (positions, timers) drop out within a second.
+        void DeepDebug()
+        {
+            std::thread([]
+            {
+                struct Area { const wchar_t* name; uint64_t table; size_t count; std::vector<int32_t> last; std::vector<uint8_t> changes; bool have = false; };
+                Area areas[] = { { L"status", 0x1404bc608, 0x6400 / 4 }, { L"object", 0x1404bc9d8, 0x14000 / 4 } };
+                Log(L"nametag-debug: deep mode, logging rare changes in player 1's status record and player object");
+                std::vector<int32_t> now;
+                for (;;)
+                {
+                    Sleep(50);
+                    for (auto& a : areas)
+                    {
+                        auto base = *reinterpret_cast<uint8_t**>(At(a.table));
+                        now.resize(a.count);
+                        if (!base || !CopyMemory32(base, now.data(), a.count))
+                        {
+                            a.have = false;
+                            continue;
+                        }
+                        if (!a.have)
+                        {
+                            a.last = now;
+                            a.changes.assign(a.count, 0);
+                            a.have = true;
+                            continue;
+                        }
+                        for (size_t k = 0; k < a.count; ++k)
+                        {
+                            if (now[k] == a.last[k]) continue;
+                            if (a.changes[k] < 8)
+                            {
+                                ++a.changes[k];
+                                Log(L"nametag-debug: %s+0x%X %d -> %d (0x%X)", a.name, static_cast<unsigned>(k * 4), a.last[k], now[k], now[k]);
+                            }
+                            a.last[k] = now[k];
+                        }
+                    }
+                }
+            }).detach();
+        }
+
         void NametagDebug()
         {
+            if (GetConfig().nametagDebug > 1) DeepDebug();
             std::thread([]
             {
                 Log(L"nametag-debug: logging nametag fields of each player when they change");
