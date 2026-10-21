@@ -370,3 +370,21 @@ Import fallback (build-import5): unpacked copies read the local Xbox save cache 
 
 Loading watchdog (build-watch1, loading_watchdog=on default, observe only): stubs on both script command tables (menu 0x1403eefe0 x136, session 0x1403f1150 x196) report each command's result; a command polled non-stop (gaps < 1 s) with the same result for 30 s on one menu is logged once ('watchdog: ... waiting on it?'), plus 'menu N has been on screen for 60 s'. Normal screens log a few constant getters; a hang adds the stuck one. Step 2 (time out those specific waits) once hang logs exist.
 Watchdog baseline (normal play, 35 menu changes incl. a lobby): only the title/start screen (menu 7) idle logged menu commands 6 and 109 = 1 for 30 s+ - normal, not a hang. Everything else quiet.
+
+## Feature backlog (could be added / revisited)
+Parked ideas and half-finished features, newest first. Each has its notes earlier in this file.
+1. **Loading-screen timeout** (parked 2026-10-21). Step 1 was built and tested (commit 4cf65cb, observe-only "loading watchdog":
+   stubs on the menu 0x1403eefe0 x136 and session 0x1403f1150 x196 command tables log a command polled with the same result
+   for 30 s and screens up for 60 s; normal baseline = title screen menu 7, commands 6/109). Taken out of the build by request.
+   Next: bring it back (git show 4cf65cb), catch real hangs in the log, then time out those specific waits (step 2).
+2. **Xbox save import, real test** (built, kit 3F8C59F0+): IMPORT XBOX SAVE (was Help & Support). Failure path confirmed on an
+   unpacked copy; a real import from the Xbox service (Store) or the local wgs cache needs a tester who played the Store version.
+3. **In-lobby game type / rule change** (reverted 2026-10-21, commit 4ff540e). Worked solo; open problems: switching into Tag
+   Team crashed other players; players who joined a One-on-One kept a 2-player limit (follow-host fix untested). Notes: menu 48,
+   session commands 29 / 41 / 80 / 190, settings message 1405277b4/1405277fc.
+4. **Lobby's Gamertag option for future settings** - greyed out by the lobby script (never reaches pdnet); would need the
+   script's enable check found first.
+5. **Spectator mode for tournaments** - feasibility only: camera/HUD switching via the local-player index DAT_1404bbe00 looks
+   testable offline; a non-playing seat is hard (4 fixed player slots). Suggested order: camera/HUD test, spectate-after-
+   elimination, then a spare-slot spectator.
+6. **Tag Team lobby crash / team data** - only matters if 3 comes back.
