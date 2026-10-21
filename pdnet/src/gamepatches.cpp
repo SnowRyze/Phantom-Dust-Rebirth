@@ -418,9 +418,70 @@ namespace pdnet::gamepatches
         int64_t MenuManager() { return *reinterpret_cast<int64_t*>(At(0x140533c58)); }
         int CurrentMenu(int64_t manager) { return manager ? *reinterpret_cast<int16_t*>(manager + 0x105f4) : -1; }
 
+        // The button labels come from Assets\Data\newstrings.txt, which the game parses once into a table
+        // (DAT_1405b0918: +0 keys, +8 values in the player's language, +0x10 count). The lobby's help lines
+        // (lobby_normal / lobby_team / lobby_locked_out) say "\a5#Invite"; their value pointers are pointed at copies
+        // that say "Arsenal Lab". Nothing on disk changes, so this works in the Store version too.
+        struct StringTable { char** keys; char** values; int32_t count; };
+
+        bool ReadStringTable(StringTable& t)
+        {
+            __try
+            {
+                auto table = *reinterpret_cast<uint8_t**>(At(0x1405b0918));
+                if (!table) return false;
+                t = { *reinterpret_cast<char***>(table), *reinterpret_cast<char***>(table + 8), *reinterpret_cast<int32_t*>(table + 0x10) };
+                return t.keys && t.values && t.count > 0 && t.count < 100000;
+            }
+            __except (EXCEPTION_EXECUTE_HANDLER)
+            {
+                return false;
+            }
+        }
+
+        bool CopyString(const char* from, char* to, size_t size)
+        {
+            __try
+            {
+                size_t n = 0;
+                for (; n + 1 < size && from[n]; ++n) to[n] = from[n];
+                to[n] = 0;
+                return true;
+            }
+            __except (EXCEPTION_EXECUTE_HANDLER)
+            {
+                return false;
+            }
+        }
+
+        void RenameLobbyInvite()
+        {
+            static std::mutex lock;
+            static std::map<std::string, std::string> renamed; // stable storage for the new values
+            std::lock_guard guard(lock);
+            StringTable t{};
+            if (!ReadStringTable(t)) return;
+            for (int i = 0; i < t.count; ++i)
+            {
+                char key[64], value[512];
+                if (!CopyString(t.keys[i], key, sizeof(key))) return;
+                if (strcmp(key, "lobby_normal") != 0 && strcmp(key, "lobby_team") != 0 && strcmp(key, "lobby_locked_out") != 0) continue;
+                if (!CopyString(t.values[i], value, sizeof(value))) return;
+                std::string text = value;
+                size_t at = text.find("#Invite");
+                if (at == std::string::npos) continue; // already renamed, or another language
+                text.replace(at, 7, "#Arsenal Lab");
+                std::string& stored = renamed[key];
+                stored = text;
+                t.values[i] = stored.data();
+                Log(L"gamepatch: lobby button '%S' renamed to Arsenal Lab", key);
+            }
+        }
+
         int HookedPushMenu(int64_t manager, int menu, char force)
         {
             int current = CurrentMenu(manager);
+            if (menu == kLobbyMenu) RenameLobbyInvite();
             if (menu != current) Log(L"menu: open %d (from %d)", menu, current);
             if (g_editorFromLobby && current == kEditorMenu && menu != kEditorMenu && menu != kStockMenu)
             {
@@ -486,6 +547,7 @@ namespace pdnet::gamepatches
             if (!push) return;
             g_pushMenu = push;
             Log(L"gamepatch: lobby Arsenal editor ready (the lobby's invite button opens it)");
+            RenameLobbyInvite(); // again whenever the lobby opens, in case the strings were loaded later
         }
     }
 
