@@ -17,6 +17,7 @@ What's in the kit
   Setup.bat           double-click to set up pdnet (runs setup.ps1)
   Remove.bat          double-click to stop using pdnet (runs remove.ps1)
   Collect-Log.bat     double-click after a test: copies the logs to your Desktop (runs collect-log.ps1)
+  Restore-XboxLive.bat  double-click to undo every pdnet change and check Teredo (runs restore-xbl.ps1)
   pdlaunch.exe        loads pdnet into the game when it starts
   pdnet.dll           the pdnet build
   pdnet.ini           settings (name, nametags, Discord messages)
@@ -39,6 +40,8 @@ Steps
 5. After a test, double-click Collect-Log.bat and send the files it puts on your Desktop.
 
 To stop using pdnet, double-click Remove.bat.
+To go fully back to Xbox Live and Teredo (also undoes older kits that replaced game files), double-click
+Restore-XboxLive.bat. It asks for administrator permission once.
 
 Settings (pdnet.ini in this folder)
 -----------------------------------
