@@ -554,6 +554,97 @@ namespace pdnet::gamepatches
             return trampoline;
         }
 
+        // loading_watchdog=on: finds what a stuck loading screen waits on. Menu scripts wait by calling a game command
+        // every frame until it reports done, so every command of the two script command tables (menu commands
+        // 0x1403eefe0, 136; session commands 0x1403f1150, 196) gets a stub that reports each result here. A command
+        // polled non-stop with the same result for 30 s is logged once per screen visit (normal screens poll a few
+        // getters too; a hang shows up as one more), and a screen that stays up for 60 s is logged. Nothing changes.
+        struct Streak { int64_t result = 0; DWORD first = 0, last = 0; uint32_t calls = 0; int menu = -1; bool reported = false; };
+        Streak g_streaks[2][256];
+        const wchar_t* const kTableNames[2] = { L"menu", L"session" };
+
+        void ObserveCommand(uint32_t id, int64_t result)
+        {
+            uint32_t table = id >> 16, index = id & 0xffff;
+            if (table > 1 || index > 255) return;
+            Streak& s = g_streaks[table][index];
+            DWORD now = GetTickCount();
+            int menu = CurrentMenu(MenuManager());
+            if (s.calls == 0 || result != s.result || now - s.last > 1000 || menu != s.menu)
+            {
+                if (s.reported)
+                    Log(L"watchdog: %s command %u on menu %d returned %lld for %lu s, then %s", kTableNames[table], index, s.menu, s.result,
+                        (s.last - s.first) / 1000, result != s.result ? L"changed" : L"stopped");
+                s = Streak{ result, now, now, 1, menu, false };
+                return;
+            }
+            ++s.calls;
+            s.last = now;
+            if (!s.reported && now - s.first >= 30000 && s.calls >= 100)
+            {
+                s.reported = true;
+                Log(L"watchdog: %s command %u on menu %d has returned %lld for 30 s (%u calls) - waiting on it?", kTableNames[table], index, menu, result, s.calls);
+            }
+        }
+
+        void LoadingWatchdog()
+        {
+            const struct { uint64_t address; int count; } tables[2] = { { 0x1403eefe0, 136 }, { 0x1403f1150, 196 } };
+            for (uint32_t t = 0; t < 2; ++t)
+            {
+                int count = tables[t].count;
+                auto stubs = static_cast<uint8_t*>(VirtualAlloc(nullptr, count * 64, MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE));
+                auto table = reinterpret_cast<uint64_t*>(At(tables[t].address));
+                DWORD old = 0;
+                if (!stubs || !VirtualProtect(table, count * 8, PAGE_READWRITE, &old)) return;
+                for (int i = 0; i < count; ++i)
+                {
+                    std::vector<uint8_t> s = { 0x48, 0x83, 0xec, 0x38,          // sub rsp, 0x38
+                                               0x48, 0xb8 };                    // mov rax, original
+                    Put64(s, table[i]);
+                    s.insert(s.end(), { 0xff, 0xd0,                             // call rax (rcx = the script's arguments)
+                                        0x48, 0x89, 0x44, 0x24, 0x28,           // mov [rsp+0x28], rax
+                                        0xb9 });                                // mov ecx, table << 16 | index
+                    Put32(s, static_cast<int32_t>(t << 16 | i));
+                    s.insert(s.end(), { 0x48, 0x89, 0xc2,                       // mov rdx, rax
+                                        0x48, 0xb8 });                          // mov rax, ObserveCommand
+                    Put64(s, reinterpret_cast<uint64_t>(&ObserveCommand));
+                    s.insert(s.end(), { 0xff, 0xd0,                             // call rax
+                                        0x48, 0x8b, 0x44, 0x24, 0x28,           // mov rax, [rsp+0x28]
+                                        0x48, 0x83, 0xc4, 0x38,                 // add rsp, 0x38
+                                        0xc3 });                                // ret
+                    memcpy(stubs + i * 64, s.data(), s.size());
+                    table[i] = reinterpret_cast<uint64_t>(stubs + i * 64);
+                }
+                VirtualProtect(table, count * 8, old, &old);
+                FlushInstructionCache(GetCurrentProcess(), stubs, count * 64);
+            }
+            std::thread([]
+            {
+                int menu = -1;
+                DWORD since = GetTickCount();
+                bool reported = false;
+                for (;;)
+                {
+                    Sleep(1000);
+                    int now = CurrentMenu(MenuManager());
+                    if (now != menu)
+                    {
+                        if (reported) Log(L"watchdog: menu %d closed after %lu s", menu, (GetTickCount() - since) / 1000);
+                        menu = now;
+                        since = GetTickCount();
+                        reported = false;
+                    }
+                    else if (!reported && GetTickCount() - since >= 60000)
+                    {
+                        reported = true;
+                        Log(L"watchdog: menu %d has been on screen for 60 s", menu);
+                    }
+                }
+            }).detach();
+            Log(L"gamepatch: loading watchdog on (logs waits that last 30 s and screens up for 60 s)");
+        }
+
         void LobbyArsenalEditor()
         {
             auto pop = reinterpret_cast<PopMenuFn>(InlineHook(0x1402461f0, reinterpret_cast<void*>(&HookedPopMenu), L"menu back"));
@@ -564,6 +655,7 @@ namespace pdnet::gamepatches
             g_pushMenu = push;
             Log(L"gamepatch: lobby Arsenal editor ready (the lobby's invite button opens it)");
             RenameStrings(); // again whenever a menu opens, in case the strings were loaded later
+            if (GetConfig().loadingWatchdog) LoadingWatchdog();
         }
     }
 
