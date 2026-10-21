@@ -11,9 +11,12 @@
 #include <psapi.h>
 #include <mmdeviceapi.h>
 #include <audiopolicy.h>
+#include <appmodel.h>
+#include <winhttp.h>
 #include <algorithm>
 #include <cstdio>
 #include <string>
+#pragma comment(lib, "winhttp.lib")
 
 namespace
 {
@@ -244,6 +247,69 @@ namespace
         CloseHandle(process);
         CoUninitialize();
     }
+
+    // Discord: pdnet leaves LocalState\pdnet\discord-close.txt (message id, newline, "closed" text, UTF-8) while this
+    // PC is alone in a lobby it announced (src\discord.cpp). If the game exits with it still there (closed from the
+    // lobby, or a crash), the lobby ended with it: edit the message to "closed" with discord_webhook from pdnet.ini.
+    void CloseDiscordMessage(const std::wstring& localState)
+    {
+        std::wstring path = localState + L"\\pdnet\\discord-close.txt";
+        std::string note;
+        if (FILE* f = nullptr; !_wfopen_s(&f, path.c_str(), L"rb") && f)
+        {
+            char buf[4096];
+            for (size_t n; (n = fread(buf, 1, sizeof(buf), f)) > 0;) note.append(buf, n);
+            fclose(f);
+        }
+        else return;
+        DeleteFileW(path.c_str());
+        size_t newline = note.find('\n');
+        std::wstring url = Setting(L"discord_webhook", L"");
+        if (newline == std::string::npos || url.empty()) return;
+        std::string message = note.substr(0, newline), text = note.substr(newline + 1);
+
+        std::string body = "{\"content\":\"";
+        for (unsigned char c : text)
+        {
+            if (c == '"' || c == '\\') { body += '\\'; body += static_cast<char>(c); }
+            else if (c < 0x20) { char esc[8]; sprintf_s(esc, "\\u%04x", c); body += esc; }
+            else body += static_cast<char>(c);
+        }
+        body += "\",\"allowed_mentions\":{\"parse\":[]}}";
+
+        URL_COMPONENTS parts{ sizeof(parts) };
+        wchar_t host[256], urlPath[2048], extra[1024];
+        parts.lpszHostName = host;
+        parts.dwHostNameLength = _countof(host);
+        parts.lpszUrlPath = urlPath;
+        parts.dwUrlPathLength = _countof(urlPath);
+        parts.lpszExtraInfo = extra;
+        parts.dwExtraInfoLength = _countof(extra);
+        if (!WinHttpCrackUrl(url.c_str(), 0, 0, &parts)) return;
+        std::wstring target = std::wstring(urlPath) + L"/messages/" + std::wstring(message.begin(), message.end()) + extra;
+        DWORD status = 0, size = sizeof(status);
+        HINTERNET session = WinHttpOpen(L"pdlaunch/1", WINHTTP_ACCESS_TYPE_AUTOMATIC_PROXY, nullptr, nullptr, 0);
+        HINTERNET connect = session ? WinHttpConnect(session, host, parts.nPort, 0) : nullptr;
+        HINTERNET request = connect ? WinHttpOpenRequest(connect, L"PATCH", target.c_str(), nullptr, nullptr, nullptr, WINHTTP_FLAG_SECURE) : nullptr;
+        if (request &&
+            WinHttpSendRequest(request, L"Content-Type: application/json\r\n", static_cast<DWORD>(-1), body.data(), static_cast<DWORD>(body.size()), static_cast<DWORD>(body.size()), 0) &&
+            WinHttpReceiveResponse(request, nullptr))
+            WinHttpQueryHeaders(request, WINHTTP_QUERY_STATUS_CODE | WINHTTP_QUERY_FLAG_NUMBER, nullptr, &status, &size, nullptr);
+        Log(L"discord: the game exited in a lobby only this PC was in; marked its message closed (HTTP %lu)", status);
+        if (request) WinHttpCloseHandle(request);
+        if (connect) WinHttpCloseHandle(connect);
+        if (session) WinHttpCloseHandle(session);
+    }
+
+    // The game's LocalState folder (pdnet builds the same path, src\log.cpp).
+    std::wstring GameLocalState(HANDLE process)
+    {
+        wchar_t family[PACKAGE_FAMILY_NAME_MAX_LENGTH + 1];
+        UINT32 length = _countof(family);
+        wchar_t profile[MAX_PATH];
+        if (GetPackageFamilyName(process, &length, family) != ERROR_SUCCESS || !GetEnvironmentVariableW(L"USERPROFILE", profile, MAX_PATH)) return {};
+        return std::wstring(profile) + L"\\AppData\\Local\\Packages\\" + family + L"\\LocalState";
+    }
 }
 
 int wmain(int argc, wchar_t** argv)
@@ -272,6 +338,14 @@ int wmain(int argc, wchar_t** argv)
     DWORD previous = thread ? ResumeThread(thread) : static_cast<DWORD>(-1);
     if (thread) CloseHandle(thread);
     Log(L"game resumed (suspend count was %ld)%s", static_cast<long>(previous), injected ? L"" : L" WITHOUT pdnet");
-    WatchVolume(pid); // until the game exits
+    HANDLE game = OpenProcess(SYNCHRONIZE | PROCESS_QUERY_LIMITED_INFORMATION, FALSE, pid);
+    std::wstring localState = game ? GameLocalState(game) : std::wstring();
+    WatchVolume(pid); // until the game exits (returns at once when there is nothing to do for the volume)
+    if (game)
+    {
+        WaitForSingleObject(game, INFINITE);
+        CloseHandle(game);
+        if (injected && !localState.empty()) CloseDiscordMessage(localState);
+    }
     return injected ? 0 : 1;
 }

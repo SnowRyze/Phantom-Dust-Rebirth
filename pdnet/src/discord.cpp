@@ -34,7 +34,30 @@ namespace pdnet::discord
             std::string lobbyId;
             std::string text;
             bool closing = false; // the lobby's last state: forget its message afterwards
+            std::string closedText; // how the message reads once the lobby is gone
+            bool alone = false;     // this PC is the only member: if the game closes now, the lobby ends with it
         };
+
+        // Closing the game straight from the lobby (or a crash) gives pdnet no chance to edit the message, so while
+        // this PC is alone in its lobby it keeps a note: the message id, then the "closed" text. pdlaunch, which
+        // outlives the game, sends that edit after the game exits (tools\pdlaunch.cpp). With other players in the
+        // lobby there is no note: one of them takes the lobby over and edits the message from then on.
+        void ExitNote(const std::string& message, const std::string& closedText)
+        {
+            std::wstring dir = LocalStatePath() + L"\\pdnet", path = dir + L"\\discord-close.txt";
+            if (message.empty())
+            {
+                DeleteFileW(path.c_str());
+                return;
+            }
+            CreateDirectoryW(dir.c_str(), nullptr);
+            if (FILE* f = nullptr; !_wfopen_s(&f, path.c_str(), L"wb") && f)
+            {
+                std::string note = message + "\n" + closedText;
+                fwrite(note.data(), 1, note.size(), f);
+                fclose(f);
+            }
+        }
         std::mutex g_queueLock;
         std::condition_variable g_queueReady;
         std::deque<Job> g_queue;
@@ -127,11 +150,12 @@ namespace pdnet::discord
                 std::lock_guard guard(g_queueLock);
                 g_messages.erase(job.lobbyId);
             }
+            ExitNote(job.closing || !job.alone ? std::string() : message, job.closedText);
         }
 
         // Queues the lobby's message as it should now read. A newer state replaces a queued one for the same lobby,
         // so a burst of joins becomes one edit.
-        void Show(const std::string& lobbyId, const std::string& text, bool closing = false)
+        void Show(const std::string& lobbyId, const std::string& text, bool closing, const std::string& closedText = {}, bool alone = false)
         {
             const std::wstring& url = GetConfig().discordWebhook;
             if (url.empty()) return;
@@ -141,8 +165,10 @@ namespace pdnet::discord
             {
                 queued->text = text;
                 queued->closing |= closing;
+                queued->closedText = closedText;
+                queued->alone = alone;
             }
-            else g_queue.push_back(Job{ lobbyId, text, closing });
+            else g_queue.push_back(Job{ lobbyId, text, closing, closedText, alone });
             if (!g_threadStarted)
             {
                 g_threadStarted = true;
@@ -172,7 +198,10 @@ namespace pdnet::discord
             std::map<std::string, std::string> players; // EOS product user id -> player name
             std::string match;       // "Tag Team · Standard Battle"
             uint32_t maxMembers = 0;
-            std::string lastChange;  // "👥 **B** joined" / "👋 **C** left"
+            // The latest join/leave, by user id. A member's PD_NAME arrives in a lobby update after the one that adds
+            // them, so names are looked up when the message is drawn (`known` keeps the names of those who left).
+            std::vector<std::string> joined, left;
+            std::map<std::string, std::string> known;
         };
         std::mutex g_lock;
         std::map<std::string, Announced> g_lobbies; // lobbies this PC owns and announces
@@ -226,12 +255,25 @@ namespace pdnet::discord
             std::string match = a.match.empty() ? "" : " \xC2\xB7 " + a.match;
             if (closed) return "\xF0\x9F\x94\xB4 **" + Name(a.name) + "**'s lobby closed" + match;
             bool full = a.maxMembers && a.members >= a.maxMembers;
-            std::vector<std::string> names;
-            for (auto& [id, name] : a.players) names.push_back(name);
+            auto names = [&](const std::vector<std::string>& ids)
+            {
+                std::vector<std::string> out;
+                for (auto& id : ids)
+                {
+                    auto it = a.known.find(id);
+                    out.push_back(it != a.known.end() ? it->second : std::string());
+                }
+                return out;
+            };
+            std::vector<std::string> everyone;
+            for (auto& [id, name] : a.players) everyone.push_back(id);
             std::string text = (full ? "\xF0\x9F\x8E\xAE **" : "\xF0\x9F\x9F\xA2 **") + Name(a.name) + "** opened a Phantom Dust lobby" + match +
                                " \xC2\xB7 " + Players(a.members, a.maxMembers) + (full ? " \xC2\xB7 full" : "");
-            if (!names.empty()) text += "\nPlayers: " + Names(names);
-            if (!a.lastChange.empty()) text += "\n" + a.lastChange;
+            if (!everyone.empty()) text += "\nPlayers: " + Names(names(everyone));
+            std::string change;
+            if (!a.joined.empty()) change = "\xF0\x9F\x91\xA5 " + Names(names(a.joined)) + " joined";
+            if (!a.left.empty()) change += (change.empty() ? "" : "  ") + std::string("\xF0\x9F\x91\x8B ") + Names(names(a.left)) + " left";
+            if (!change.empty()) text += "\n" + change;
             return text;
         }
 
@@ -243,6 +285,7 @@ namespace pdnet::discord
             a.opened = true;
             a.members = Members(l);
             a.players = Roster(l);
+            for (auto& [id, name] : a.players) if (!name.empty()) a.known[id] = name;
             a.match = MatchDescription(l);
             a.maxMembers = l.maxMembers;
             return GetConfig().discordLobbyMessages;
@@ -306,14 +349,20 @@ namespace pdnet::discord
     void LobbyOpened(const lobbies::Lobby& l)
     {
         if (GetConfig().discordWebhook.empty() || !Public(l)) return;
-        std::string text;
+        std::string text, closed;
+        bool alone = false;
         {
             std::lock_guard guard(g_lock);
             if (g_lobbies.count(l.id)) return;
             Announced& a = g_lobbies[l.id] = Announced{ HostName(l), Members(l) };
-            if (Open(l, a)) text = Card(a);
+            if (Open(l, a))
+            {
+                text = Card(a);
+                closed = Card(a, true);
+                alone = a.members <= 1;
+            }
         }
-        if (!text.empty()) Show(l.id, text);
+        if (!text.empty()) Show(l.id, text, false, closed, alone);
     }
 
     void LobbyChanged(const lobbies::Lobby& l)
@@ -321,7 +370,8 @@ namespace pdnet::discord
         if (GetConfig().discordWebhook.empty() || !Public(l)) return;
         bool mine = l.joined && l.ownerId == lobbies::LocalUserId();
         uint32_t members = Members(l);
-        std::string text;
+        std::string text, closed;
+        bool alone = false;
         {
             std::lock_guard guard(g_lock);
             auto it = g_lobbies.find(l.id);
@@ -348,22 +398,36 @@ namespace pdnet::discord
             {
                 if (Open(l, a)) text = Card(a);
             }
-            else if (a.members != members && members > 0)
+            else if (members > 0)
             {
                 auto now = Roster(l);
-                std::vector<std::string> joined, left;
-                for (auto& [id, name] : now) if (!a.players.count(id)) joined.push_back(name);
-                for (auto& [id, name] : a.players) if (!now.count(id)) left.push_back(name);
-                a.members = members;
-                a.players = std::move(now);
-                a.maxMembers = l.maxMembers;
-                a.lastChange.clear();
-                if (!joined.empty()) a.lastChange = "\xF0\x9F\x91\xA5 " + Names(joined) + " joined";
-                if (!left.empty()) a.lastChange += (a.lastChange.empty() ? "" : "  ") + std::string("\xF0\x9F\x91\x8B ") + Names(left) + " left";
+                bool named = false; // a member's name arrived since the message was last drawn
+                for (auto& [id, name] : now)
+                    if (!name.empty() && a.known[id] != name)
+                    {
+                        a.known[id] = name;
+                        named = true;
+                    }
+                if (a.members != members)
+                {
+                    a.joined.clear();
+                    a.left.clear();
+                    for (auto& [id, name] : now) if (!a.players.count(id)) a.joined.push_back(id);
+                    for (auto& [id, name] : a.players) if (!now.count(id)) a.left.push_back(id);
+                    a.members = members;
+                    a.players = std::move(now);
+                    a.maxMembers = l.maxMembers;
+                }
+                else if (!named) return;
                 if (GetConfig().discordPlayerMessages) text = Card(a);
             }
+            if (!text.empty())
+            {
+                closed = Card(a, true);
+                alone = a.members <= 1;
+            }
         }
-        if (!text.empty()) Show(l.id, text);
+        if (!text.empty()) Show(l.id, text, false, closed, alone);
     }
 
     void LobbyLeft(const std::string& id, bool lastMember)
@@ -380,8 +444,11 @@ namespace pdnet::discord
         if (!text.empty()) Show(id, text, true);
         else if (!lastMember)
         {
-            std::lock_guard queue(g_queueLock);
-            g_messages.erase(id);
+            {
+                std::lock_guard queue(g_queueLock);
+                g_messages.erase(id);
+            }
+            ExitNote({}, {}); // the lobby goes on without this PC
         }
     }
 
