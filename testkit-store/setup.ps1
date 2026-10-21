@@ -3,7 +3,8 @@
 #   Double-click Setup.bat (or: powershell -ExecutionPolicy Bypass -File setup.ps1 -Name "MyName" [-GameFolder "D:\Games\PhantomDust"])
 # Undo with Remove.bat (remove.ps1). Keep this folder where it is while pdnet is set up.
 # An unpacked copy set up with an older kit (which replaced Microsoft.Xbox.Services.dll) gets its original files back first.
-param([string]$Name, [string]$GameFolder, [switch]$NoPause)
+#   -Mic yes|no answers the microphone question without asking (voice chat).
+param([string]$Name, [string]$GameFolder, [ValidateSet('', 'yes', 'no')][string]$Mic = '', [switch]$NoPause)
 $ErrorActionPreference = 'Stop'
 $kit = $PSScriptRoot
 $package = 'Microsoft.MSEsper'
@@ -116,6 +117,31 @@ try {
     Write-Host 'Done.'
 }
 catch { Write-Host "Warning: the local-connection exemption was not set ($_). Lobbies will work, but matches may not connect; run Setup.bat again and allow it." -ForegroundColor Yellow }
+
+# --- microphone (voice chat) ----------------------------------------------------------------------
+# Windows asks each Store-style app once before it may use the microphone (desktop programs, like games from other
+# launchers, only need the global switch). Answering here sets that per-app permission up front, for this Windows user
+# only. The previous value is kept in mic-permission-before.txt so Remove.bat can put it back.
+$consent = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\CapabilityAccessManager\ConsentStore\microphone'
+$appConsent = "$consent\$($pkg.PackageFamilyName)"
+$current = (Get-ItemProperty $appConsent -ErrorAction SilentlyContinue).Value
+if ($current -eq 'Allow') { Write-Host "`nMicrophone: Phantom Dust may already use it (voice chat)." }
+else {
+    if (-not $Mic -and -not $NoPause) {
+        $answer = Read-Host "`nAllow Phantom Dust to use your microphone for voice chat? You can mute yourself in the lobby (Options > Mic). (Y/N)"
+        $Mic = if ($answer -match '^\s*y') { 'yes' } else { 'no' }
+    }
+    if ($Mic -eq 'yes') {
+        if (-not (Test-Path "$kit\mic-permission-before.txt")) { Set-Content "$kit\mic-permission-before.txt" $(if ($current) { $current } else { 'none' }) }
+        New-Item $appConsent -Force | Out-Null
+        Set-ItemProperty $appConsent -Name Value -Value 'Allow' -Type String
+        Write-Host 'Microphone allowed for Phantom Dust.'
+    }
+    elseif ($Mic -eq 'no') { Write-Host 'Microphone not changed: Windows will ask the first time voice chat uses it (you can still hear others).' }
+}
+if ((Get-ItemProperty $consent -ErrorAction SilentlyContinue).Value -eq 'Deny') {
+    Write-Host 'Note: microphone access for apps is switched off in Windows (Settings > Privacy > Microphone), so others will not hear you.' -ForegroundColor Yellow
+}
 
 Write-Host "`nSet up as '$Name'. Start Phantom Dust the normal way (Start menu)." -ForegroundColor Green
 Write-Host 'pdnet now loads every time the game starts, and the game keeps running when minimized.'

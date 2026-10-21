@@ -24,6 +24,16 @@ if ($hr -ne 0) { Write-Host ('Windows reported 0x{0:X8}.' -f $hr) -ForegroundCol
 Write-Host 'Windows will ask for administrator permission to remove the local-connection exemption store-setup added.'
 try { Start-Process CheckNetIsolation.exe -Verb RunAs -Wait -WindowStyle Hidden -ArgumentList "LoopbackExempt -d -n=$($pkg.PackageFamilyName)" }
 catch { Write-Host "Skipped ($_). It is harmless to leave." }
+# Microphone permission: back to what it was before Setup.bat allowed it.
+$before = Join-Path $PSScriptRoot 'mic-permission-before.txt'
+if (Test-Path $before) {
+    $appConsent = "HKCU:\Software\Microsoft\Windows\CurrentVersion\CapabilityAccessManager\ConsentStore\microphone\$($pkg.PackageFamilyName)"
+    $old = (Get-Content $before -Raw).Trim()
+    if ($old -eq 'none') { Remove-ItemProperty $appConsent -Name Value -ErrorAction SilentlyContinue }
+    else { Set-ItemProperty $appConsent -Name Value -Value $old -Type String }
+    Remove-Item $before
+    Write-Host 'Microphone permission for Phantom Dust put back as it was.'
+}
 if ($pkg.SignatureKind -eq 'Store') { Write-Host 'Done. Phantom Dust starts normally again (Xbox Live, cloud saves). You can delete this folder.' }
 else { Write-Host 'Done. pdnet no longer loads. Note: an unpacked copy without pdnet may hang on "retrieving profile" (Xbox cloud saves).' }
 Write-Host 'Your pdnet test saves stay in the game''s local data (pdnet\saves) and are not used by the normal game.'

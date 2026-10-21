@@ -38,6 +38,7 @@ Steps
    - Unpacked copy that isn't installed yet: it asks for the game folder and installs it.
    - Unpacked copy set up with an OLDER kit (Install.bat): it puts the original game files back first.
    - Type your player name when asked.
+   - Answer Y to let Phantom Dust use your microphone (voice chat). N: Windows asks the first time instead.
    - Windows asks for administrator permission once ("CheckNetIsolation"). Click Yes: matches need it.
 4. Start Phantom Dust the normal way (Start menu). Host or join a lobby.
 5. After a test, double-click Collect-Log.bat and send the files it puts on your Desktop.
@@ -54,6 +55,9 @@ Edit with Notepad, then restart the game.
   dead_nametag_color=    colour of a defeated player's nametag (RRGGBB), FFE600 = yellow
                          (also shown on a player lying in Play Dead, until they move or are hit)
   lobby_arsenal_editor=  on/off: the lobby's Arsenal Lab button (was Invite) opens the Arsenal editor
+  voice_chat=            on/off: voice chat in lobbies (Epic voice, no account). The lobby's Options > Mic
+                         switches only your microphone.
+  voice_listen=          on/off: hear the other players
   discord_*              lobby announcements in Discord when you host
 
 If something goes wrong
@@ -61,3 +65,4 @@ If something goes wrong
 - The game starts with Xbox Live as usual: pdnet didn't load. Run Collect-Log.bat and send pdlaunch-log.
 - "Windows refused to attach pdlaunch": send a screenshot.
 - Lobbies work but matches don't connect: run Setup.bat again and allow the administrator prompt.
+- Nobody hears you: check Options > Mic says On, and Settings > Privacy > Microphone allows Phantom Dust.
