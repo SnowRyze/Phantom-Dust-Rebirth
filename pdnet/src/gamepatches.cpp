@@ -478,14 +478,17 @@ namespace pdnet::gamepatches
             }
         }
 
-        // Lobby rule change (host only): the lobby's Gamertag option (Xbox profile cards, gone) opens the rule menu
-        // (liverulesel, 48) over the lobby. That menu edits the live values directly with the game's own rules about
-        // which rule fits which game type (FUN_140183010): game type DAT_14050d2d8, rule DAT_140518cf0. Confirming
-        // (the menu moving on to the next creation step) returns to the lobby and re-publishes; going back restores
-        // the saved values. Game type changes are refused for now (player counts and teams differ).
-        constexpr int kRuleMenu = 48;
+        // Lobby rule change (host only): the host's Change Stage (livestagesel, 47) opens the session settings menu
+        // (liverulesel, 48) instead; it shows the current game type and rule and has the stage list inside (it opens
+        // 47 itself). It edits the live values directly with the game's own rules about which rule fits which game
+        // type (FUN_140183010): game type DAT_14050d2d8, rule DAT_140518cf0; the stage is DAT_14051775c (stage set
+        // entry), DAT_140527bc8 (stage id) and DAT_140527c54 (layout). Confirming (the menu moving on to the next
+        // creation step) returns to the lobby and re-publishes; going back restores the saved values. Game type
+        // changes are refused for now (player counts and teams differ).
+        constexpr int kStageMenu = 47, kRuleMenu = 48;
         std::atomic<bool> g_ruleFromLobby{ false };
-        int32_t g_savedType = 0, g_savedRule = 0;
+        int32_t g_savedType = 0, g_savedRule = 0, g_savedStage[3] = {};
+        constexpr uint64_t kStageVars[3] = { 0x14051775c, 0x140527bc8, 0x140527c54 };
         int32_t& GameType() { return *reinterpret_cast<int32_t*>(At(0x14050d2d8)); }
         int32_t& GameRule() { return *reinterpret_cast<int32_t*>(At(0x140518cf0)); }
 
@@ -506,7 +509,8 @@ namespace pdnet::gamepatches
             }
             int updated = reinterpret_cast<int (*)()>(At(0x140283220))(); // session property update
             reinterpret_cast<void (*)()>(At(0x140191210))();              // settings message to every other player
-            Log(L"menu: lobby rule changed to %d (game type %d); session update %d, sent to the other players", rule, type, updated);
+            Log(L"menu: lobby settings published: game type %d, rule %d, stage %d layout %d; session update %d, sent to the other players",
+                type, rule, *reinterpret_cast<int32_t*>(At(0x140527bc8)), *reinterpret_cast<int32_t*>(At(0x140527c54)), updated);
         }
 
         int HookedPushMenu(int64_t manager, int menu, char force)
@@ -514,7 +518,17 @@ namespace pdnet::gamepatches
             int current = CurrentMenu(manager);
             if (menu == kLobbyMenu) RenameLobbyInvite();
             if (menu != current) Log(L"menu: open %d (from %d)", menu, current);
-            if (g_ruleFromLobby && current == kRuleMenu && menu != kRuleMenu)
+            if (current == kLobbyMenu && menu == kStageMenu && !g_ruleFromLobby && *reinterpret_cast<int32_t*>(At(0x140527bc4)) == 0)
+            {
+                // The host (player slot 0) chose Change Stage: open the full settings menu instead.
+                g_savedType = GameType();
+                g_savedRule = GameRule();
+                for (int k = 0; k < 3; ++k) g_savedStage[k] = *reinterpret_cast<int32_t*>(At(kStageVars[k]));
+                Log(L"menu: Change Stage in the lobby - opening the settings menu (game type %d, rule %d)", g_savedType, g_savedRule);
+                g_ruleFromLobby = true;
+                return g_pushMenu(manager, kRuleMenu, force);
+            }
+            if (g_ruleFromLobby && current == kRuleMenu && menu != kRuleMenu && menu != kStageMenu)
             {
                 g_ruleFromLobby = false;
                 if (GameType() != g_savedType)
@@ -523,10 +537,7 @@ namespace pdnet::gamepatches
                     GameType() = g_savedType;
                     GameRule() = g_savedRule;
                 }
-                else if (GameRule() != g_savedRule)
-                {
-                    PublishRule();
-                }
+                PublishRule();
                 return g_popMenu();
             }
             if (g_editorFromLobby && current == kEditorMenu && menu != kEditorMenu && menu != kStockMenu)
@@ -547,7 +558,8 @@ namespace pdnet::gamepatches
             {
                 GameType() = g_savedType; // cancelled: the menu changed the live values while browsing
                 GameRule() = g_savedRule;
-                Log(L"menu: lobby rule change cancelled");
+                for (int k = 0; k < 3; ++k) *reinterpret_cast<int32_t*>(At(kStageVars[k])) = g_savedStage[k];
+                Log(L"menu: lobby settings change cancelled");
             }
             return g_popMenu();
         }
@@ -612,24 +624,6 @@ namespace pdnet::gamepatches
         g_editorFromLobby = true;
         *At(0x1404bbc34) = 0; // as the script's own "open menu" command does
         g_pushMenu(manager, kEditorMenu, 0);
-        return true;
-    }
-
-    bool OpenLobbyRuleMenu()
-    {
-        int64_t manager = MenuManager();
-        if (!g_pushMenu || CurrentMenu(manager) != kLobbyMenu) return false;
-        if (*reinterpret_cast<int32_t*>(At(0x140527bc4)) != 0) // this PC's player slot; the host is slot 0
-        {
-            Log(L"menu: only the host can change the lobby's rule");
-            return true;
-        }
-        g_savedType = GameType();
-        g_savedRule = GameRule();
-        Log(L"menu: Gamertag option in the lobby - opening the rule menu (game type %d, rule %d)", g_savedType, g_savedRule);
-        g_ruleFromLobby = true;
-        *At(0x1404bbc34) = 0;
-        g_pushMenu(manager, kRuleMenu, 0);
         return true;
     }
 
