@@ -13,4 +13,8 @@ namespace pdnet::gamepatches
     // The lobby's invite button (no Xbox Live invites any more) opens the Arsenal editor; leaving it returns to the
     // lobby. Returns false when not in the lobby menu (or the menu hooks aren't installed).
     bool OpenLobbyArsenalEditor();
+
+    // The game's own "Voice Chat" setting (lobby Options, settings flag 15; pdnet labels it "Mic"): false = off.
+    // With voice_chat=on it switches only this PC's microphone in the EOS voice room.
+    bool GameMicOn();
 }

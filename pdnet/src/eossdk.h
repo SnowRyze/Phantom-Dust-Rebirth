@@ -6,6 +6,9 @@
 #include <eos_connect.h>
 #include <eos_p2p.h>
 #include <eos_lobby.h>
+#include <eos_rtc.h>
+#include <eos_rtc_audio.h>
+#include <Windows/eos_Windows.h>
 #include <map>
 #include <string>
 
@@ -23,7 +26,13 @@ namespace pdnet::eossdk
         X(EOS_Connect_AddNotifyLoginStatusChanged) X(EOS_Connect_RemoveNotifyLoginStatusChanged)                  \
         X(EOS_ProductUserId_ToString) X(EOS_ProductUserId_FromString) X(EOS_P2P_QueryNATType)                     \
         X(EOS_EResult_ToString)                                                                                   \
-        PDNET_EOS_LOBBY_FUNCTIONS(X) PDNET_EOS_P2P_FUNCTIONS(X)
+        PDNET_EOS_LOBBY_FUNCTIONS(X) PDNET_EOS_P2P_FUNCTIONS(X) PDNET_EOS_VOICE_FUNCTIONS(X)
+// Voice: each lobby's EOS voice room (see lobbies.h, voice_chat).
+#define PDNET_EOS_VOICE_FUNCTIONS(X)                                                                              \
+        X(EOS_Platform_GetRTCInterface) X(EOS_RTC_GetAudioInterface)                                              \
+        X(EOS_RTC_AddNotifyParticipantStatusChanged) X(EOS_RTC_RemoveNotifyParticipantStatusChanged)             \
+        X(EOS_RTCAudio_UpdateSending) X(EOS_RTCAudio_UpdateReceiving)                                             \
+        X(EOS_Lobby_GetRTCRoomName) X(EOS_Lobby_AddNotifyRTCRoomConnectionChanged)
 // P2P interface (stage C: match traffic through EOS P2P, see p2p.h).
 #define PDNET_EOS_P2P_FUNCTIONS(X)                                                                                \
         X(EOS_P2P_SendPacket) X(EOS_P2P_GetNextReceivedPacketSize) X(EOS_P2P_ReceivePacket)                       \

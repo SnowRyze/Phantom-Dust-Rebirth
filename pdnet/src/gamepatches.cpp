@@ -630,8 +630,16 @@ namespace pdnet::gamepatches
             return (*word & 0xffff) == 0x0003 ? word + 1 + static_cast<int16_t>(*word >> 16) : nullptr;
         }
 
-        int PatchLobbyGamertag(uint8_t* script)
+        // Lobby Mic label (voice_chat=on): the option that says "Voice Chat: On/Off" now switches only this PC's mic
+        // (pdnet voice, see lobbies.h), so its two strings in the script's pool are overwritten in place (shorter).
+        struct Relabel { const char* find; const char* replace; };
+        constexpr Relabel kLobbyLabels[] = { { "Voice Chat: Off", "Mic: Off" }, { "Voice Chat: On", "Mic: On" } };
+
+        // Returns how many Gamertag checks were patched (-1: not a script this pdnet understands); `labels` counts
+        // the relabelled strings.
+        int PatchLobbyScript(uint8_t* script, bool gamertag, bool micLabel, int& labels)
         {
+            labels = 0;
             __try
             {
                 // Header: +0 code offset (0x20), +4 labels, +8 end of labels, +12 strings, as file offsets. Once
@@ -654,7 +662,17 @@ namespace pdnet::gamepatches
                 int patched = 0;
                 for (uint32_t* w = code + codeStart / 4; w + 40 < end; ++w)
                 {
-                    if (!LabelTarget(w) || w[1] != kPushResult) continue;
+                    if (micLabel && (*w & 0xffff) == 0x0011)
+                    {
+                        char* text = const_cast<char*>(pool + (*w >> 16));
+                        for (auto& r : kLobbyLabels)
+                        {
+                            if (strcmp(text, r.find) == 0) memcpy(text, r.replace, strlen(r.replace) + 1);
+                            else if (strcmp(text, r.replace) != 0) continue;
+                            ++labels; // relabelled now, or already (the loaded copy can keep an earlier patch)
+                        }
+                    }
+                    if (!gamertag || !LabelTarget(w) || w[1] != kPushResult) continue;
                     // Draw: count; push 2; less-than; jump-if-zero +0x1C; ... push "$GAMERTAG" 0x98 bytes on.
                     if (w[2] == kPush2 && w[3] == 0x00030017 && w[4] == 0x001C0207 && (w[38] & 0xffff) == 0x0011 &&
                         strcmp(pool + (w[38] >> 16), "$GAMERTAG") == 0)
@@ -677,11 +695,11 @@ namespace pdnet::gamepatches
             }
         }
 
-        void LobbyGamertagOption()
+        void LobbyScriptPatches(bool gamertag, bool micLabel)
         {
             // Each load is patched once; the entry goes back to null when the lobby closes (QuitMenu frees the
             // script), which also covers the next load reusing the same buffer.
-            std::thread([]
+            std::thread([gamertag, micLabel]
             {
                 auto entry = reinterpret_cast<uint8_t* volatile*>(At(0x1403fa3d0) + kLobbyMenu * 0x18 + 0x10);
                 uint8_t* done = nullptr;
@@ -692,12 +710,17 @@ namespace pdnet::gamepatches
                     if (script == done) continue;
                     done = script;
                     if (!script) continue;
-                    int n = PatchLobbyGamertag(script);
-                    if (n == 3) Log(L"gamepatch: lobby Gamertag option enabled (3 script checks)");
-                    else Log(L"gamepatch: lobby Gamertag option - %d of 3 script checks matched (script at %p)", n, script);
+                    int labels = 0;
+                    int n = PatchLobbyScript(script, gamertag, micLabel, labels);
+                    if (gamertag)
+                    {
+                        if (n == 3) Log(L"gamepatch: lobby Gamertag option enabled (3 script checks)");
+                        else Log(L"gamepatch: lobby Gamertag option - %d of 3 script checks matched (script at %p)", n, script);
+                    }
+                    if (micLabel) Log(L"gamepatch: lobby Voice Chat option relabelled Mic (%d of 2 texts)", labels);
                 }
             }).detach();
-            Log(L"gamepatch: lobby Gamertag option watcher started");
+            Log(L"gamepatch: lobby script watcher started (Gamertag option %s, Mic label %s)", gamertag ? L"on" : L"off", micLabel ? L"on" : L"off");
         }
 
         void LobbyArsenalEditor()
@@ -739,8 +762,13 @@ namespace pdnet::gamepatches
             }
             if (GetConfig().nametagDebug) NametagDebug();
             if (GetConfig().lobbyArsenalEditor) LobbyArsenalEditor();
-            if (GetConfig().lobbyGamertagOption) LobbyGamertagOption();
+            if (GetConfig().lobbyGamertagOption || GetConfig().voiceChat) LobbyScriptPatches(GetConfig().lobbyGamertagOption, GetConfig().voiceChat);
         });
+    }
+
+    bool GameMicOn()
+    {
+        return *At(0x1404bad34) == 0; // settings flag 15 (script group 10 #3/#4): 1 = voice off
     }
 
     void SetNametagsOnBodies(bool on, const wchar_t* why)

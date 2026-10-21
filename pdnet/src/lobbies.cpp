@@ -1,9 +1,12 @@
 #include "pch.h"
 #include "lobbies.h"
 #include "eos.h"
+#include "config.h"
+#include "gamepatches.h"
 #include "log.h"
 #include <condition_variable>
 #include <deque>
+#include <set>
 #include <future>
 #include <thread>
 
@@ -128,7 +131,7 @@ namespace pdnet::lobbies
             EOS_ProductUserId me;
         };
 
-        void RegisterNotifications(const Api& api, EOS_HLobby lobby);
+        void RegisterNotifications(const Api& api, EOS_HPlatform platform, EOS_HLobby lobby);
 
         // Runs `work` on the EOS thread and waits (here, on the caller's thread) until it calls `finish` or time runs out.
         // On timeout the caller gets T{}; a late finish is dropped.
@@ -158,7 +161,7 @@ namespace pdnet::lobbies
                 }
                 Context c{ *api, static_cast<EOS_HPlatform>(platform), api->EOS_Platform_GetLobbyInterface(static_cast<EOS_HPlatform>(platform)),
                            api->EOS_ProductUserId_FromString(userId.c_str()) };
-                RegisterNotifications(*api, c.lobby);
+                RegisterNotifications(*api, c.platform, c.lobby);
                 try { work(c, finish); }
                 catch (...)
                 {
@@ -466,11 +469,137 @@ namespace pdnet::lobbies
             Notify(info->LobbyId, e, Narrow(*Sdk(), info->TargetUserId));
         }
 
-        void RegisterNotifications(const Api& api, EOS_HLobby lobby)
+        // Voice (voice_chat=on). Every lobby gets an EOS voice room, joined automatically with the lobby. Two
+        // switches: the mic follows the game's own Voice Chat setting (shown as "Mic: On/Off" in the lobby, see
+        // gamepatches::GameMicOn), hearing the others follows voice_listen. The game's original option muted both
+        // ways; GameChat itself stays dead (it needs Xbox Live), so there is no second voice path.
+        struct VoiceRoom { std::string name; int mic = -1, listen = -1; EOS_NotificationId participants = EOS_INVALID_NOTIFICATIONID; };
+        std::map<std::string, VoiceRoom> g_voiceRooms; // EOS thread only: connected rooms by lobby id
+        EOS_HLobby g_lobbyHandle = nullptr;            // EOS thread only
+        EOS_HPlatform g_voicePlatform = nullptr;
+        std::atomic<bool> g_wantMic{ true }, g_wantListen{ true };
+
+        void EOS_CALL OnSending(const EOS_RTCAudio_UpdateSendingCallbackInfo* info)
+        {
+            if (info->ResultCode != EOS_EResult::EOS_Success) Log(L"voice: mic switch failed: %s", Result(*Sdk(), info->ResultCode).c_str());
+        }
+
+        void EOS_CALL OnReceiving(const EOS_RTCAudio_UpdateReceivingCallbackInfo* info)
+        {
+            if (info->ResultCode != EOS_EResult::EOS_Success) Log(L"voice: listen switch failed: %s", Result(*Sdk(), info->ResultCode).c_str());
+        }
+
+        // Sends the wanted mic / listen state to one connected room if it differs from what it has.
+        void ApplyVoice(const Api& api, EOS_ProductUserId me, VoiceRoom& room)
+        {
+            EOS_HRTCAudio audio = api.EOS_RTC_GetAudioInterface(api.EOS_Platform_GetRTCInterface(g_voicePlatform));
+            if (!audio) return;
+            int mic = g_wantMic ? 1 : 0, listen = g_wantListen ? 1 : 0;
+            if (room.mic != mic)
+            {
+                EOS_RTCAudio_UpdateSendingOptions o{ EOS_RTCAUDIO_UPDATESENDING_API_LATEST, me, room.name.c_str(), mic ? EOS_ERTCAudioStatus::EOS_RTCAS_Enabled : EOS_ERTCAudioStatus::EOS_RTCAS_Disabled };
+                api.EOS_RTCAudio_UpdateSending(audio, &o, nullptr, OnSending);
+                room.mic = mic;
+                Log(L"voice: mic %s", mic ? L"on" : L"off");
+            }
+            if (room.listen != listen)
+            {
+                EOS_RTCAudio_UpdateReceivingOptions o{ EOS_RTCAUDIO_UPDATERECEIVING_API_LATEST, me, room.name.c_str(), nullptr, listen ? EOS_TRUE : EOS_FALSE };
+                api.EOS_RTCAudio_UpdateReceiving(audio, &o, nullptr, OnReceiving);
+                room.listen = listen;
+                Log(L"voice: hearing the others %s", listen ? L"on" : L"off");
+            }
+        }
+
+        void EOS_CALL OnParticipant(const EOS_RTC_ParticipantStatusChangedCallbackInfo* info)
+        {
+            Log(L"voice: %s %s the voice room", UserId(*Sdk(), info->ParticipantId).c_str(), info->ParticipantStatus == EOS_ERTCParticipantStatus::EOS_RTCPS_Joined ? L"joined" : L"left");
+        }
+
+        void EOS_CALL OnVoiceRoomConnection(const EOS_Lobby_RTCRoomConnectionChangedCallbackInfo* info)
+        {
+            const Api& api = *Sdk();
+            std::string lobbyId = info->LobbyId ? info->LobbyId : "";
+            EOS_HRTC rtc = api.EOS_Platform_GetRTCInterface(g_voicePlatform);
+            auto found = g_voiceRooms.find(lobbyId);
+            if (found != g_voiceRooms.end())
+            {
+                if (found->second.participants != EOS_INVALID_NOTIFICATIONID) api.EOS_RTC_RemoveNotifyParticipantStatusChanged(rtc, found->second.participants);
+                g_voiceRooms.erase(found);
+            }
+            if (!info->bIsConnected)
+            {
+                Log(L"voice: left the voice room of lobby %S (%s)", lobbyId.c_str(), Result(api, info->DisconnectReason).c_str());
+                return;
+            }
+            char name[256] = {};
+            uint32_t len = sizeof(name);
+            EOS_Lobby_GetRTCRoomNameOptions o{ EOS_LOBBY_GETRTCROOMNAME_API_LATEST, lobbyId.c_str(), info->LocalUserId };
+            EOS_EResult r = api.EOS_Lobby_GetRTCRoomName(g_lobbyHandle, &o, name, &len);
+            if (r != EOS_EResult::EOS_Success)
+            {
+                Log(L"voice: connected to lobby %S's voice room but its name is unavailable: %s", lobbyId.c_str(), Result(api, r).c_str());
+                return;
+            }
+            VoiceRoom& room = g_voiceRooms[lobbyId];
+            room.name = name;
+            EOS_RTC_AddNotifyParticipantStatusChangedOptions po{ EOS_RTC_ADDNOTIFYPARTICIPANTSTATUSCHANGED_API_LATEST, info->LocalUserId, room.name.c_str() };
+            room.participants = api.EOS_RTC_AddNotifyParticipantStatusChanged(rtc, &po, nullptr, OnParticipant);
+            Log(L"voice: connected to the voice room of lobby %S", lobbyId.c_str());
+            ApplyVoice(api, info->LocalUserId, room);
+        }
+
+        // Watches the two switches and passes changes to the connected rooms (on the EOS thread).
+        void StartVoiceWatcher()
+        {
+            static std::once_flag once;
+            std::call_once(once, []
+            {
+                std::thread([]
+                {
+                    for (;;)
+                    {
+                        bool mic = gamepatches::GameMicOn(), listen = GetConfig().voiceListen;
+                        if (mic != g_wantMic.exchange(mic) || listen != g_wantListen.exchange(listen))
+                        {
+                            std::string userId = winrt::to_string(eos::LocalUserId());
+                            eos::Post([userId](void*)
+                            {
+                                const Api* api = Sdk();
+                                if (!api) return;
+                                EOS_ProductUserId me = api->EOS_ProductUserId_FromString(userId.c_str());
+                                for (auto& [id, room] : g_voiceRooms) ApplyVoice(*api, me, room);
+                            });
+                        }
+                        Sleep(250);
+                    }
+                }).detach();
+            });
+        }
+
+        // Join settings for a lobby's voice room: joined with the lobby, the mic as the game's setting has it.
+        EOS_Lobby_LocalRTCOptions LocalVoiceOptions()
+        {
+            EOS_Lobby_LocalRTCOptions o{};
+            o.ApiVersion = EOS_LOBBY_LOCALRTCOPTIONS_API_LATEST;
+            o.bLocalAudioDeviceInputStartsMuted = gamepatches::GameMicOn() ? EOS_FALSE : EOS_TRUE;
+            return o;
+        }
+
+        void RegisterNotifications(const Api& api, EOS_HPlatform platform, EOS_HLobby lobby)
         {
             static bool registered = false; // EOS thread only
             if (registered) return;
             registered = true;
+            if (GetConfig().voiceChat)
+            {
+                g_lobbyHandle = lobby;
+                g_voicePlatform = platform;
+                EOS_Lobby_AddNotifyRTCRoomConnectionChangedOptions v{ EOS_LOBBY_ADDNOTIFYRTCROOMCONNECTIONCHANGED_API_LATEST };
+                if (api.EOS_Lobby_AddNotifyRTCRoomConnectionChanged(lobby, &v, nullptr, OnVoiceRoomConnection) == EOS_INVALID_NOTIFICATIONID)
+                    Log(L"voice: room notifications FAILED to register");
+                StartVoiceWatcher();
+            }
             EOS_Lobby_AddNotifyLobbyUpdateReceivedOptions a{ EOS_LOBBY_ADDNOTIFYLOBBYUPDATERECEIVED_API_LATEST };
             EOS_Lobby_AddNotifyLobbyMemberUpdateReceivedOptions b{ EOS_LOBBY_ADDNOTIFYLOBBYMEMBERUPDATERECEIVED_API_LATEST };
             EOS_Lobby_AddNotifyLobbyMemberStatusReceivedOptions s{ EOS_LOBBY_ADDNOTIFYLOBBYMEMBERSTATUSRECEIVED_API_LATEST };
@@ -497,10 +626,13 @@ namespace pdnet::lobbies
             o.bAllowInvites = EOS_FALSE;
             o.BucketId = bucket.c_str();
             o.bDisableHostMigration = EOS_FALSE;
-            o.bEnableRTCRoom = EOS_FALSE;
+            EOS_Lobby_LocalRTCOptions voice = LocalVoiceOptions();
+            bool voiceOn = GetConfig().voiceChat;
+            o.bEnableRTCRoom = voiceOn ? EOS_TRUE : EOS_FALSE;
+            o.LocalRTCOptions = voiceOn ? &voice : nullptr;
             o.LobbyId = id.c_str();
             o.bEnableJoinById = EOS_TRUE;
-            o.RTCRoomJoinActionType = EOS_ELobbyRTCRoomJoinActionType::EOS_LRRJAT_ManualJoin;
+            o.RTCRoomJoinActionType = voiceOn ? EOS_ELobbyRTCRoomJoinActionType::EOS_LRRJAT_AutomaticJoin : EOS_ELobbyRTCRoomJoinActionType::EOS_LRRJAT_ManualJoin;
             Context ctx = c;
             c.api.EOS_Lobby_CreateLobby(c.lobby, &o, Then<EOS_Lobby_CreateLobbyCallbackInfo>([ctx, id, lobbyAttributes, memberAttributes, finish](const EOS_Lobby_CreateLobbyCallbackInfo* info)
             {
@@ -534,7 +666,11 @@ namespace pdnet::lobbies
             o.LobbyId = id.c_str();
             o.LocalUserId = c.me;
             o.bPresenceEnabled = EOS_FALSE;
-            o.RTCRoomJoinActionType = EOS_ELobbyRTCRoomJoinActionType::EOS_LRRJAT_ManualJoin;
+            // A lobby without a voice room (a host with voice_chat=off or an older pdnet) is joined the same way.
+            EOS_Lobby_LocalRTCOptions voice = LocalVoiceOptions();
+            bool voiceOn = GetConfig().voiceChat;
+            o.LocalRTCOptions = voiceOn ? &voice : nullptr;
+            o.RTCRoomJoinActionType = voiceOn ? EOS_ELobbyRTCRoomJoinActionType::EOS_LRRJAT_AutomaticJoin : EOS_ELobbyRTCRoomJoinActionType::EOS_LRRJAT_ManualJoin;
             Context ctx = c;
             c.api.EOS_Lobby_JoinLobbyById(c.lobby, &o, Then<EOS_Lobby_JoinLobbyByIdCallbackInfo>([ctx, id, memberAttributes, finish](const EOS_Lobby_JoinLobbyByIdCallbackInfo* info)
             {

@@ -50,6 +50,8 @@ if ($launcherKit) {
     Copy-Item $dll "$out\pdnet\"
 }
 Copy-Item $sdkDll.FullName $out
+# Voice chat (voice_chat=on): EOS plays and records through XAudio 2.9, shipped with the SDK.
+Copy-Item (Join-Path $sdkDll.DirectoryName 'x64\xaudio2_9redist.dll') $out
 if ($EosIni) { Copy-Item $EosIni "$out\eos.ini" }
 if ($Stage -ne 'B') {
     $watchIni = "$root\pdnet\tools\out\lobbywatch.ini"

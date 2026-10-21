@@ -2,6 +2,7 @@
 #ifndef PDNET_NO_EOS
 #include "eossdk.h"
 #include "credstore.h"
+#include "config.h"
 #include "log.h"
 #include <fstream>
 
@@ -115,6 +116,19 @@ namespace pdnet::eossdk
         options.bIsServer = EOS_FALSE;
         options.Flags = EOS_PF_DISABLE_OVERLAY;
         options.CacheDirectory = cache.c_str();
+        // Voice (voice_chat=on): without RTCOptions EOS has no voice at all. Rooms stay up while the game window
+        // isn't focused. EOS plays and records through xaudio2_9redist.dll from the kit, next to pdnet.
+        std::string xaudio = winrt::to_string(ModuleDir() + L"xaudio2_9redist.dll");
+        EOS_Windows_RTCOptions windowsRtc{ EOS_WINDOWS_RTCOPTIONS_API_LATEST, xaudio.c_str() };
+        EOS_Platform_RTCOptions rtc{};
+        rtc.ApiVersion = EOS_PLATFORM_RTCOPTIONS_API_LATEST;
+        rtc.PlatformSpecificOptions = GetFileAttributesW((ModuleDir() + L"xaudio2_9redist.dll").c_str()) != INVALID_FILE_ATTRIBUTES ? &windowsRtc : nullptr;
+        rtc.BackgroundMode = EOS_ERTCBackgroundMode::EOS_RTCBM_KeepRoomsAlive;
+        if (GetConfig().voiceChat)
+        {
+            options.RTCOptions = &rtc;
+            Log(L"eos: voice enabled (%s)", rtc.PlatformSpecificOptions ? L"xaudio2_9redist.dll from the kit" : L"no xaudio2_9redist.dll next to pdnet - EOS's default");
+        }
         return api.EOS_Platform_Create(&options);
     }
 

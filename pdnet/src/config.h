@@ -17,7 +17,9 @@ namespace pdnet
         bool menuDebug = false;             // menu_debug=on: log the lobby script's commands (debug, see gamepatches.cpp)
         bool lobbyArsenalEditor = true;     // lobby_arsenal_editor=on: the lobby's invite button opens the Arsenal editor (see gamepatches.h)
         bool lobbyGamertagOption = true;    // lobby_gamertag_option=on: the lobby's Gamertag option works even when alone (see gamepatches.cpp)
-        bool nametagsOnBodies = true;     // nametags_on_bodies=on: keep nametags over dead players (game code patch, see gamepatches.h)
+        bool voiceChat = true;              // voice_chat=on: lobbies get an EOS voice room; the lobby's Mic option mutes only your mic (see lobbies.h)
+        bool voiceListen = true;            // voice_listen=on: hear the other players in the voice room
+        bool nametagsOnBodies = true;    // nametags_on_bodies=on: keep nametags over dead players (game code patch, see gamepatches.h)
         uint32_t deadNametagColor = 0xFFFFE600; // dead_nametag_color=RRGGBB: colour of a dead player's nametag (default yellow)
         int nametagDebug = 0;               // nametag_debug=on (1): log the nametag-related fields of each player when they change; deep (2): also rare changes in player 1's game structures (debug, see gamepatches.cpp)
         int nameTrace = 0;                  // name_trace=draw|on (2): log game text draws of other players' names; memory (1): log reads of name copies (debug, see xsapi/nametrace.h)
