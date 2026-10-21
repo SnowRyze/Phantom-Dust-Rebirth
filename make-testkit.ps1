@@ -60,7 +60,7 @@ if ($Stage -ne 'B') {
         if ($line) { $Webhook = $line.Matches[0].Groups[1].Value.Trim() }
     }
     if ($Webhook -eq 'none') { $Webhook = '' }
-    $ini = (Get-Content "$out\pdnet.ini" -Raw) -replace '(?m)^discord_webhook=.*$', "discord_webhook=$Webhook"
+    $ini = (Get-Content "$out\pdnet.ini" -Raw -Encoding UTF8) -replace '(?m)^discord_webhook=.*$', "discord_webhook=$Webhook"
     Set-Content "$out\pdnet.ini" $ini -Encoding UTF8 -NoNewline
 }
 

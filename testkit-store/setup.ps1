@@ -81,7 +81,7 @@ if (-not $Name) { $Name = Read-Host 'Your player name (what the other players wi
 $Name = ($Name -replace '[\r\n=$]', '').Trim()
 if (-not $Name) { $Name = $env:COMPUTERNAME }
 if ($Name.Length -gt 32) { $Name = $Name.Substring(0, 32) }
-$ini = Get-Content "$kit\pdnet.ini" -Raw
+$ini = Get-Content "$kit\pdnet.ini" -Raw -Encoding UTF8 # UTF-8: voice_talk_mark is a music note
 Set-Content "$kit\pdnet.ini" ($ini -replace '(?m)^display_name=.*$', "display_name=$Name") -Encoding UTF8 -NoNewline
 
 # --- let the game load pdnet from this folder -----------------------------------------------------
