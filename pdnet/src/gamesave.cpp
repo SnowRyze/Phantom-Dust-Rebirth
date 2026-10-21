@@ -573,6 +573,106 @@ namespace pdnet
             return containers ? L"" : L"the Xbox cloud save is empty";
         }
 
+        // ---- the local Xbox save cache (SystemAppData\wgs) ----
+        // Windows keeps a synced copy of the player's cloud save next to the app's data:
+        //   wgs\<user>\containers.index   u32 version, u32 count, u32, str package, u64 filetime, u32, str id, u64, then per
+        //                                container: str name, str name2, str id, u8 number, u32, GUID folder, u64 modified,
+        //                                u64, u64 size                       (str = u32 length in UTF-16 units + text)
+        //   wgs\<user>\<folder>\container.<number>   u32 version, u32 count, per blob: 64 UTF-16 name, GUID, GUID file
+        // Folder and file names are the GUIDs in hex (Windows GUID byte order). Read with every field checked.
+        struct Reader
+        {
+            std::vector<uint8_t> data;
+            size_t at = 0;
+            bool ok = true;
+            bool Need(size_t n) { if (at + n > data.size()) ok = false; return ok; }
+            uint64_t Int(size_t n) { uint64_t v = 0; if (!Need(n)) return 0; memcpy(&v, data.data() + at, n); at += n; return v; }
+            std::wstring Text()
+            {
+                uint32_t length = static_cast<uint32_t>(Int(4));
+                if (!ok || length > 4096 || !Need(length * 2ull)) { ok = false; return {}; }
+                std::wstring s(reinterpret_cast<const wchar_t*>(data.data() + at), length);
+                at += length * 2ull;
+                return s;
+            }
+            std::wstring Guid()
+            {
+                if (!Need(16)) return {};
+                GUID g;
+                memcpy(&g, data.data() + at, 16);
+                at += 16;
+                wchar_t hex[40];
+                swprintf_s(hex, L"%08X%04X%04X%02X%02X%02X%02X%02X%02X%02X%02X", g.Data1, g.Data2, g.Data3, g.Data4[0], g.Data4[1], g.Data4[2],
+                           g.Data4[3], g.Data4[4], g.Data4[5], g.Data4[6], g.Data4[7]);
+                return hex;
+            }
+        };
+
+        std::wstring CopyWgsCache(fs::path const& target, size_t& containers, size_t& blobs, size_t& bytes)
+        {
+            fs::path wgs = fs::path(LocalStatePath()).parent_path() / L"SystemAppData" / L"wgs";
+            std::error_code ec;
+            fs::path index;
+            fs::file_time_type newest{};
+            for (auto& user : fs::directory_iterator(wgs, ec))
+            {
+                fs::path candidate = user.path() / L"containers.index";
+                auto when = fs::last_write_time(candidate, ec);
+                if (!ec && (index.empty() || when > newest)) { index = candidate; newest = when; }
+            }
+            if (index.empty()) return L"no local Xbox save cache on this PC (the Store version was never played here, or was uninstalled)";
+            Log(L"GameSave: import: local Xbox save cache %s", index.c_str());
+            Reader r;
+            if (!ReadFileBytes(index, r.data)) return L"couldn't read " + index.wstring();
+            uint32_t version = static_cast<uint32_t>(r.Int(4)), count = static_cast<uint32_t>(r.Int(4));
+            r.Int(4);
+            std::wstring package = r.Text();
+            r.Int(8); r.Int(4);
+            r.Text();
+            r.Int(8);
+            Log(L"GameSave: import: containers.index version %u, %u container(s), package '%s'", version, count, package.c_str());
+            if (!r.ok || count > 1000) return L"the local save cache index isn't in the expected format (version " + std::to_wstring(version) + L")";
+            for (uint32_t i = 0; i < count; ++i)
+            {
+                std::wstring name = r.Text(), display = r.Text();
+                r.Text();
+                uint32_t number = static_cast<uint32_t>(r.Int(1));
+                r.Int(4);
+                std::wstring folder = r.Guid();
+                r.Int(8); r.Int(8); r.Int(8);
+                if (!r.ok) return L"the local save cache index ended early (container " + std::to_wstring(i + 1) + L")";
+                fs::path dir = index.parent_path() / folder;
+                Reader c;
+                if (!ReadFileBytes(dir / (L"container." + std::to_wstring(number)), c.data))
+                {
+                    Log(L"GameSave: import: container '%s': no %s\\container.%u, skipped", name.c_str(), folder.c_str(), number);
+                    continue;
+                }
+                c.Int(4);
+                uint32_t blobCount = static_cast<uint32_t>(c.Int(4));
+                if (!c.ok || blobCount > 10000) return L"container '" + name + L"' isn't in the expected format";
+                fs::path out = target / Escape(name);
+                for (uint32_t b = 0; b < blobCount; ++b)
+                {
+                    if (!c.Need(160)) return L"container '" + name + L"' ended early";
+                    std::wstring blob(reinterpret_cast<const wchar_t*>(c.data.data() + c.at), 64);
+                    blob.resize(wcsnlen(blob.c_str(), 64));
+                    c.at += 128;
+                    c.Guid();
+                    std::wstring file = c.Guid();
+                    std::vector<uint8_t> content;
+                    if (!ReadFileBytes(dir / file, content)) return L"blob " + name + L"/" + blob + L" is missing from the cache";
+                    if (!WriteFileAtomic(out / Escape(blob), content.data(), content.size())) return L"writing " + name + L"/" + blob + L" failed";
+                    ++blobs;
+                    bytes += content.size();
+                    Log(L"GameSave: import: %s/%s (%zu bytes, from the local cache)", name.c_str(), blob.c_str(), content.size());
+                }
+                if (!display.empty() && display != name) WriteFileAtomic(out / kDisplayNameFile, reinterpret_cast<const uint8_t*>(display.data()), display.size() * sizeof(wchar_t));
+                ++containers;
+            }
+            return containers ? L"" : L"the local save cache has no containers";
+        }
+
         // The whole import, off the game's thread. The cloud save is read into saves.xbox-import next to the live saves;
         // only after a complete read do the folders swap (live saves -> a dated backup folder, import -> saves). The
         // Xbox calls can hang outright (e.g. an unpacked copy waiting for a sign-in), so they run on their own thread
@@ -596,13 +696,13 @@ namespace pdnet
                 bool store = false;
                 try { store = winrt::Windows::ApplicationModel::Package::Current().SignatureKind() == winrt::Windows::ApplicationModel::PackageSignatureKind::Store; }
                 catch (...) {}
+                std::error_code ec;
                 if (!user) problem = L"the game hasn't opened its saves yet";
-                // An unpacked copy can't sign in to Xbox, and waking the real save service there was followed by a crash.
-                else if (!store) problem = L"this needs the Microsoft Store version of Phantom Dust, signed in to Xbox";
-                else
+                // An unpacked copy can't use the Xbox save service (waking it there was followed by a crash): it reads
+                // the local cache only. The Store version asks Xbox first and falls back to the cache.
+                else if (store)
                 {
                     Log(L"GameSave: import: reading the Xbox cloud save into %s ...", staging.c_str());
-                    std::error_code ec;
                     fs::remove_all(staging, ec); // a leftover from an earlier attempt
                     struct Shared { std::mutex lock; std::condition_variable done; bool finished = false; std::wstring problem; std::atomic<bool> cancelled{ false }; size_t c = 0, b = 0, n = 0; };
                     auto shared = std::make_shared<Shared>();
@@ -630,7 +730,19 @@ namespace pdnet
                         containers = shared->c, blobs = shared->b, bytes = shared->n;
                     }
                     wait.unlock();
-                    if (problem.empty())
+                }
+                if (user && (!store || !problem.empty()))
+                {
+                    if (!problem.empty()) Log(L"GameSave: import: Xbox save service: %s - trying the local Xbox save cache", problem.c_str());
+                    staging = root;
+                    staging += L".cache-import"; // its own folder: a timed-out Xbox read may still be writing the other one
+                    fs::remove_all(staging, ec);
+                    containers = blobs = bytes = 0;
+                    try { problem = CopyWgsCache(staging, containers, blobs, bytes); }
+                    catch (...) { problem = L"reading the local save cache failed"; }
+                }
+                if (user && problem.empty())
+                {
                     {
                         g_writesBlocked = true; // from here on the game's in-memory save is stale
                         SYSTEMTIME t;
