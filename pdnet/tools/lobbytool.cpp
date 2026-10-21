@@ -20,6 +20,10 @@
 #include <cstdarg>
 #include <cstdio>
 #include <thread>
+#include <set>
+#include <winhttp.h>
+#include <winrt/Windows.Data.Json.h>
+#pragma comment(lib, "winhttp.lib")
 
 namespace pdnet
 {
@@ -216,6 +220,191 @@ namespace
         return g_hellos && g_heartbeats ? 0 : 1;
     }
 
+    // ---- watch: post lobby opened / players changed / full / closed to a Discord channel webhook ----
+
+    std::string JsonEscape(const std::string& s)
+    {
+        std::string out;
+        for (unsigned char c : s)
+        {
+            if (c == '"' || c == '\\') { out += '\\'; out += static_cast<char>(c); }
+            else if (c < 0x20) { char buf[8]; sprintf_s(buf, "\\u%04x", c); out += buf; }
+            else out += static_cast<char>(c);
+        }
+        return out;
+    }
+
+    // Player names are shown in bold: escape Discord markdown so a name can't change the message's formatting.
+    std::string DiscordName(const std::string& s)
+    {
+        std::string out;
+        for (char c : s)
+        {
+            if (strchr("\\*_~`|>#", c)) out += '\\';
+            out += c;
+        }
+        return out.empty() ? "Someone" : out;
+    }
+
+    // POSTs {"content": text} to the webhook. Mentions are disabled, so names like "@everyone" don't ping anyone.
+    bool PostWebhook(const std::wstring& url, const std::string& text)
+    {
+        URL_COMPONENTS parts{ sizeof(parts) };
+        wchar_t host[256], path[2048];
+        parts.lpszHostName = host;
+        parts.dwHostNameLength = _countof(host);
+        parts.lpszUrlPath = path;
+        parts.dwUrlPathLength = _countof(path);
+        if (!WinHttpCrackUrl(url.c_str(), 0, 0, &parts)) return false;
+        std::string body = "{\"content\":\"" + JsonEscape(text) + "\",\"allowed_mentions\":{\"parse\":[]}}";
+        bool ok = false;
+        HINTERNET session = WinHttpOpen(L"pdnet-lobbywatch/1", WINHTTP_ACCESS_TYPE_AUTOMATIC_PROXY, nullptr, nullptr, 0);
+        HINTERNET connect = session ? WinHttpConnect(session, host, parts.nPort, 0) : nullptr;
+        HINTERNET request = connect ? WinHttpOpenRequest(connect, L"POST", path, nullptr, nullptr, nullptr, WINHTTP_FLAG_SECURE) : nullptr;
+        if (request &&
+            WinHttpSendRequest(request, L"Content-Type: application/json\r\n", static_cast<DWORD>(-1), body.data(), static_cast<DWORD>(body.size()), static_cast<DWORD>(body.size()), 0) &&
+            WinHttpReceiveResponse(request, nullptr))
+        {
+            DWORD status = 0, size = sizeof(status);
+            WinHttpQueryHeaders(request, WINHTTP_QUERY_STATUS_CODE | WINHTTP_QUERY_FLAG_NUMBER, nullptr, &status, &size, nullptr);
+            ok = status >= 200 && status < 300;
+            if (!ok) Log(L"watch: Discord answered HTTP %lu", status);
+        }
+        else
+        {
+            Log(L"watch: could not reach Discord (error %lu)", GetLastError());
+        }
+        if (request) WinHttpCloseHandle(request);
+        if (connect) WinHttpCloseHandle(connect);
+        if (session) WinHttpCloseHandle(session);
+        return ok;
+    }
+
+    // A session property from the lobby (PD_PROPS holds name -> raw JSON text); quotes around strings are removed.
+    std::string LobbyProperty(const lobbies::Lobby& l, const wchar_t* name)
+    {
+        winrt::Windows::Data::Json::JsonObject props{ nullptr };
+        std::string json = lobbies::Joined(l.attributes, "PD_PROPS");
+        if (json.empty() || !winrt::Windows::Data::Json::JsonObject::TryParse(winrt::to_hstring(json), props) || !props.HasKey(name)) return {};
+        auto v = props.Lookup(name);
+        std::string text = v.ValueType() == winrt::Windows::Data::Json::JsonValueType::String ? winrt::to_string(v.GetString()) : winrt::to_string(v.Stringify());
+        if (text.size() >= 2 && text.front() == '"' && text.back() == '"') text = text.substr(1, text.size() - 2);
+        return text;
+    }
+
+    std::map<std::string, std::string> ReadIni(const std::wstring& path)
+    {
+        std::map<std::string, std::string> out;
+        FILE* f = nullptr;
+        if (_wfopen_s(&f, path.c_str(), L"r") || !f) return out;
+        char line[2048];
+        while (fgets(line, sizeof(line), f))
+        {
+            std::string s = line;
+            while (!s.empty() && (s.back() == '\n' || s.back() == '\r' || s.back() == ' ')) s.pop_back();
+            auto eq = s.find('=');
+            if (s.empty() || s[0] == ';' || s[0] == '#' || eq == std::string::npos) continue;
+            out[s.substr(0, eq)] = s.substr(eq + 1);
+        }
+        fclose(f);
+        return out;
+    }
+
+    int RunWatch(bool dryRun)
+    {
+        wchar_t exe[MAX_PATH];
+        GetModuleFileNameW(nullptr, exe, MAX_PATH);
+        std::wstring dir = exe;
+        dir = dir.substr(0, dir.find_last_of(L'\\') + 1);
+        auto ini = ReadIni(dir + L"lobbywatch.ini");
+        std::wstring webhook = winrt::to_hstring(ini["webhook_url"]).c_str();
+        int interval = ini["interval_seconds"].empty() ? 15 : (std::max)(10, atoi(ini["interval_seconds"].c_str()));
+        if (webhook.empty() && !dryRun)
+        {
+            wprintf(L"Put webhook_url=<your Discord webhook URL> in %slobbywatch.ini, or run 'lobbytool watch dry' to only print messages.\n", dir.c_str());
+            return 2;
+        }
+        auto post = [&](const std::string& text)
+        {
+            Log(L"watch: %S", text.c_str());
+            if (!dryRun) PostWebhook(webhook, text);
+        };
+
+        struct Seen
+        {
+            std::string name;
+            uint32_t members = 0, max = 0;
+            int misses = 0;
+            bool full = false;
+        };
+        std::map<std::string, Seen> seen;
+        std::string bucket = std::string("pd1|") + kScid + "|SearchableGame";
+        Log(L"watch: checking for Phantom Dust lobbies every %d s%s", interval, dryRun ? L" (dry run: messages are only printed)" : L"");
+        for (bool first = true;; first = false)
+        {
+            if (!lobbies::Available())
+            {
+                Log(L"watch: EOS not signed in, waiting");
+                Sleep(interval * 1000);
+                continue;
+            }
+            auto found = lobbies::Search(bucket, 100);
+            std::set<std::string> present;
+            for (auto& l : found)
+            {
+                if (l.memberCount == 0) continue; // abandoned: Epic keeps an empty lobby around for a while after its host leaves
+                present.insert(l.id);
+                std::string name = LobbyProperty(l, L"gamename");
+                std::string rating = LobbyProperty(l, L"rating");
+                auto it = seen.find(l.id);
+                if (it == seen.end())
+                {
+                    seen[l.id] = Seen{ name, l.memberCount, l.maxMembers };
+                    // Lobbies that already exist when the watcher starts are listed quietly in the console only.
+                    if (first) Log(L"watch: already open: %S's lobby (%u/%u)", name.c_str(), l.memberCount, l.maxMembers);
+                    else post("\xF0\x9F\x9F\xA2 **" + DiscordName(name) + "** opened a Phantom Dust lobby \xC2\xB7 " + std::to_string(l.memberCount) + "/" +
+                              std::to_string(l.maxMembers) + " players" + (rating.empty() ? "" : " \xC2\xB7 rating " + rating));
+                    continue;
+                }
+                Seen& s = it->second;
+                s.misses = 0;
+                if (s.full || s.members != l.memberCount)
+                {
+                    s.full = false;
+                    s.members = l.memberCount;
+                    post("\xF0\x9F\x91\xA5 **" + DiscordName(s.name) + "**'s lobby \xC2\xB7 " + std::to_string(l.memberCount) + "/" + std::to_string(l.maxMembers) + " players");
+                }
+            }
+            for (auto it = seen.begin(); it != seen.end();)
+            {
+                Seen& s = it->second;
+                if (present.count(it->first) || ++s.misses < 2)
+                {
+                    ++it;
+                    continue;
+                }
+                // Gone from search twice: Epic also hides full lobbies from search, so ask for it by id before calling it closed.
+                auto direct = lobbies::Read(it->first);
+                if (direct && direct->memberCount > 0)
+                {
+                    if (!s.full && direct->memberCount >= direct->maxMembers)
+                    {
+                        s.full = true;
+                        s.members = direct->memberCount;
+                        post("\xF0\x9F\x8E\xAE **" + DiscordName(s.name) + "**'s lobby is full \xC2\xB7 " + std::to_string(direct->memberCount) + "/" +
+                             std::to_string(direct->maxMembers) + " players");
+                    }
+                    s.misses = 0;
+                    ++it;
+                    continue;
+                }
+                post("\xF0\x9F\x94\xB4 **" + DiscordName(s.name) + "**'s lobby closed");
+                it = seen.erase(it);
+            }
+            Sleep(interval * 1000);
+        }
+    }
+
     bool WaitForSignIn()
     {
         for (int i = 0; i < 300 && !lobbies::Available(); ++i) Sleep(100);
@@ -228,9 +417,10 @@ int wmain(int argc, wchar_t** argv)
 {
     winrt::init_apartment(winrt::apartment_type::multi_threaded);
     std::wstring command = argc > 1 ? argv[1] : L"";
-    if (command != L"search" && command != L"show" && command != L"join" && command != L"host" && command != L"p2ppeer")
+    if (command != L"search" && command != L"show" && command != L"join" && command != L"host" && command != L"p2ppeer" && command != L"watch")
     {
         wprintf(L"usage: lobbytool search [template] | show <lobby id> | join <lobby id> [seconds] | host <lobby id> [seconds]\n"
+                L"       lobbytool watch [dry]   post lobby opened/closed to Discord (webhook_url in lobbywatch.ini; dry = print only)\n"
                 L"       lobbytool p2ppeer [seconds] [force] [game user id]   (fake remote player over EOS P2P; force = relays only)\n");
         return 2;
     }
@@ -240,6 +430,8 @@ int wmain(int argc, wchar_t** argv)
     eos::Start();
     if (!WaitForSignIn()) return 1;
     Log(L"lobbytool: signed in as product user %s", eos::LocalUserId().c_str());
+
+    if (command == L"watch") return RunWatch(argc > 2 && _wcsicmp(argv[2], L"dry") == 0);
 
     if (command == L"p2ppeer")
     {

@@ -293,3 +293,13 @@ Game mesh facts found for it (PDUWP.exe, Microsoft's sample MeshManager):
   works, no crash, 23 heap copies, reads from chains under `140009b06 <- 140008953 <- 1400c58f6`. Next: a real match with the tester while
   name_trace is on (only the PC that should see the tags needs it), someone dies, then compare chains during life vs after death.
   The Direct build currently runs build-nametrace with name_trace=on; switch back to build-stagec (61C45C57) for normal play.
+
+## Discord lobby watcher (lobbytool watch)
+`pdnet\tools\out\lobbytool.exe watch` searches the Phantom Dust lobby bucket every `interval_seconds` (default 15, min 10) and posts to a Discord webhook:
+- new lobby -> "opened a lobby" (lobbies already open when the watcher starts are only logged)
+- member count change -> "n/max players"
+- gone from search twice -> Read by id: still there with members -> "full" (search hides full lobbies), else "closed"
+- lobbies with 0 members are ignored (Epic keeps an empty lobby for a while after the host leaves)
+Settings: `lobbywatch.ini` next to the exe: `webhook_url=...` and `interval_seconds=`. tools\out is git-ignored; never commit the webhook URL.
+`lobbytool.exe watch dry` prints the messages instead of posting (the console shows emoji as mojibake; the webhook body is UTF-8).
+Uses the eos.ini credentials next to the exe like the other lobbytool modes.
