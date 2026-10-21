@@ -571,7 +571,15 @@ namespace pdnet::gamepatches
                     // player limit, as FUN_140181ba0 sets it). DAT_140594ea4 = players in the session now.
                     int players = *reinterpret_cast<int32_t*>(At(0x140594ea4));
                     int limit = GameType() == 2 ? 2 : 4;
-                    if (players > limit)
+                    if (GameType() == 1)
+                    {
+                        // Switching a live lobby into Tag Team crashed the other players' games (team lobby layout
+                        // without team data); leaving Tag Team works.
+                        Log(L"menu: switching a lobby into Tag Team isn't supported - keeping type %d rule %d", g_savedType, g_savedRule);
+                        GameType() = g_savedType;
+                        GameRule() = g_savedRule;
+                    }
+                    else if (players > limit)
                     {
                         Log(L"menu: %d players don't fit game type %d (max %d) - keeping type %d rule %d", players, GameType(), limit, g_savedType, g_savedRule);
                         GameType() = g_savedType;

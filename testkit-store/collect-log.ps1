@@ -12,7 +12,9 @@ if (-not (Test-Path $log)) {
     exit
 }
 $out = Join-Path $desktop "pdnet-log-$stamp.txt"
-[IO.File]::WriteAllBytes($out, [IO.File]::ReadAllBytes($log))
+# The game keeps the log open while it runs, so read it with sharing allowed.
+$in = [IO.File]::Open($log, 'Open', 'Read', 'ReadWrite')
+try { $copy = [IO.File]::Create($out); try { $in.CopyTo($copy) } finally { $copy.Dispose() } } finally { $in.Dispose() }
 
 $lines = Get-Content $out
 $start = ($lines | Select-String 'pdnet loaded from' | Select-Object -Last 1).LineNumber
