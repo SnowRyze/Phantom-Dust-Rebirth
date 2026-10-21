@@ -53,10 +53,14 @@ namespace pdnet::gamepatches
 
         // The nametag is drawn white: right before the draw call the game stores 0xffffffff in its text colour
         // (two qwords at 0x14054c9b0 / 0x14054c9b8). Those two stores become a call to a small routine that stores
-        // `argb` instead when the player's health (status[r15] +0x0c, the same field the visibility check used) is 0.
+        // `argb` instead, while nametags on dead bodies are on (g_bodyTags, the lobby host's setting), for a player
+        // (status record = DAT_1404bc608[r15]) who is dead (health +0x0c is 0) or playing dead: the Play Dead skill
+        // (id 360) is their current action (+0x4b4) and that action is still running (+0x4ac = 1; getting up or being
+        // hit changes both). A fake death then looks like a real one.
         void DeadNametagColor(uint32_t argb)
         {
             constexpr uint64_t kSite = 0x1401512cf;
+            constexpr int32_t kPlayDead = 360;
             const std::vector<uint8_t> expected = { 0x48, 0xc7, 0x05, 0xd6, 0xb6, 0x3f, 0x00, 0xff, 0xff, 0xff, 0xff,
                                                     0x48, 0xc7, 0x05, 0xd3, 0xb6, 0x3f, 0x00, 0xff, 0xff, 0xff, 0xff };
             uint8_t* site = At(kSite);
@@ -65,7 +69,7 @@ namespace pdnet::gamepatches
                 Log(L"gamepatch: dead nametag colour skipped - the game code is not what this pdnet expects");
                 return;
             }
-            constexpr size_t kCaveSize = 64;
+            constexpr size_t kCaveSize = 128;
             uint8_t* cave = CodeCave(kCaveSize);
             if (!cave)
             {
@@ -73,30 +77,43 @@ namespace pdnet::gamepatches
                 return;
             }
 
-            uint64_t colour = (static_cast<uint64_t>(argb) << 32) | argb;
             std::vector<uint8_t> code;
             auto rip = [&](size_t instructionLength) { return cave + code.size() + instructionLength; };
-            // lea rax, [0x1404bc608]            (status records, one pointer per player)
-            code.insert(code.end(), { 0x48, 0x8d, 0x05 });
+            std::vector<size_t> toWhite, toDead; // rel8 jumps to patch once the labels are known
+            auto jump = [&](uint8_t opcode, std::vector<size_t>& to) { code.push_back(opcode); to.push_back(code.size()); code.push_back(0); };
+
+            code.insert(code.end(), { 0x48, 0xb8 });                 // mov rax, &g_bodyTags
+            Put64(code, reinterpret_cast<uint64_t>(&g_bodyTags));
+            code.insert(code.end(), { 0x80, 0x38, 0x00 });           // cmp byte [rax], 0
+            jump(0x74, toWhite);                                     // je white
+            code.insert(code.end(), { 0x48, 0x8d, 0x05 });           // lea rax, [DAT_1404bc608]
             Put32(code, Rel32(rip(4), At(0x1404bc608)));
-            // mov rax, [rax + r15*8]
-            code.insert(code.end(), { 0x4a, 0x8b, 0x04, 0xf8 });
-            // test rax, rax ; jz white
-            code.insert(code.end(), { 0x48, 0x85, 0xc0, 0x74, 0x12 });
-            // cmp dword [rax+0xc], 0 ; jne white
-            code.insert(code.end(), { 0x83, 0x78, 0x0c, 0x00, 0x75, 0x0c });
-            // mov rax, colour ; jmp store
-            code.insert(code.end(), { 0x48, 0xb8 });
-            for (int i = 0; i < 8; ++i) code.push_back(static_cast<uint8_t>(colour >> (8 * i)));
-            code.insert(code.end(), { 0xeb, 0x07 });
-            // white: mov rax, -1
-            code.insert(code.end(), { 0x48, 0xc7, 0xc0, 0xff, 0xff, 0xff, 0xff });
-            // store: mov [0x14054c9b0], rax ; mov [0x14054c9b8], rax ; ret
-            code.insert(code.end(), { 0x48, 0x89, 0x05 });
+            code.insert(code.end(), { 0x4a, 0x8b, 0x04, 0xf8 });     // mov rax, [rax + r15*8]
+            code.insert(code.end(), { 0x48, 0x85, 0xc0 });           // test rax, rax
+            jump(0x74, toWhite);                                     // jz white
+            code.insert(code.end(), { 0x83, 0x78, 0x0c, 0x00 });     // cmp dword [rax+0xc], 0
+            jump(0x74, toDead);                                      // je dead
+            code.insert(code.end(), { 0x81, 0xb8, 0xb4, 0x04, 0x00, 0x00 }); // cmp dword [rax+0x4b4], 360
+            Put32(code, kPlayDead);
+            jump(0x75, toWhite);                                     // jne white
+            code.insert(code.end(), { 0x83, 0xb8, 0xac, 0x04, 0x00, 0x00, 0x01 }); // cmp dword [rax+0x4ac], 1
+            jump(0x75, toWhite);                                     // jne white
+            size_t dead = code.size();
+            code.insert(code.end(), { 0x48, 0xb8 });                 // dead: mov rax, colour
+            Put64(code, (static_cast<uint64_t>(argb) << 32) | argb);
+            size_t toStore = code.size() + 1;
+            code.insert(code.end(), { 0xeb, 0x00 });                 // jmp store
+            size_t white = code.size();
+            code.insert(code.end(), { 0x48, 0xc7, 0xc0, 0xff, 0xff, 0xff, 0xff }); // white: mov rax, -1
+            size_t store = code.size();
+            code.insert(code.end(), { 0x48, 0x89, 0x05 });           // store: mov [0x14054c9b0], rax
             Put32(code, Rel32(rip(4), At(0x14054c9b0)));
-            code.insert(code.end(), { 0x48, 0x89, 0x05 });
+            code.insert(code.end(), { 0x48, 0x89, 0x05 });           // mov [0x14054c9b8], rax
             Put32(code, Rel32(rip(4), At(0x14054c9b8)));
-            code.push_back(0xc3);
+            code.push_back(0xc3);                                    // ret
+            for (size_t at : toWhite) code[at] = static_cast<uint8_t>(white - (at + 1));
+            for (size_t at : toDead) code[at] = static_cast<uint8_t>(dead - (at + 1));
+            code[toStore] = static_cast<uint8_t>(store - (toStore + 1));
 
             std::vector<uint8_t> call = { 0xe8 };
             Put32(call, Rel32(site + 5, cave));
@@ -107,7 +124,7 @@ namespace pdnet::gamepatches
                 Log(L"gamepatch: dead nametag colour failed (VirtualProtect error %lu)", GetLastError());
                 return;
             }
-            Log(L"gamepatch: dead nametag colour applied (ARGB %08X)", argb);
+            Log(L"gamepatch: dead nametag colour applied (ARGB %08X, also while playing dead)", argb);
         }
 
         // FUN_140150c30 draws the white nametag over each other player only while their health (status record +0x0c)
