@@ -399,6 +399,108 @@ namespace pdnet::gamepatches
         }
     }
 
+    namespace
+    {
+        // The game's menus are scripts on a stack (manager = DAT_140533c58, current menu index at +0x105f4):
+        //   FUN_140246130(manager, menu, force) opens `menu` on top (saves the current one and its state),
+        //   FUN_1402461f0() closes the top one and re-opens the saved one.
+        // Menu indexes (table DAT_1403fa3d0, 0x18 per entry): livelobby 44, laboratory 45, labostock 63, arsenaledit 64.
+        // Lobby Arsenal editor: the lobby's invite button (pdnet's ShowGameInviteUIAsync) opens arsenaledit on top
+        // of livelobby; while it is open from there, its exit to another menu (normally the Laboratory) becomes a
+        // "back", so it returns to the lobby with the lobby's state restored, like the lobby's own Change Arsenal.
+        constexpr int kLobbyMenu = 44, kStockMenu = 63, kEditorMenu = 64;
+        using PushMenuFn = int (*)(int64_t manager, int menu, char force);
+        using PopMenuFn = int (*)();
+        PushMenuFn g_pushMenu = nullptr; // the original functions (trampolines)
+        PopMenuFn g_popMenu = nullptr;
+        std::atomic<bool> g_editorFromLobby{ false };
+
+        int64_t MenuManager() { return *reinterpret_cast<int64_t*>(At(0x140533c58)); }
+        int CurrentMenu(int64_t manager) { return manager ? *reinterpret_cast<int16_t*>(manager + 0x105f4) : -1; }
+
+        int HookedPushMenu(int64_t manager, int menu, char force)
+        {
+            int current = CurrentMenu(manager);
+            if (menu != current) Log(L"menu: open %d (from %d)", menu, current);
+            if (g_editorFromLobby && current == kEditorMenu && menu != kEditorMenu && menu != kStockMenu)
+            {
+                Log(L"menu: leaving the Arsenal editor opened from the lobby - back to the lobby instead of menu %d", menu);
+                g_editorFromLobby = false;
+                return g_popMenu();
+            }
+            return g_pushMenu(manager, menu, force);
+        }
+
+        int HookedPopMenu()
+        {
+            int current = CurrentMenu(MenuManager());
+            Log(L"menu: back (from %d)", current);
+            if (current == kEditorMenu) g_editorFromLobby = false;
+            return g_popMenu();
+        }
+
+        // Replaces the 10-byte prologue `mov [rsp+8],rbx / push rdi / sub rsp,0x20` at `ghidra` with a jump to `hook`
+        // (through a 14-byte absolute jump in the code cave) and returns a trampoline that runs the prologue and
+        // continues in the original function.
+        void* InlineHook(uint64_t ghidra, void* hook, const wchar_t* name)
+        {
+            const uint8_t prologue[10] = { 0x48, 0x89, 0x5c, 0x24, 0x08, 0x57, 0x48, 0x83, 0xec, 0x20 };
+            uint8_t* site = At(ghidra);
+            if (memcmp(site, prologue, sizeof(prologue)) != 0)
+            {
+                Log(L"gamepatch: %s hook skipped - the game code is not what this pdnet expects", name);
+                return nullptr;
+            }
+            auto trampoline = static_cast<uint8_t*>(VirtualAlloc(nullptr, 32, MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE));
+            uint8_t* cave = CodeCave(16);
+            if (!trampoline || !cave)
+            {
+                Log(L"gamepatch: %s hook skipped - no memory for it", name);
+                return nullptr;
+            }
+            std::vector<uint8_t> back(prologue, prologue + sizeof(prologue));
+            back.insert(back.end(), { 0xff, 0x25, 0x00, 0x00, 0x00, 0x00 });     // jmp [rip+0]
+            Put64(back, reinterpret_cast<uint64_t>(site + sizeof(prologue)));
+            memcpy(trampoline, back.data(), back.size());
+            FlushInstructionCache(GetCurrentProcess(), trampoline, back.size());
+
+            std::vector<uint8_t> toHook = { 0xff, 0x25, 0x00, 0x00, 0x00, 0x00 }; // jmp [rip+0]
+            Put64(toHook, reinterpret_cast<uint64_t>(hook));
+            std::vector<uint8_t> jump = { 0xe9 };
+            Put32(jump, Rel32(site + 5, cave));
+            jump.resize(sizeof(prologue), 0x90);
+            if (!Write(cave, toHook) || !Write(site, jump))
+            {
+                Log(L"gamepatch: %s hook failed (VirtualProtect error %lu)", name, GetLastError());
+                return nullptr;
+            }
+            return trampoline;
+        }
+
+        void LobbyArsenalEditor()
+        {
+            auto pop = reinterpret_cast<PopMenuFn>(InlineHook(0x1402461f0, reinterpret_cast<void*>(&HookedPopMenu), L"menu back"));
+            if (!pop) return;
+            g_popMenu = pop;
+            auto push = reinterpret_cast<PushMenuFn>(InlineHook(0x140246130, reinterpret_cast<void*>(&HookedPushMenu), L"menu open"));
+            if (!push) return;
+            g_pushMenu = push;
+            Log(L"gamepatch: lobby Arsenal editor ready (the lobby's invite button opens it)");
+        }
+    }
+
+    bool OpenLobbyArsenalEditor()
+    {
+        int64_t manager = MenuManager();
+        int current = CurrentMenu(manager);
+        if (!g_pushMenu || current != kLobbyMenu) return false;
+        Log(L"menu: invite button in the lobby - opening the Arsenal editor");
+        g_editorFromLobby = true;
+        *At(0x1404bbc34) = 0; // as the script's own "open menu" command does
+        g_pushMenu(manager, kEditorMenu, 0);
+        return true;
+    }
+
     void Apply()
     {
         static std::once_flag once;
@@ -411,6 +513,7 @@ namespace pdnet::gamepatches
                 TrackPlayDead();
             }
             if (GetConfig().nametagDebug) NametagDebug();
+            if (GetConfig().lobbyArsenalEditor) LobbyArsenalEditor();
         });
     }
 

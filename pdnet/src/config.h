@@ -14,7 +14,8 @@ namespace pdnet
         uint16_t controlPort = 43211;       // pdnet control channel (connect handshake, pings)
         uint32_t qosProbes = 5;
         bool testPeer = false;              // test_peer=on: in-process fake second player (debug, see testpeer.h)
-        bool nametagsOnBodies = true;       // nametags_on_bodies=on: keep nametags over dead players (game code patch, see gamepatches.h)
+        bool lobbyArsenalEditor = true;     // lobby_arsenal_editor=on: the lobby's invite button opens the Arsenal editor (see gamepatches.h)
+        bool nametagsOnBodies = true;      // nametags_on_bodies=on: keep nametags over dead players (game code patch, see gamepatches.h)
         uint32_t deadNametagColor = 0xFFFFE600; // dead_nametag_color=RRGGBB: colour of a dead player's nametag (default yellow)
         int nametagDebug = 0;               // nametag_debug=on (1): log the nametag-related fields of each player when they change; deep (2): also rare changes in player 1's game structures (debug, see gamepatches.cpp)
         int nameTrace = 0;                  // name_trace=draw|on (2): log game text draws of other players' names; memory (1): log reads of name copies (debug, see xsapi/nametrace.h)

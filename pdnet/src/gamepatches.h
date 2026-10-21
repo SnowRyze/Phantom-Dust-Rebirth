@@ -9,4 +9,8 @@ namespace pdnet::gamepatches
     // (xsapi/mpsd.cpp reads it from the host's lobby member attributes), otherwise this PC's nametags_on_bodies.
     void SetNametagsOnBodies(bool on, const wchar_t* why);
     void UseOwnSettings();
+
+    // The lobby's invite button (no Xbox Live invites any more) opens the Arsenal editor; leaving it returns to the
+    // lobby. Returns false when not in the lobby menu (or the menu hooks aren't installed).
+    bool OpenLobbyArsenalEditor();
 }
