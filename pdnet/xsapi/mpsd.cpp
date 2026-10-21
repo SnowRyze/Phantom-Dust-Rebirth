@@ -181,7 +181,7 @@ namespace pdnet::mpsd
                 if (it == before.end() || it->second != v) c.set[k] = v;
             }
             for (auto& [k, v] : before)
-                if (!after.count(k)) c.remove.push_back(k);
+                if (!after.count(k) && k != "PD_DISCORD") c.remove.push_back(k); // PD_DISCORD: discord.cpp's message id, not the game's
             return c;
         }
 

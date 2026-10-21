@@ -1,6 +1,7 @@
 #pragma once
 // Discord channel announcements through a webhook (discord_webhook= in pdnet.ini): the PC that owns a public lobby
-// posts when it opens, when its player count changes and when it closes. Plain C++ like lobbies.h, so the XSAPI
+// posts one message when it opens and edits that message as players join and leave and when it closes (the message id
+// travels in the lobby as PD_DISCORD, so a new owner keeps editing it). Plain C++ like lobbies.h, so the XSAPI
 // stand-in can call it. Every announcement is posted on a worker thread and never blocks the game.
 #include "lobbies.h"
 #include <string>

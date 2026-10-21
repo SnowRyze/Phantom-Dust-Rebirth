@@ -25,18 +25,124 @@ namespace pdnet::discord
             return out;
         }
 
-        // Announcements go out one at a time, in order, on their own thread.
+        // One Discord message per lobby: posted when the lobby opens, then edited in place when players join or leave
+        // and when it closes. Its id is kept here and in the lobby itself (attribute PD_DISCORD), so if the host
+        // leaves, the player who takes the lobby over keeps editing the same message.
+        // Sending: POST <webhook>?wait=true (Discord answers with the message and its id), PATCH <webhook>/messages/<id>.
+        struct Job
+        {
+            std::string lobbyId;
+            std::string text;
+            bool closing = false; // the lobby's last state: forget its message afterwards
+        };
         std::mutex g_queueLock;
         std::condition_variable g_queueReady;
-        std::deque<std::string> g_queue;
+        std::deque<Job> g_queue;
         bool g_threadStarted = false;
+        std::map<std::string, std::string> g_messages; // lobby id -> Discord message id (under g_queueLock)
 
-        void Post(const std::string& text)
+        // Sends one request; returns the HTTP status (0 if Discord wasn't reached) and the response body.
+        DWORD Request(const std::wstring& url, const wchar_t* method, const std::wstring& suffix, const std::string& text, std::string* response)
+        {
+            URL_COMPONENTS parts{ sizeof(parts) };
+            wchar_t host[256], path[2048], extra[1024];
+            parts.lpszHostName = host;
+            parts.dwHostNameLength = _countof(host);
+            parts.lpszUrlPath = path;
+            parts.dwUrlPathLength = _countof(path);
+            parts.lpszExtraInfo = extra;
+            parts.dwExtraInfoLength = _countof(extra);
+            if (!WinHttpCrackUrl(url.c_str(), 0, 0, &parts))
+            {
+                Log(L"discord: discord_webhook is not a valid URL");
+                return 0;
+            }
+            // suffix: "/messages/<id>" goes on the path, "?wait=true" joins any query the webhook URL already has.
+            std::wstring target = path;
+            std::wstring query = extra;
+            if (!suffix.empty() && suffix[0] == L'?') query = query.empty() ? suffix : query + L"&" + suffix.substr(1);
+            else target += suffix;
+            target += query;
+            std::string body = "{\"content\":\"" + JsonEscape(text) + "\",\"allowed_mentions\":{\"parse\":[]}}";
+            DWORD status = 0;
+            HINTERNET session = WinHttpOpen(L"pdnet/1", WINHTTP_ACCESS_TYPE_AUTOMATIC_PROXY, nullptr, nullptr, 0);
+            HINTERNET connect = session ? WinHttpConnect(session, host, parts.nPort, 0) : nullptr;
+            HINTERNET request = connect ? WinHttpOpenRequest(connect, method, target.c_str(), nullptr, nullptr, nullptr, WINHTTP_FLAG_SECURE) : nullptr;
+            if (request &&
+                WinHttpSendRequest(request, L"Content-Type: application/json\r\n", static_cast<DWORD>(-1), body.data(), static_cast<DWORD>(body.size()), static_cast<DWORD>(body.size()), 0) &&
+                WinHttpReceiveResponse(request, nullptr))
+            {
+                DWORD size = sizeof(status);
+                WinHttpQueryHeaders(request, WINHTTP_QUERY_STATUS_CODE | WINHTTP_QUERY_FLAG_NUMBER, nullptr, &status, &size, nullptr);
+                if (response)
+                {
+                    char buf[4096];
+                    for (DWORD got = 0; WinHttpReadData(request, buf, sizeof(buf), &got) && got;) response->append(buf, got);
+                }
+                if (status < 200 || status >= 300) Log(L"discord: Discord answered HTTP %lu to %s", status, method);
+            }
+            else
+            {
+                Log(L"discord: could not reach Discord (error %lu)", GetLastError());
+            }
+            if (request) WinHttpCloseHandle(request);
+            if (connect) WinHttpCloseHandle(connect);
+            if (session) WinHttpCloseHandle(session);
+            return status;
+        }
+
+        void Send(const std::wstring& url, const Job& job)
+        {
+            std::string message;
+            {
+                std::lock_guard guard(g_queueLock);
+                auto it = g_messages.find(job.lobbyId);
+                if (it != g_messages.end()) message = it->second;
+            }
+            DWORD status = 0;
+            if (!message.empty())
+            {
+                status = Request(url, L"PATCH", L"/messages/" + std::wstring(winrt::to_hstring(message)), job.text, nullptr);
+                if (status == 404) message.clear(); // someone deleted the message: post a new one
+            }
+            if (message.empty())
+            {
+                std::string response;
+                status = Request(url, L"POST", L"?wait=true", job.text, &response);
+                winrt::Windows::Data::Json::JsonObject posted{ nullptr };
+                if (status >= 200 && status < 300 && winrt::Windows::Data::Json::JsonObject::TryParse(winrt::to_hstring(response), posted))
+                    message = winrt::to_string(posted.GetNamedString(L"id", L""));
+                if (!message.empty() && !job.closing)
+                {
+                    {
+                        std::lock_guard guard(g_queueLock);
+                        g_messages[job.lobbyId] = message;
+                    }
+                    // For whoever takes the lobby over (owner only; a non-owner's change is logged and dropped).
+                    lobbies::Update(job.lobbyId, lobbies::Changes{ { { "PD_DISCORD", message } }, {} }, lobbies::Changes{});
+                }
+            }
+            if (job.closing)
+            {
+                std::lock_guard guard(g_queueLock);
+                g_messages.erase(job.lobbyId);
+            }
+        }
+
+        // Queues the lobby's message as it should now read. A newer state replaces a queued one for the same lobby,
+        // so a burst of joins becomes one edit.
+        void Show(const std::string& lobbyId, const std::string& text, bool closing = false)
         {
             const std::wstring& url = GetConfig().discordWebhook;
             if (url.empty()) return;
             std::lock_guard guard(g_queueLock);
-            g_queue.push_back(text);
+            auto queued = std::find_if(g_queue.begin(), g_queue.end(), [&](const Job& j) { return j.lobbyId == lobbyId; });
+            if (queued != g_queue.end())
+            {
+                queued->text = text;
+                queued->closing |= closing;
+            }
+            else g_queue.push_back(Job{ lobbyId, text, closing });
             if (!g_threadStarted)
             {
                 g_threadStarted = true;
@@ -44,14 +150,14 @@ namespace pdnet::discord
                 {
                     for (;;)
                     {
-                        std::string next;
+                        Job next;
                         {
                             std::unique_lock lock(g_queueLock);
                             g_queueReady.wait(lock, [] { return !g_queue.empty(); });
                             next = std::move(g_queue.front());
                             g_queue.pop_front();
                         }
-                        PostNow(url, next);
+                        Send(url, next);
                     }
                 }).detach();
             }
@@ -64,6 +170,9 @@ namespace pdnet::discord
             uint32_t members = 0;
             bool opened = false; // "opened" waits for the game's search handle, which says the game type and rule
             std::map<std::string, std::string> players; // EOS product user id -> player name
+            std::string match;       // "Tag Team · Standard Battle"
+            uint32_t maxMembers = 0;
+            std::string lastChange;  // "👥 **B** joined" / "👋 **C** left"
         };
         std::mutex g_lock;
         std::map<std::string, Announced> g_lobbies; // lobbies this PC owns and announces
@@ -107,55 +216,43 @@ namespace pdnet::discord
             return std::to_string(members) + "/" + std::to_string(max) + " players";
         }
 
-        // Posts "opened" once the lobby carries the game's search handle. Called with g_lock held.
-        std::string OpenedText(const lobbies::Lobby& l, Announced& a)
+        // The lobby's message as it should read now:
+        //   🟢 **Host** opened a Phantom Dust lobby · Tag Team · Standard Battle · 2/4 players   (🎮 ... · full)
+        //   Players: **Host**, **B**
+        //   👥 **B** joined
+        // and once closed: 🔴 **Host**'s lobby closed · Tag Team · Standard Battle
+        std::string Card(const Announced& a, bool closed = false)
         {
-            if (a.opened || lobbies::Joined(l.attributes, "PD_SEARCH").empty()) return {};
+            std::string match = a.match.empty() ? "" : " \xC2\xB7 " + a.match;
+            if (closed) return "\xF0\x9F\x94\xB4 **" + Name(a.name) + "**'s lobby closed" + match;
+            bool full = a.maxMembers && a.members >= a.maxMembers;
+            std::vector<std::string> names;
+            for (auto& [id, name] : a.players) names.push_back(name);
+            std::string text = (full ? "\xF0\x9F\x8E\xAE **" : "\xF0\x9F\x9F\xA2 **") + Name(a.name) + "** opened a Phantom Dust lobby" + match +
+                               " \xC2\xB7 " + Players(a.members, a.maxMembers) + (full ? " \xC2\xB7 full" : "");
+            if (!names.empty()) text += "\nPlayers: " + Names(names);
+            if (!a.lastChange.empty()) text += "\n" + a.lastChange;
+            return text;
+        }
+
+        // Fills in the lobby once it carries the game's search handle (game type and rule). Called with g_lock held;
+        // returns true when the message should go out now.
+        bool Open(const lobbies::Lobby& l, Announced& a)
+        {
+            if (a.opened || lobbies::Joined(l.attributes, "PD_SEARCH").empty()) return false;
             a.opened = true;
             a.members = Members(l);
             a.players = Roster(l);
-            if (!GetConfig().discordLobbyMessages) return {};
-            std::string match = MatchDescription(l);
-            return "\xF0\x9F\x9F\xA2 **" + Name(a.name) + "** opened a Phantom Dust lobby \xC2\xB7 " + (match.empty() ? "" : match + " \xC2\xB7 ") +
-                   Players(a.members, l.maxMembers);
+            a.match = MatchDescription(l);
+            a.maxMembers = l.maxMembers;
+            return GetConfig().discordLobbyMessages;
         }
     }
 
     bool PostNow(const std::wstring& url, const std::string& text)
     {
-        URL_COMPONENTS parts{ sizeof(parts) };
-        wchar_t host[256], path[2048];
-        parts.lpszHostName = host;
-        parts.dwHostNameLength = _countof(host);
-        parts.lpszUrlPath = path;
-        parts.dwUrlPathLength = _countof(path);
-        if (!WinHttpCrackUrl(url.c_str(), 0, 0, &parts))
-        {
-            Log(L"discord: discord_webhook is not a valid URL");
-            return false;
-        }
-        std::string body = "{\"content\":\"" + JsonEscape(text) + "\",\"allowed_mentions\":{\"parse\":[]}}";
-        bool ok = false;
-        HINTERNET session = WinHttpOpen(L"pdnet/1", WINHTTP_ACCESS_TYPE_AUTOMATIC_PROXY, nullptr, nullptr, 0);
-        HINTERNET connect = session ? WinHttpConnect(session, host, parts.nPort, 0) : nullptr;
-        HINTERNET request = connect ? WinHttpOpenRequest(connect, L"POST", path, nullptr, nullptr, nullptr, WINHTTP_FLAG_SECURE) : nullptr;
-        if (request &&
-            WinHttpSendRequest(request, L"Content-Type: application/json\r\n", static_cast<DWORD>(-1), body.data(), static_cast<DWORD>(body.size()), static_cast<DWORD>(body.size()), 0) &&
-            WinHttpReceiveResponse(request, nullptr))
-        {
-            DWORD status = 0, size = sizeof(status);
-            WinHttpQueryHeaders(request, WINHTTP_QUERY_STATUS_CODE | WINHTTP_QUERY_FLAG_NUMBER, nullptr, &status, &size, nullptr);
-            ok = status >= 200 && status < 300;
-            if (!ok) Log(L"discord: Discord answered HTTP %lu", status);
-        }
-        else
-        {
-            Log(L"discord: could not reach Discord (error %lu)", GetLastError());
-        }
-        if (request) WinHttpCloseHandle(request);
-        if (connect) WinHttpCloseHandle(connect);
-        if (session) WinHttpCloseHandle(session);
-        return ok;
+        DWORD status = Request(url, L"POST", L"", text, nullptr);
+        return status >= 200 && status < 300;
     }
 
     std::string Name(const std::string& s)
@@ -213,9 +310,10 @@ namespace pdnet::discord
         {
             std::lock_guard guard(g_lock);
             if (g_lobbies.count(l.id)) return;
-            text = OpenedText(l, g_lobbies[l.id] = Announced{ HostName(l), Members(l) });
+            Announced& a = g_lobbies[l.id] = Announced{ HostName(l), Members(l) };
+            if (Open(l, a)) text = Card(a);
         }
-        if (!text.empty()) Post(text);
+        if (!text.empty()) Show(l.id, text);
     }
 
     void LobbyChanged(const lobbies::Lobby& l)
@@ -234,13 +332,21 @@ namespace pdnet::discord
             }
             if (it == g_lobbies.end())
             {
-                g_lobbies[l.id] = Announced{ HostName(l), members, true, Roster(l) }; // handed to this PC (host migration): announce changes from now on
+                // Handed to this PC (host migration): keep editing the message the old host posted.
+                Announced a{ HostName(l), members, true, Roster(l), MatchDescription(l), l.maxMembers };
+                g_lobbies[l.id] = a;
+                auto posted = l.attributes.find("PD_DISCORD");
+                if (posted != l.attributes.end() && !posted->second.empty())
+                {
+                    std::lock_guard queue(g_queueLock);
+                    g_messages[l.id] = posted->second;
+                }
                 return;
             }
             Announced& a = it->second;
             if (!a.opened)
             {
-                text = OpenedText(l, a);
+                if (Open(l, a)) text = Card(a);
             }
             else if (a.members != members && members > 0)
             {
@@ -250,35 +356,33 @@ namespace pdnet::discord
                 for (auto& [id, name] : a.players) if (!now.count(id)) left.push_back(name);
                 a.members = members;
                 a.players = std::move(now);
-                std::string host = "**" + Name(a.name) + "**'s lobby", count = Players(members, l.maxMembers);
-                if (!left.empty()) text = "\xF0\x9F\x91\x8B " + Names(left) + " left " + host + " \xC2\xB7 " + count;
-                if (!joined.empty())
-                {
-                    if (!text.empty()) text += "\n";
-                    text += members >= l.maxMembers ? "\xF0\x9F\x8E\xAE " + Names(joined) + " joined \xE2\x80\x94 " + host + " is full \xC2\xB7 " + count
-                                                    : "\xF0\x9F\x91\xA5 " + Names(joined) + " joined " + host + " \xC2\xB7 " + count;
-                }
-                if (text.empty()) text = "\xF0\x9F\x91\xA5 " + host + " \xC2\xB7 " + count;
-                if (!GetConfig().discordPlayerMessages) text.clear();
+                a.maxMembers = l.maxMembers;
+                a.lastChange.clear();
+                if (!joined.empty()) a.lastChange = "\xF0\x9F\x91\xA5 " + Names(joined) + " joined";
+                if (!left.empty()) a.lastChange += (a.lastChange.empty() ? "" : "  ") + std::string("\xF0\x9F\x91\x8B ") + Names(left) + " left";
+                if (GetConfig().discordPlayerMessages) text = Card(a);
             }
         }
-        if (!text.empty()) Post(text);
+        if (!text.empty()) Show(l.id, text);
     }
 
     void LobbyLeft(const std::string& id, bool lastMember)
     {
-        std::string name;
-        bool opened = false;
+        std::string text;
         {
             std::lock_guard guard(g_lock);
             auto it = g_lobbies.find(id);
             if (it == g_lobbies.end()) return;
-            name = it->second.name;
-            opened = it->second.opened;
+            if (lastMember && it->second.opened && GetConfig().discordLobbyMessages) text = Card(it->second, true);
             g_lobbies.erase(it);
         }
-        // Leaving with others still in: EOS hands the lobby to one of them, whose game announces it from now on.
-        if (lastMember && opened && GetConfig().discordLobbyMessages) Post("\xF0\x9F\x94\xB4 **" + Name(name) + "**'s lobby closed");
+        // Leaving with others still in: EOS hands the lobby to one of them, whose game edits the message from now on.
+        if (!text.empty()) Show(id, text, true);
+        else if (!lastMember)
+        {
+            std::lock_guard queue(g_queueLock);
+            g_messages.erase(id);
+        }
     }
 
     void LobbyLost(const std::string& id) { LobbyLeft(id, true); }
