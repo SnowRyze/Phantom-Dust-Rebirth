@@ -240,16 +240,16 @@ namespace pdnet::gamepatches
             }
         }
 
-        // nametag_debug=deep: also every int32 of player 1's status record (DAT_1404bc608[0], 0x6400 bytes) and
-        // player object (DAT_1404bc9d8[0], 0x14000 bytes) that changes rarely: each offset is logged for its first
-        // 8 changes, so constantly changing values (positions, timers) drop out within a second.
+        // nametag_debug=deep: also every int32 of each player's object (DAT_1404bc9d8[i], 0x14000 bytes; it holds the
+        // status record at +0x40) that changes rarely: each offset is logged for its first 12 changes, so constantly
+        // changing values (positions, timers) drop out within a second.
         void DeepDebug()
         {
             std::thread([]
             {
-                struct Area { const wchar_t* name; uint64_t table; size_t count; std::vector<int32_t> last; std::vector<uint8_t> changes; bool have = false; };
-                Area areas[] = { { L"status", 0x1404bc608, 0x6400 / 4 }, { L"object", 0x1404bc9d8, 0x14000 / 4 } };
-                Log(L"nametag-debug: deep mode, logging rare changes in player 1's status record and player object");
+                struct Area { int player; uint64_t table; size_t count; std::vector<int32_t> last; std::vector<uint8_t> changes; bool have = false; };
+                Area areas[] = { { 1, 0x1404bc9d8, 0x14000 / 4 }, { 2, 0x1404bc9e0, 0x14000 / 4 }, { 3, 0x1404bc9e8, 0x14000 / 4 }, { 4, 0x1404bc9f0, 0x14000 / 4 } };
+                Log(L"nametag-debug: deep mode, logging rare changes in each player's object");
                 std::vector<int32_t> now;
                 for (;;)
                 {
@@ -273,10 +273,10 @@ namespace pdnet::gamepatches
                         for (size_t k = 0; k < a.count; ++k)
                         {
                             if (now[k] == a.last[k]) continue;
-                            if (a.changes[k] < 8)
+                            if (a.changes[k] < 12)
                             {
                                 ++a.changes[k];
-                                Log(L"nametag-debug: %s+0x%X %d -> %d (0x%X)", a.name, static_cast<unsigned>(k * 4), a.last[k], now[k], now[k]);
+                                Log(L"nametag-debug: P%d object+0x%X %d -> %d (0x%X)", a.player, static_cast<unsigned>(k * 4), a.last[k], now[k], now[k]);
                             }
                             a.last[k] = now[k];
                         }
