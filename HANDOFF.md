@@ -314,3 +314,5 @@ The stage C kit pdnet.ini has `discord_webhook=`; make-testkit.ps1 fills it from
 Don't also run `lobbytool watch` on the same channel, or lobbies are announced twice.
 
 Discord messages: 'opened' is posted once the lobby has the game's search handle and names gametype (0 Battle Royale, 1 Tag Team, 2 One-on-One) and gamerule (0 Standard Battle ... 11 Annihilate the Odd One, order from Assets\Data\Menu\livesession_en.ssb); no rating. Confirmed in game with build-discord2 (7C6381D2), installed in the Direct build.
+
+Discord toggles (pdnet.ini, default on): discord_lobby_messages (opened/closed), discord_player_messages (<name> joined/left/full). Join/leave messages name players from each member's PD_NAME.

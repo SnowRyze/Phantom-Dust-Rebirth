@@ -114,6 +114,7 @@ namespace pdnet::discord
             a.opened = true;
             a.members = Members(l);
             a.players = Roster(l);
+            if (!GetConfig().discordLobbyMessages) return {};
             std::string match = MatchDescription(l);
             return "\xF0\x9F\x9F\xA2 **" + Name(a.name) + "** opened a Phantom Dust lobby \xC2\xB7 " + (match.empty() ? "" : match + " \xC2\xB7 ") +
                    Players(a.members, l.maxMembers);
@@ -258,6 +259,7 @@ namespace pdnet::discord
                                                     : "\xF0\x9F\x91\xA5 " + Names(joined) + " joined " + host + " \xC2\xB7 " + count;
                 }
                 if (text.empty()) text = "\xF0\x9F\x91\xA5 " + host + " \xC2\xB7 " + count;
+                if (!GetConfig().discordPlayerMessages) text.clear();
             }
         }
         if (!text.empty()) Post(text);
@@ -276,7 +278,7 @@ namespace pdnet::discord
             g_lobbies.erase(it);
         }
         // Leaving with others still in: EOS hands the lobby to one of them, whose game announces it from now on.
-        if (lastMember && opened) Post("\xF0\x9F\x94\xB4 **" + Name(name) + "**'s lobby closed");
+        if (lastMember && opened && GetConfig().discordLobbyMessages) Post("\xF0\x9F\x94\xB4 **" + Name(name) + "**'s lobby closed");
     }
 
     void LobbyLost(const std::string& id) { LobbyLeft(id, true); }
