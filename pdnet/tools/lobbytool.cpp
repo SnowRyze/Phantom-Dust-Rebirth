@@ -14,6 +14,7 @@
 #include "config.h"
 #include "eos.h"
 #include "lobbies.h"
+#include "discord.h"
 #include "net.h"
 #include "p2p.h"
 #include "log.h"
@@ -21,9 +22,6 @@
 #include <cstdio>
 #include <thread>
 #include <set>
-#include <winhttp.h>
-#include <winrt/Windows.Data.Json.h>
-#pragma comment(lib, "winhttp.lib")
 
 namespace pdnet
 {
@@ -222,76 +220,6 @@ namespace
 
     // ---- watch: post lobby opened / players changed / full / closed to a Discord channel webhook ----
 
-    std::string JsonEscape(const std::string& s)
-    {
-        std::string out;
-        for (unsigned char c : s)
-        {
-            if (c == '"' || c == '\\') { out += '\\'; out += static_cast<char>(c); }
-            else if (c < 0x20) { char buf[8]; sprintf_s(buf, "\\u%04x", c); out += buf; }
-            else out += static_cast<char>(c);
-        }
-        return out;
-    }
-
-    // Player names are shown in bold: escape Discord markdown so a name can't change the message's formatting.
-    std::string DiscordName(const std::string& s)
-    {
-        std::string out;
-        for (char c : s)
-        {
-            if (strchr("\\*_~`|>#", c)) out += '\\';
-            out += c;
-        }
-        return out.empty() ? "Someone" : out;
-    }
-
-    // POSTs {"content": text} to the webhook. Mentions are disabled, so names like "@everyone" don't ping anyone.
-    bool PostWebhook(const std::wstring& url, const std::string& text)
-    {
-        URL_COMPONENTS parts{ sizeof(parts) };
-        wchar_t host[256], path[2048];
-        parts.lpszHostName = host;
-        parts.dwHostNameLength = _countof(host);
-        parts.lpszUrlPath = path;
-        parts.dwUrlPathLength = _countof(path);
-        if (!WinHttpCrackUrl(url.c_str(), 0, 0, &parts)) return false;
-        std::string body = "{\"content\":\"" + JsonEscape(text) + "\",\"allowed_mentions\":{\"parse\":[]}}";
-        bool ok = false;
-        HINTERNET session = WinHttpOpen(L"pdnet-lobbywatch/1", WINHTTP_ACCESS_TYPE_AUTOMATIC_PROXY, nullptr, nullptr, 0);
-        HINTERNET connect = session ? WinHttpConnect(session, host, parts.nPort, 0) : nullptr;
-        HINTERNET request = connect ? WinHttpOpenRequest(connect, L"POST", path, nullptr, nullptr, nullptr, WINHTTP_FLAG_SECURE) : nullptr;
-        if (request &&
-            WinHttpSendRequest(request, L"Content-Type: application/json\r\n", static_cast<DWORD>(-1), body.data(), static_cast<DWORD>(body.size()), static_cast<DWORD>(body.size()), 0) &&
-            WinHttpReceiveResponse(request, nullptr))
-        {
-            DWORD status = 0, size = sizeof(status);
-            WinHttpQueryHeaders(request, WINHTTP_QUERY_STATUS_CODE | WINHTTP_QUERY_FLAG_NUMBER, nullptr, &status, &size, nullptr);
-            ok = status >= 200 && status < 300;
-            if (!ok) Log(L"watch: Discord answered HTTP %lu", status);
-        }
-        else
-        {
-            Log(L"watch: could not reach Discord (error %lu)", GetLastError());
-        }
-        if (request) WinHttpCloseHandle(request);
-        if (connect) WinHttpCloseHandle(connect);
-        if (session) WinHttpCloseHandle(session);
-        return ok;
-    }
-
-    // A session property from the lobby (PD_PROPS holds name -> raw JSON text); quotes around strings are removed.
-    std::string LobbyProperty(const lobbies::Lobby& l, const wchar_t* name)
-    {
-        winrt::Windows::Data::Json::JsonObject props{ nullptr };
-        std::string json = lobbies::Joined(l.attributes, "PD_PROPS");
-        if (json.empty() || !winrt::Windows::Data::Json::JsonObject::TryParse(winrt::to_hstring(json), props) || !props.HasKey(name)) return {};
-        auto v = props.Lookup(name);
-        std::string text = v.ValueType() == winrt::Windows::Data::Json::JsonValueType::String ? winrt::to_string(v.GetString()) : winrt::to_string(v.Stringify());
-        if (text.size() >= 2 && text.front() == '"' && text.back() == '"') text = text.substr(1, text.size() - 2);
-        return text;
-    }
-
     std::map<std::string, std::string> ReadIni(const std::wstring& path)
     {
         std::map<std::string, std::string> out;
@@ -327,7 +255,7 @@ namespace
         auto post = [&](const std::string& text)
         {
             Log(L"watch: %S", text.c_str());
-            if (!dryRun) PostWebhook(webhook, text);
+            if (!dryRun) discord::PostNow(webhook, text);
         };
 
         struct Seen
@@ -354,15 +282,15 @@ namespace
             {
                 if (l.memberCount == 0) continue; // abandoned: Epic keeps an empty lobby around for a while after its host leaves
                 present.insert(l.id);
-                std::string name = LobbyProperty(l, L"gamename");
-                std::string rating = LobbyProperty(l, L"rating");
+                std::string name = discord::LobbyProperty(l, L"gamename");
+                std::string rating = discord::LobbyProperty(l, L"rating");
                 auto it = seen.find(l.id);
                 if (it == seen.end())
                 {
                     seen[l.id] = Seen{ name, l.memberCount, l.maxMembers };
                     // Lobbies that already exist when the watcher starts are listed quietly in the console only.
                     if (first) Log(L"watch: already open: %S's lobby (%u/%u)", name.c_str(), l.memberCount, l.maxMembers);
-                    else post("\xF0\x9F\x9F\xA2 **" + DiscordName(name) + "** opened a Phantom Dust lobby \xC2\xB7 " + std::to_string(l.memberCount) + "/" +
+                    else post("\xF0\x9F\x9F\xA2 **" + discord::Name(name) + "** opened a Phantom Dust lobby \xC2\xB7 " + std::to_string(l.memberCount) + "/" +
                               std::to_string(l.maxMembers) + " players" + (rating.empty() ? "" : " \xC2\xB7 rating " + rating));
                     continue;
                 }
@@ -372,7 +300,7 @@ namespace
                 {
                     s.full = false;
                     s.members = l.memberCount;
-                    post("\xF0\x9F\x91\xA5 **" + DiscordName(s.name) + "**'s lobby \xC2\xB7 " + std::to_string(l.memberCount) + "/" + std::to_string(l.maxMembers) + " players");
+                    post("\xF0\x9F\x91\xA5 **" + discord::Name(s.name) + "**'s lobby \xC2\xB7 " + std::to_string(l.memberCount) + "/" + std::to_string(l.maxMembers) + " players");
                 }
             }
             for (auto it = seen.begin(); it != seen.end();)
@@ -391,14 +319,14 @@ namespace
                     {
                         s.full = true;
                         s.members = direct->memberCount;
-                        post("\xF0\x9F\x8E\xAE **" + DiscordName(s.name) + "**'s lobby is full \xC2\xB7 " + std::to_string(direct->memberCount) + "/" +
+                        post("\xF0\x9F\x8E\xAE **" + discord::Name(s.name) + "**'s lobby is full \xC2\xB7 " + std::to_string(direct->memberCount) + "/" +
                              std::to_string(direct->maxMembers) + " players");
                     }
                     s.misses = 0;
                     ++it;
                     continue;
                 }
-                post("\xF0\x9F\x94\xB4 **" + DiscordName(s.name) + "**'s lobby closed");
+                post("\xF0\x9F\x94\xB4 **" + discord::Name(s.name) + "**'s lobby closed");
                 it = seen.erase(it);
             }
             Sleep(interval * 1000);

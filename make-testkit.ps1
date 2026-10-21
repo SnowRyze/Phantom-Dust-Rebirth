@@ -6,7 +6,9 @@
 #   -Build <folder under pdnet>   default build-stageb-tested (B) / build-stagec (C)
 # eos.ini holds an EOS client id and secret. Use the tester client (eos.tester.ini), not the development client
 # in _netmod\eos.local.ini (see HANDOFF §9).
-param([ValidateSet('B', 'C')][string]$Stage = 'C', [string]$EosIni, [string]$Build)
+#   -Webhook <Discord webhook URL>   stage C: players' games announce the lobbies they host there
+#            (default: webhook_url from pdnet\tools\out\lobbywatch.ini; -Webhook none = no Discord messages)
+param([ValidateSet('B', 'C')][string]$Stage = 'C', [string]$EosIni, [string]$Build, [string]$Webhook)
 $ErrorActionPreference = 'Stop'
 $root = $PSScriptRoot
 if (-not $Build) { $Build = if ($Stage -eq 'B') { 'build-stageb-tested' } else { 'build-stagec' } }
@@ -34,9 +36,23 @@ Copy-Item "$kitSource\*" $out
 Copy-Item $dll "$out\pdnet\"
 Copy-Item $sdkDll.FullName $out
 if ($EosIni) { Copy-Item $EosIni "$out\eos.ini" }
+if ($Stage -eq 'C') {
+    $watchIni = "$root\pdnet\tools\out\lobbywatch.ini"
+    if (-not $Webhook -and (Test-Path $watchIni)) {
+        $line = Select-String -Path $watchIni -Pattern '^webhook_url=(.+)$' | Select-Object -First 1
+        if ($line) { $Webhook = $line.Matches[0].Groups[1].Value.Trim() }
+    }
+    if ($Webhook -eq 'none') { $Webhook = '' }
+    $ini = (Get-Content "$out\pdnet.ini" -Raw) -replace '(?m)^discord_webhook=.*$', "discord_webhook=$Webhook"
+    Set-Content "$out\pdnet.ini" $ini -Encoding UTF8 -NoNewline
+}
 
 if (Test-Path $zip) { Remove-Item $zip -Force }
 Compress-Archive -Path "$out\*" -DestinationPath $zip
 Write-Host "Kit: $zip  (stage $Stage, pdnet DLL MD5 $md5 from $Build)"
+if ($Stage -eq 'C') {
+    if ($Webhook) { Write-Host 'The Discord webhook URL is INSIDE the zip (pdnet.ini): anyone with the kit can post to that channel.' -ForegroundColor Yellow }
+    else { Write-Host 'No Discord webhook in this kit (lobbies are not announced).' }
+}
 if ($EosIni) { Write-Host 'eos.ini is INSIDE the zip: share it only with your testers.' -ForegroundColor Yellow }
 else { Write-Host 'eos.ini is NOT in the zip: send each tester an eos.ini separately (they put it next to install.ps1).' -ForegroundColor Yellow }

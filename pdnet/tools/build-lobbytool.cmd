@@ -13,7 +13,7 @@ if not exist "%OUT%\obj" mkdir "%OUT%\obj"
 pushd "%OUT%"
 cl /nologo /std:c++20 /EHsc /MT /O2 /Zi /W3 /permissive- /utf-8 /DUNICODE /D_UNICODE /MP /I"%ROOT%src" /I"%EOS_SDK%\Include" ^
    /Fo"obj\\" /Fd"obj\lobbytool.pdb" /Fe"lobbytool.exe" ^
-   "%~dp0lobbytool.cpp" "%ROOT%src\lobbies.cpp" "%ROOT%src\eos.cpp" "%ROOT%src\eossdk.cpp" "%ROOT%src\net.cpp" "%ROOT%src\p2p.cpp" ^
+   "%~dp0lobbytool.cpp" "%ROOT%src\lobbies.cpp" "%ROOT%src\eos.cpp" "%ROOT%src\eossdk.cpp" "%ROOT%src\net.cpp" "%ROOT%src\p2p.cpp" "%ROOT%src\discord.cpp" ^
    /link /DEBUG kernel32.lib ole32.lib oleaut32.lib runtimeobject.lib advapi32.lib ws2_32.lib bcrypt.lib winmm.lib || goto :failed
 copy /y "%EOS_SDK%\Bin\EOSSDK-Win64-Shipping.dll" . >nul || goto :failed
 copy /y "%ROOT%..\eos.local.ini" eos.ini >nul || goto :failed

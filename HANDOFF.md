@@ -303,3 +303,12 @@ Game mesh facts found for it (PDUWP.exe, Microsoft's sample MeshManager):
 Settings: `lobbywatch.ini` next to the exe: `webhook_url=...` and `interval_seconds=`. tools\out is git-ignored; never commit the webhook URL.
 `lobbytool.exe watch dry` prints the messages instead of posting (the console shows emoji as mojibake; the webhook body is UTF-8).
 Uses the eos.ini credentials next to the exe like the other lobbytool modes.
+
+## Discord announcements from every player's game (discord_webhook=)
+pdnet.ini `discord_webhook=<URL>` (src/discord.*): the PC that owns a public SearchableGame lobby posts to the webhook
+on a worker thread: opened (mpsd Write, created + owner), player count / full (OnLobbyEvent -> LobbyChanged),
+closed (Write leave when last member -> LobbyLeft; EOS Closed/Kicked -> LobbyLost). Host migration: the old owner stops,
+the new owner adopts the lobby silently and announces later changes. A crashed/killed host posts no "closed".
+The stage C kit pdnet.ini has `discord_webhook=`; make-testkit.ps1 fills it from -Webhook or pdnet\tools\out\lobbywatch.ini
+(-Webhook none = off). The URL is then inside every kit: if abused, delete the webhook in Discord and rebuild kits.
+Don't also run `lobbytool watch` on the same channel, or lobbies are announced twice.

@@ -1,6 +1,7 @@
 #include "xsapi_pch.h"
 #include "mpsd.h"
 #include "../src/lobbies.h"
+#include "../src/discord.h"
 #include "nametrace.h"
 #include <winrt/Windows.Data.Json.h>
 #include <bcrypt.h>
@@ -753,6 +754,7 @@ namespace pdnet::mpsd
                 {
                     OwnerDuties(lobbyId);
                     if (auto fresh = lobbies::Read(lobbyId); fresh && fresh->joined) lobby = fresh;
+                    if (created && lobby->ownerId == lobbies::LocalUserId()) discord::LobbyOpened(*lobby);
                     doc = FromLobby(*lobby, &doc);
                     if (!created && written.edits.any())
                     {
@@ -772,6 +774,7 @@ namespace pdnet::mpsd
                 bool alone = live && live->members.size() <= 1;
                 if (live && live->joined && live->ownerId == lobbies::LocalUserId() && alone) lobbies::Destroy(lobbyId);
                 else lobbies::Leave(lobbyId);
+                discord::LobbyLeft(lobbyId, alone);
                 Log(L"xsapi-pdnet: left lobby %S (%s/%s)%s", lobbyId.c_str(), doc.templateName.c_str(), doc.sessionName.c_str(), alone ? L", destroyed" : L"");
                 doc.shared = false;
                 m_myRequests.erase(key);
@@ -912,10 +915,12 @@ namespace pdnet::mpsd
                 doc = *old;
                 std::erase_if(doc.members, [&](const MemberDoc& m) { return m.xuid == xsapi::LocalXuid(); });
                 doc.shared = false;
+                discord::LobbyLost(lobbyId);
                 Log(L"xsapi-pdnet: lobby %S closed or this PC was removed; %s/%s is no longer shared", lobbyId.c_str(), doc.templateName.c_str(), doc.sessionName.c_str());
             }
             else
             {
+                discord::LobbyChanged(*lobby);
                 doc = FromLobby(*lobby, &*old);
             }
 

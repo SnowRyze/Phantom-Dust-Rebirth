@@ -21,6 +21,7 @@ namespace pdnet
         bool eos = false;                   // eos=on: stay signed in to Epic Online Services (see eos.h)
         bool xboxOff = false;               // xbox=off: pdnet answers every Xbox Live (XSAPI) class itself (see xsapi/)
         std::wstring displayName = L"Player"; // display_name=: name shown to other players (max 32 characters)
+        std::wstring discordWebhook;        // discord_webhook=<URL>: announce lobbies this PC hosts in a Discord channel (see discord.h)
     };
 
     // Loaded once: pdnet.ini next to the DLL, else LocalState\pdnet.ini (written with defaults if missing).

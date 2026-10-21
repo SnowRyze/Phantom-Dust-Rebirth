@@ -89,6 +89,7 @@ namespace pdnet
                 else if (key == "eos_test") c.eosTest = _stricmp(value.c_str(), "on") == 0;
                 else if (key == "eos") c.eos = _stricmp(value.c_str(), "on") == 0;
                 else if (key == "xbox") c.xboxOff = _stricmp(value.c_str(), "off") == 0;
+                else if (key == "discord_webhook") c.discordWebhook = std::wstring(value.begin(), value.end());
                 else if (key == "display_name" && !value.empty())
                 {
                     std::wstring name{ winrt::to_hstring(value) };
@@ -97,6 +98,7 @@ namespace pdnet
             }
             if (c.testPeer) Log(L"config: test_peer=on (fake second player starts when a lobby is created)");
             if (c.nameTrace) Log(L"config: name_trace=%s (debug only)", c.nameTrace == 2 ? L"draw (logs game text draws of other players' names)" : L"memory (logs reads of copies of other players' names)");
+            if (!c.discordWebhook.empty()) Log(L"config: discord_webhook set (lobbies this PC hosts are announced in Discord)");
             if (c.p2p && !c.eos)
             {
                 Log(L"config: network_mode=eos needs eos=on; using direct");
