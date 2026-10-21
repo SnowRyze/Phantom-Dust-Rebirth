@@ -125,7 +125,9 @@ catch { Write-Host "Warning: the local-connection exemption was not set ($_). Lo
 $consent = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\CapabilityAccessManager\ConsentStore\microphone'
 $appConsent = "$consent\$($pkg.PackageFamilyName)"
 $current = (Get-ItemProperty $appConsent -ErrorAction SilentlyContinue).Value
-if ($current -eq 'Allow') { Write-Host "`nMicrophone: Phantom Dust may already use it (voice chat)." }
+$voiceOff = (Get-Content "$kit\pdnet.ini" -Encoding UTF8) -match '^\s*voice_chat\s*=\s*off\s*$'
+if ($voiceOff) { } # this kit has voice chat switched off: the microphone isn't used, nothing to ask
+elseif ($current -eq 'Allow') { Write-Host "`nMicrophone: Phantom Dust may already use it (voice chat)." }
 else {
     if (-not $Mic -and -not $NoPause) {
         $answer = Read-Host "`nAllow Phantom Dust to use your microphone for voice chat? You can mute yourself in the lobby (Options > Mic). (Y/N)"
