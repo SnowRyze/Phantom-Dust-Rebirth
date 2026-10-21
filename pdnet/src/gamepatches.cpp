@@ -748,6 +748,45 @@ namespace pdnet::gamepatches
             Log(L"gamepatch: menu_debug - logging session script commands while the settings menu is open");
         }
 
+        // Other players' PCs: the host's settings message (FUN_1401910a0 -> FUN_140191a60 on the receiving side)
+        // only updates 1405277b4 (type) / 1405277fc (rule), which the game uses for the next battle. The lobby itself
+        // keeps the type and player limit this PC joined with (DAT_14050d2d8, DAT_14051c0a4), so after the host
+        // turns a One-on-One into a 4-player lobby, a 3rd player who joins is never shown here. While in the lobby
+        // as a non-host (player slot DAT_140527bc4 != 0), apply the host's type and rule to this PC's lobby too.
+        void FollowHostSettings()
+        {
+            std::thread([]
+            {
+                // Only changes seen while in the lobby count: on arriving, the host's values may still be left over
+                // from an earlier session until the host's next message.
+                bool inLobby = false;
+                int32_t seenType = -1, seenRule = -1;
+                for (;;)
+                {
+                    Sleep(250);
+                    bool lobby = CurrentMenu(MenuManager()) == kLobbyMenu && *reinterpret_cast<int32_t*>(At(0x140527bc4)) != 0;
+                    int32_t type = *reinterpret_cast<int32_t*>(At(0x1405277b4)), rule = *reinterpret_cast<int32_t*>(At(0x1405277fc));
+                    if (!lobby || !inLobby)
+                    {
+                        inLobby = lobby;
+                        seenType = type;
+                        seenRule = rule;
+                        continue;
+                    }
+                    if (type == seenType && rule == seenRule) continue;
+                    seenType = type;
+                    seenRule = rule;
+                    if (type < 0 || type > 2 || rule < 0 || rule > 11) continue;
+                    if (type == GameType() && rule == GameRule()) continue;
+                    Log(L"menu: the host changed the lobby to game type %d rule %d (this PC had %d / %d) - following", type, rule, GameType(), GameRule());
+                    GameType() = type;
+                    GameRule() = rule;
+                    *reinterpret_cast<int32_t*>(At(0x140527ab8)) = rule;
+                    *reinterpret_cast<int32_t*>(At(0x14051c0a4)) = type == 2 ? 2 : 4;
+                }
+            }).detach();
+        }
+
         void LobbyArsenalEditor()
         {
             auto pop = reinterpret_cast<PopMenuFn>(InlineHook(0x1402461f0, reinterpret_cast<void*>(&HookedPopMenu), L"menu back"));
@@ -759,6 +798,7 @@ namespace pdnet::gamepatches
             Log(L"gamepatch: lobby Arsenal editor ready (the lobby's invite button opens it)");
             RenameLobbyInvite(); // again whenever the lobby opens, in case the strings were loaded later
             HookResetSettings(); // before the debug wrappers, so they wrap this one
+            FollowHostSettings();
             if (GetConfig().menuDebug) ScriptCommandLog();
         }
     }
