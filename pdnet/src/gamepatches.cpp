@@ -611,8 +611,8 @@ namespace pdnet::gamepatches
                 if (GameType() != g_savedType)
                 {
                     // One-on-One holds 2 players, Battle Royale and Tag Team 4 (DAT_14051c0a4 = the session's
-                    // player limit, as FUN_140181ba0 sets it). DAT_140594ea4 = players in the session now.
-                    int players = *reinterpret_cast<int32_t*>(At(0x140594ea4));
+                    // player limit, as FUN_140181ba0 sets it). Players now: the lobby's members (pdnet's session).
+                    int players = static_cast<int>(xsapi::SharedSessionMembers());
                     int limit = GameType() == 2 ? 2 : 4;
                     if (GameType() == 1)
                     {

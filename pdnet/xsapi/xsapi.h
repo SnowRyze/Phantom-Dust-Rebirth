@@ -12,4 +12,7 @@ namespace pdnet::xsapi
     // Sets the player limit of every shared session this PC hosts (the EOS lobby's max members), e.g. after the host
     // changes the game type in the lobby (see gamepatches.cpp). Returns how many sessions were changed.
     int SetHostedSessionsMaxMembers(uint32_t maxMembers);
+
+    // The most members in any shared session this PC is in (0 if none).
+    uint32_t SharedSessionMembers();
 }

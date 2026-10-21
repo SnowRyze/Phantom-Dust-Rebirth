@@ -66,7 +66,8 @@ if (-not $store) {
         $changed = $true
     }
     if ($changed) {
-        try { & (Join-Path $kit 'nosuspend.ps1') -Off | Out-Null } catch {}
+        # In its own process: it defines the same Windows interface type as this script does below.
+        & powershell.exe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $kit 'nosuspend.ps1') -Off | Out-Null
         Remove-AppxPackage $pkg.PackageFullName -PreserveApplicationData
         Register $folder
         $pkg = Get-AppxPackage $package

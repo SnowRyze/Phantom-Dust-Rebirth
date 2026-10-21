@@ -1014,4 +1014,18 @@ namespace pdnet::mpsd
 namespace pdnet::xsapi
 {
     int SetHostedSessionsMaxMembers(uint32_t maxMembers) { return mpsd::SessionStore::Instance().SetHostedMaxMembers(maxMembers); }
+
+    uint32_t SharedSessionMembers()
+    {
+        uint32_t most = 0;
+        for (auto& doc : mpsd::SessionStore::Instance().All())
+            if (doc->shared)
+            {
+                uint32_t n = 0;
+                for (auto& m : doc->members)
+                    if (!m.reservation) ++n;
+                most = (std::max)(most, n);
+            }
+        return most;
+    }
 }
