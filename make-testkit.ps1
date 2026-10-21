@@ -64,6 +64,9 @@ if ($Stage -ne 'B') {
 
 if (Test-Path $zip) { Remove-Item $zip -Force }
 Compress-Archive -Path "$out\*" -DestinationPath $zip
+# Only the zip is for handing out: an unzipped copy here gets used by mistake (Setup.bat run from it points the game
+# at a folder this script deletes and rebuilds).
+Remove-Item $out -Recurse -Force
 Write-Host "Kit: $zip  (stage $Stage, pdnet DLL MD5 $md5 from $Build)"
 if ($Stage -ne 'B') {
     if ($Webhook) { Write-Host 'The Discord webhook URL is INSIDE the zip (pdnet.ini): anyone with the kit can post to that channel.' -ForegroundColor Yellow }

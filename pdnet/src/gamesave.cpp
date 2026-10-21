@@ -1,6 +1,7 @@
 #include "pch.h"
 #include "gamesave.h"
 #include "log.h"
+#include "config.h"
 #include <fstream>
 
 namespace wf = winrt::Windows::Foundation;
@@ -481,6 +482,88 @@ namespace pdnet
             ws::GameSaveProvider Value() const { return m_value; }
         };
 
+        // ---------------------------------------------------------------- one-time import from Xbox
+
+        // Waits for an Xbox call, at most `seconds` (an unpacked copy can hang forever trying to sign in).
+        template <typename Async>
+        bool Finished(Async const& op, int seconds)
+        {
+            if (op.wait_for(std::chrono::seconds(seconds)) == wf::AsyncStatus::Completed) return true;
+            op.Cancel();
+            return false;
+        }
+
+        // The first time the game asks for its saves, copy the player's Xbox cloud save (story progress, collection,
+        // arsenals, play time: every container and blob) into the local store, through the real Xbox save service.
+        // Once only (marker file), never over existing local saves, and read only: the cloud save is not changed.
+        void ImportCloudSaves(winrt::Windows::System::User const& user, hstring const& scid)
+        {
+            std::error_code ec;
+            fs::path marker = SaveRoot() / L"_cloud_import.txt";
+            if (fs::exists(marker, ec)) return;
+            auto note = [&](const std::wstring& text)
+            {
+                std::lock_guard guard(g_io);
+                std::string line = winrt::to_string(text) + "\n";
+                WriteFileAtomic(marker, reinterpret_cast<const uint8_t*>(line.data()), line.size());
+                Log(L"GameSave: cloud import: %s", text.c_str());
+            };
+            for (auto& dir : fs::directory_iterator(SaveRoot(), ec))
+                if (dir.is_directory())
+                {
+                    note(L"skipped - local saves already exist (delete the saves folder and _cloud_import.txt to import again)");
+                    return;
+                }
+            try
+            {
+                Log(L"GameSave: cloud import: reading the Xbox cloud save (once)...");
+                auto getProvider = ws::GameSaveProvider::GetForUserAsync(user, scid); // the real service: pdnet's own calls aren't hooked
+                if (!Finished(getProvider, 20)) return note(L"skipped - Xbox didn't answer in 20 s (not signed in to Xbox?)");
+                auto got = getProvider.GetResults();
+                if (got.Status() != Status::Ok) return note(L"skipped - Xbox save service status " + std::to_wstring(static_cast<int>(got.Status())));
+                auto provider = got.Value();
+                auto queryInfos = provider.CreateContainerInfoQuery().GetContainerInfoAsync();
+                if (!Finished(queryInfos, 30)) return note(L"skipped - listing the cloud save timed out");
+                auto infos = queryInfos.GetResults();
+                if (infos.Status() != Status::Ok) return note(L"skipped - listing the cloud save failed, status " + std::to_wstring(static_cast<int>(infos.Status())));
+                size_t containers = 0, blobs = 0, bytes = 0;
+                for (auto const& info : infos.Value())
+                {
+                    std::wstring name{ info.Name() };
+                    auto container = provider.CreateContainer(info.Name());
+                    auto queryBlobs = container.CreateBlobInfoQuery(L"").GetBlobInfoAsync();
+                    if (!Finished(queryBlobs, 30) || queryBlobs.GetResults().Status() != Status::Ok) return note(L"stopped - listing container " + name + L" failed");
+                    auto names = winrt::single_threaded_vector<hstring>();
+                    for (auto const& blob : queryBlobs.GetResults().Value()) names.Append(blob.Name());
+                    if (names.Size() == 0) continue;
+                    auto read = container.GetAsync(names.GetView());
+                    if (!Finished(read, 60) || read.GetResults().Status() != Status::Ok) return note(L"stopped - reading container " + name + L" failed");
+                    std::lock_guard guard(g_io);
+                    fs::path dir = ContainerDir(name);
+                    for (auto const& blob : read.GetResults().Value())
+                    {
+                        auto buffer = blob.Value();
+                        if (!WriteFileAtomic(dir / Escape(blob.Key()), buffer ? buffer.data() : nullptr, buffer ? buffer.Length() : 0))
+                        {
+                            Log(L"GameSave: cloud import: writing %s/%s failed", name.c_str(), blob.Key().c_str());
+                            continue;
+                        }
+                        ++blobs;
+                        bytes += buffer ? buffer.Length() : 0;
+                        Log(L"GameSave: cloud import: %s/%s (%u bytes)", name.c_str(), blob.Key().c_str(), buffer ? buffer.Length() : 0);
+                    }
+                    std::wstring display{ info.DisplayName() };
+                    if (!display.empty()) WriteFileAtomic(dir / kDisplayNameFile, reinterpret_cast<const uint8_t*>(display.data()), display.size() * sizeof(wchar_t));
+                    ++containers;
+                }
+                note(L"done - " + std::to_wstring(containers) + L" container(s), " + std::to_wstring(blobs) + L" blob(s), " + std::to_wstring(bytes) + L" bytes copied from the Xbox cloud save");
+            }
+            catch (...)
+            {
+                note(L"skipped - Xbox save service error 0x" + std::to_wstring(static_cast<uint32_t>(winrt::to_hresult())));
+            }
+        }
+
         struct ProviderFactory : winrt::implements<ProviderFactory, wf::IActivationFactory, ws::IGameSaveProviderStatics>
         {
             wf::IInspectable ActivateInstance() const
@@ -491,6 +574,11 @@ namespace pdnet
             wf::IAsyncOperation<ws::GameSaveProviderGetResult> GetForUserAsync(winrt::Windows::System::User user, hstring scid)
             {
                 Log(L"GameSave: GetForUserAsync(scid=%s) -> local provider at %s", scid.c_str(), SaveRoot().c_str());
+                if (GetConfig().cloudSaveImport)
+                {
+                    co_await winrt::resume_background(); // the import waits on Xbox; never on the game's thread
+                    ImportCloudSaves(user, scid);
+                }
                 auto provider = Make<ws::GameSaveProvider, Provider>(user);
                 co_return Make<ws::GameSaveProviderGetResult, ProviderGetResult>(provider);
             }

@@ -14,6 +14,7 @@ namespace pdnet
         uint16_t controlPort = 43211;       // pdnet control channel (connect handshake, pings)
         uint32_t qosProbes = 5;
         bool testPeer = false;              // test_peer=on: in-process fake second player (debug, see testpeer.h)
+        bool cloudSaveImport = true;        // cloud_save_import=on: copy the Xbox cloud save into the local saves once, on the first start (see gamesave.cpp)
         bool lobbyArsenalEditor = true;     // lobby_arsenal_editor=on: the lobby's invite button opens the Arsenal editor (see gamepatches.h)
         bool nametagsOnBodies = true;      // nametags_on_bodies=on: keep nametags over dead players (game code patch, see gamepatches.h)
         uint32_t deadNametagColor = 0xFFFFE600; // dead_nametag_color=RRGGBB: colour of a dead player's nametag (default yellow)
