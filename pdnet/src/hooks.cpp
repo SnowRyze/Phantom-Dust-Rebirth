@@ -13,6 +13,8 @@ namespace pdnet
     {
         HMODULE g_self = nullptr;
         std::atomic<bool> g_injected{ false };
+        void (*g_firstXbox)() = nullptr;
+        std::atomic<bool> g_firstXboxSeen{ false };
 
         using RoGetActivationFactoryFn = HRESULT(WINAPI*)(HSTRING, REFIID, void**);
 
@@ -26,6 +28,10 @@ namespace pdnet
         HRESULT TryOverride(HSTRING classId, std::wstring_view cls, REFIID iid, void** factory, bool& handled)
         {
             handled = false;
+            if (g_injected && cls.starts_with(L"Microsoft.Xbox.Services.") && !g_firstXboxSeen.exchange(true) && g_firstXbox)
+            {
+                g_firstXbox(); // pdnet's set-up, now that the game is running (see SetFirstXboxActivationHandler)
+            }
             if (g_injected && GetConfig().xboxOff && cls.starts_with(L"Microsoft.Xbox.Services."))
             {
                 handled = true;
@@ -142,12 +148,15 @@ namespace pdnet
         }
     }
 
+    void SetFirstXboxActivationHandler(void (*handler)()) { g_firstXbox = handler; }
+    bool FirstXboxActivationSeen() { return g_firstXboxSeen; }
+
     void InstallActivationHooks(HMODULE self, bool injected)
     {
         g_self = self;
         if (injected) g_injected = true;
         static std::recursive_mutex lock;
-        static std::set<HMODULE> patched;
+        static std::set<HMODULE> patched, checked; // checked: no RoGetActivationFactory import (imports don't change)
         std::lock_guard guard(lock);
 
         HMODULE modules[1024];
@@ -159,13 +168,18 @@ namespace pdnet
         for (DWORD i = 0; i < (std::min)(static_cast<DWORD>(needed / sizeof(HMODULE)), static_cast<DWORD>(std::size(modules))); ++i)
         {
             HMODULE m = modules[i];
-            if (m == self || patched.count(m))
+            if (m == self || checked.count(m) || (patched.count(m) && !g_injected))
             {
                 continue;
             }
-            if (PatchModule(m))
+            // Injected mode patches modules again on every pass: a module found before the loader filled in its
+            // imports gets our hook overwritten by the real address. PatchModule only writes when the slot differs.
+            if (!PatchModule(m))
             {
-                patched.insert(m);
+                checked.insert(m);
+            }
+            else if (patched.insert(m).second)
+            {
                 wchar_t name[MAX_PATH];
                 GetModuleFileNameW(m, name, MAX_PATH);
                 Log(L"hooked RoGetActivationFactory in %s", wcsrchr(name, L'\\') ? wcsrchr(name, L'\\') + 1 : name);

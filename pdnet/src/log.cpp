@@ -3,6 +3,7 @@
 #include <cstdarg>
 #include <cstdio>
 #include <share.h>
+#include <appmodel.h>
 
 namespace pdnet
 {
@@ -10,6 +11,22 @@ namespace pdnet
     {
         static std::wstring path = []
         {
+            // Built from the package family name first: in injected mode the log is written before the game's app
+            // APIs are ready, and calling ApplicationData then can break the game's start-up.
+            UINT32 length = 0;
+            if (GetCurrentPackageFamilyName(&length, nullptr) == ERROR_INSUFFICIENT_BUFFER && length)
+            {
+                std::wstring family(length, L'\0');
+                wchar_t profile[MAX_PATH];
+                DWORD n = GetEnvironmentVariableW(L"USERPROFILE", profile, MAX_PATH);
+                if (GetCurrentPackageFamilyName(&length, family.data()) == ERROR_SUCCESS && n && n < MAX_PATH)
+                {
+                    family.resize(length - 1);
+                    std::wstring local = std::wstring(profile) + L"\\AppData\\Local\\Packages\\" + family + L"\\LocalState";
+                    DWORD attributes = GetFileAttributesW(local.c_str());
+                    if (attributes != INVALID_FILE_ATTRIBUTES && (attributes & FILE_ATTRIBUTE_DIRECTORY)) return local;
+                }
+            }
             try
             {
                 return std::wstring{ winrt::Windows::Storage::ApplicationData::Current().LocalFolder().Path() };

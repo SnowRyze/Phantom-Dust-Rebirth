@@ -54,11 +54,24 @@ namespace
     }
 }
 
-// pdlaunch calls this in the game process (a remote thread) before the game's main thread starts.
+// pdlaunch calls this in the game process (a remote thread) before the game's main thread starts. At that point the
+// game hasn't even loaded its own DLLs, and Windows' app APIs aren't ready (using them this early made the Store game
+// fail at start). So only a watcher starts here: it hooks RoGetActivationFactory in each module as the game loads it,
+// and pdnet sets itself up on the game's first Xbox Live request, as it does when it stands in for the XSAPI DLL.
 extern "C" DWORD WINAPI PdInjectedInit(LPVOID)
 {
     g_injected = true;
-    EnsureInitialized();
+    pdnet::SetFirstXboxActivationHandler(EnsureInitialized);
+    std::thread([]
+    {
+        // The game's DLLs (vccorlib140_app.dll first) load within a moment of the main thread starting; its first
+        // Xbox Live request comes much later. Watch for 60 s at most.
+        for (int ms = 0; ms < 60000 && !pdnet::FirstXboxActivationSeen(); ++ms)
+        {
+            pdnet::InstallActivationHooks(g_self, true);
+            Sleep(1);
+        }
+    }).detach();
     return 0;
 }
 
