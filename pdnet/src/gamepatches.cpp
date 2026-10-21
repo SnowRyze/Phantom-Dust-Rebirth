@@ -607,6 +607,53 @@ namespace pdnet::gamepatches
             return trampoline;
         }
 
+        // menu_debug=on: wraps each of the 196 session script commands (table 0x1403f1150) in a stub that logs the
+        // command number, its first argument and its result while the settings menu (48) is on screen.
+        void LogScriptCommand(uint32_t index, int64_t result, const int32_t* args)
+        {
+            static std::atomic<int> logged{ 0 };
+            if (CurrentMenu(MenuManager()) != kRuleMenu || logged >= 3000) return;
+            ++logged;
+            int32_t first = 0;
+            if (args && !IsBadReadPtr(args, 4)) first = args[0];
+            Log(L"script: cmd %u(arg %d) -> %lld", index, first, result);
+        }
+
+        void ScriptCommandLog()
+        {
+            constexpr uint64_t kTable = 0x1403f1150;
+            constexpr int kCount = 196;
+            auto stubs = static_cast<uint8_t*>(VirtualAlloc(nullptr, kCount * 64, MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE));
+            if (!stubs) return;
+            auto table = reinterpret_cast<uint64_t*>(At(kTable));
+            DWORD old = 0;
+            if (!VirtualProtect(table, kCount * 8, PAGE_READWRITE, &old)) return;
+            for (int i = 0; i < kCount; ++i)
+            {
+                std::vector<uint8_t> s = { 0x48, 0x83, 0xec, 0x38,              // sub rsp, 0x38
+                                           0x48, 0x89, 0x4c, 0x24, 0x20,        // mov [rsp+0x20], rcx
+                                           0x48, 0xb8 };                        // mov rax, original
+                Put64(s, table[i]);
+                s.insert(s.end(), { 0xff, 0xd0,                                 // call rax
+                                    0x48, 0x89, 0x44, 0x24, 0x28,               // mov [rsp+0x28], rax
+                                    0xb9 });                                    // mov ecx, index
+                Put32(s, i);
+                s.insert(s.end(), { 0x48, 0x89, 0xc2,                           // mov rdx, rax
+                                    0x4c, 0x8b, 0x44, 0x24, 0x20,               // mov r8, [rsp+0x20]
+                                    0x48, 0xb8 });                              // mov rax, LogScriptCommand
+                Put64(s, reinterpret_cast<uint64_t>(&LogScriptCommand));
+                s.insert(s.end(), { 0xff, 0xd0,                                 // call rax
+                                    0x48, 0x8b, 0x44, 0x24, 0x28,               // mov rax, [rsp+0x28]
+                                    0x48, 0x83, 0xc4, 0x38,                     // add rsp, 0x38
+                                    0xc3 });                                    // ret
+                memcpy(stubs + i * 64, s.data(), s.size());
+                table[i] = reinterpret_cast<uint64_t>(stubs + i * 64);
+            }
+            VirtualProtect(table, kCount * 8, old, &old);
+            FlushInstructionCache(GetCurrentProcess(), stubs, kCount * 64);
+            Log(L"gamepatch: menu_debug - logging session script commands while the settings menu is open");
+        }
+
         void LobbyArsenalEditor()
         {
             auto pop = reinterpret_cast<PopMenuFn>(InlineHook(0x1402461f0, reinterpret_cast<void*>(&HookedPopMenu), L"menu back"));
@@ -617,6 +664,7 @@ namespace pdnet::gamepatches
             g_pushMenu = push;
             Log(L"gamepatch: lobby Arsenal editor ready (the lobby's invite button opens it)");
             RenameLobbyInvite(); // again whenever the lobby opens, in case the strings were loaded later
+            if (GetConfig().menuDebug) ScriptCommandLog();
         }
     }
 
