@@ -9,6 +9,9 @@
 // The folder must be readable by the game's sandbox (store-setup.ps1 grants ALL APPLICATION PACKAGES read access).
 #include <windows.h>
 #include <psapi.h>
+#include <mmdeviceapi.h>
+#include <audiopolicy.h>
+#include <algorithm>
 #include <cstdio>
 #include <string>
 
@@ -118,6 +121,131 @@ namespace
     }
 }
 
+namespace
+{
+    // pdnet.ini (next to pdlaunch.exe) value, or `fallback`.
+    std::wstring Setting(const wchar_t* key, const wchar_t* fallback)
+    {
+        FILE* f = nullptr;
+        std::wstring value = fallback;
+        if (_wfopen_s(&f, (g_dir + L"pdnet.ini").c_str(), L"r, ccs=UTF-8") || !f) return value;
+        wchar_t line[512];
+        size_t keyLength = wcslen(key);
+        while (fgetws(line, 512, f))
+        {
+            std::wstring s = line;
+            while (!s.empty() && (s.back() == L'\n' || s.back() == L'\r' || s.back() == L' ')) s.pop_back();
+            if (s.compare(0, keyLength, key) == 0 && s.size() > keyLength && s[keyLength] == L'=') value = s.substr(keyLength + 1);
+        }
+        fclose(f);
+        return value;
+    }
+
+    // The game's audio session (the Volume Mixer entry) on the default playback device, or null.
+    ISimpleAudioVolume* FindGameVolume(DWORD pid)
+    {
+        IMMDeviceEnumerator* devices = nullptr;
+        IMMDevice* device = nullptr;
+        IAudioSessionManager2* manager = nullptr;
+        IAudioSessionEnumerator* sessions = nullptr;
+        ISimpleAudioVolume* found = nullptr;
+        if (SUCCEEDED(CoCreateInstance(__uuidof(MMDeviceEnumerator), nullptr, CLSCTX_ALL, __uuidof(IMMDeviceEnumerator), reinterpret_cast<void**>(&devices))) &&
+            SUCCEEDED(devices->GetDefaultAudioEndpoint(eRender, eConsole, &device)) &&
+            SUCCEEDED(device->Activate(__uuidof(IAudioSessionManager2), CLSCTX_ALL, nullptr, reinterpret_cast<void**>(&manager))) &&
+            SUCCEEDED(manager->GetSessionEnumerator(&sessions)))
+        {
+            int count = 0;
+            sessions->GetCount(&count);
+            for (int i = 0; i < count && !found; ++i)
+            {
+                IAudioSessionControl* control = nullptr;
+                IAudioSessionControl2* control2 = nullptr;
+                DWORD owner = 0;
+                if (SUCCEEDED(sessions->GetSession(i, &control)) &&
+                    SUCCEEDED(control->QueryInterface(__uuidof(IAudioSessionControl2), reinterpret_cast<void**>(&control2))) &&
+                    SUCCEEDED(control2->GetProcessId(&owner)) && owner == pid)
+                {
+                    control->QueryInterface(__uuidof(ISimpleAudioVolume), reinterpret_cast<void**>(&found));
+                }
+                if (control2) control2->Release();
+                if (control) control->Release();
+            }
+        }
+        if (sessions) sessions->Release();
+        if (manager) manager->Release();
+        if (device) device->Release();
+        if (devices) devices->Release();
+        return found;
+    }
+
+    // Windows resets the game's Volume Mixer level to 100% every start, and the game only applies its own sound
+    // settings after the splash screen, so the logos play at full volume. While the game runs: once its audio
+    // session appears, hold it at splash_volume% of the remembered level for splash_seconds, then the remembered
+    // level; after that, remember every change the player makes (volume.txt next to pdlaunch.exe).
+    //   pdnet.ini: remember_volume=on|off, splash_volume=40 (percent), splash_seconds=12
+    void WatchVolume(DWORD pid)
+    {
+        bool remember = _wcsicmp(Setting(L"remember_volume", L"on").c_str(), L"off") != 0;
+        float splash = std::clamp(static_cast<float>(_wtof(Setting(L"splash_volume", L"40").c_str())) / 100.0f, 0.0f, 1.0f);
+        DWORD splashMs = static_cast<DWORD>(std::clamp(_wtoi(Setting(L"splash_seconds", L"12").c_str()), 0, 120)) * 1000;
+        std::wstring file = g_dir + L"volume.txt";
+        float saved = -1;
+        if (FILE* f = nullptr; remember && !_wfopen_s(&f, file.c_str(), L"r") && f)
+        {
+            fwscanf_s(f, L"%f", &saved);
+            fclose(f);
+        }
+        if (!remember && splash >= 1.0f) return;
+
+        HANDLE process = OpenProcess(SYNCHRONIZE, FALSE, pid);
+        if (!process) return;
+        CoInitializeEx(nullptr, COINIT_MULTITHREADED);
+        ISimpleAudioVolume* volume = nullptr;
+        DWORD found = 0;
+        float level = 1.0f, last = -1;
+        while (WaitForSingleObject(process, volume ? 250 : 50) == WAIT_TIMEOUT)
+        {
+            if (!volume)
+            {
+                volume = FindGameVolume(pid);
+                if (!volume) continue;
+                found = GetTickCount();
+                volume->GetMasterVolume(&level);
+                if (remember && saved >= 0 && saved <= 1) level = saved;
+                Log(L"audio: game session found; volume %d%% (splash %d%% of it for %lu s)", static_cast<int>(level * 100 + 0.5f), static_cast<int>(splash * 100 + 0.5f), splashMs / 1000);
+            }
+            DWORD age = GetTickCount() - found;
+            if (age < splashMs)
+            {
+                volume->SetMasterVolume(level * splash, nullptr);
+            }
+            else if (age < splashMs + 3000)
+            {
+                volume->SetMasterVolume(level, nullptr); // held a moment, in case the game sets it as it starts up
+                last = level;
+            }
+            else if (remember)
+            {
+                float now = 0;
+                if (SUCCEEDED(volume->GetMasterVolume(&now)) && (last < 0 || now < last - 0.004f || now > last + 0.004f))
+                {
+                    last = now;
+                    FILE* f = nullptr;
+                    if (!_wfopen_s(&f, file.c_str(), L"w") && f)
+                    {
+                        fwprintf(f, L"%.3f\n", now);
+                        fclose(f);
+                    }
+                    Log(L"audio: remembered volume %d%%", static_cast<int>(now * 100 + 0.5f));
+                }
+            }
+        }
+        if (volume) volume->Release();
+        CloseHandle(process);
+        CoUninitialize();
+    }
+}
+
 int wmain(int argc, wchar_t** argv)
 {
     wchar_t exe[MAX_PATH];
@@ -144,5 +272,6 @@ int wmain(int argc, wchar_t** argv)
     DWORD previous = thread ? ResumeThread(thread) : static_cast<DWORD>(-1);
     if (thread) CloseHandle(thread);
     Log(L"game resumed (suspend count was %ld)%s", static_cast<long>(previous), injected ? L"" : L" WITHOUT pdnet");
+    WatchVolume(pid); // until the game exits
     return injected ? 0 : 1;
 }
