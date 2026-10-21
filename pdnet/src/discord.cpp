@@ -63,6 +63,7 @@ namespace pdnet::discord
             std::string name;
             uint32_t members = 0;
             bool opened = false; // "opened" waits for the game's search handle, which says the game type and rule
+            std::map<std::string, std::string> players; // EOS product user id -> player name
         };
         std::mutex g_lock;
         std::map<std::string, Announced> g_lobbies; // lobbies this PC owns and announces
@@ -81,6 +82,26 @@ namespace pdnet::discord
             return name.empty() ? winrt::to_string(GetConfig().displayName) : name;
         }
 
+        // Who is in a lobby this PC is a member of (each member's PD_NAME attribute is their display name).
+        std::map<std::string, std::string> Roster(const lobbies::Lobby& l)
+        {
+            std::map<std::string, std::string> out;
+            for (auto& m : l.members)
+            {
+                auto it = m.attributes.find("PD_NAME");
+                out[m.userId] = it != m.attributes.end() ? it->second : std::string{};
+            }
+            return out;
+        }
+
+        // "**A**" or "**A**, **B**".
+        std::string Names(const std::vector<std::string>& names)
+        {
+            std::string out;
+            for (auto& n : names) out += (out.empty() ? "" : ", ") + ("**" + (n.empty() ? std::string("A player") : Name(n)) + "**");
+            return out;
+        }
+
         std::string Players(uint32_t members, uint32_t max)
         {
             return std::to_string(members) + "/" + std::to_string(max) + " players";
@@ -92,6 +113,7 @@ namespace pdnet::discord
             if (a.opened || lobbies::Joined(l.attributes, "PD_SEARCH").empty()) return {};
             a.opened = true;
             a.members = Members(l);
+            a.players = Roster(l);
             std::string match = MatchDescription(l);
             return "\xF0\x9F\x9F\xA2 **" + Name(a.name) + "** opened a Phantom Dust lobby \xC2\xB7 " + (match.empty() ? "" : match + " \xC2\xB7 ") +
                    Players(a.members, l.maxMembers);
@@ -211,7 +233,7 @@ namespace pdnet::discord
             }
             if (it == g_lobbies.end())
             {
-                g_lobbies[l.id] = Announced{ HostName(l), members, true }; // handed to this PC (host migration): announce changes from now on
+                g_lobbies[l.id] = Announced{ HostName(l), members, true, Roster(l) }; // handed to this PC (host migration): announce changes from now on
                 return;
             }
             Announced& a = it->second;
@@ -221,9 +243,21 @@ namespace pdnet::discord
             }
             else if (a.members != members && members > 0)
             {
+                auto now = Roster(l);
+                std::vector<std::string> joined, left;
+                for (auto& [id, name] : now) if (!a.players.count(id)) joined.push_back(name);
+                for (auto& [id, name] : a.players) if (!now.count(id)) left.push_back(name);
                 a.members = members;
-                text = members >= l.maxMembers ? "\xF0\x9F\x8E\xAE **" + Name(a.name) + "**'s lobby is full \xC2\xB7 " + Players(members, l.maxMembers)
-                                               : "\xF0\x9F\x91\xA5 **" + Name(a.name) + "**'s lobby \xC2\xB7 " + Players(members, l.maxMembers);
+                a.players = std::move(now);
+                std::string host = "**" + Name(a.name) + "**'s lobby", count = Players(members, l.maxMembers);
+                if (!left.empty()) text = "\xF0\x9F\x91\x8B " + Names(left) + " left " + host + " \xC2\xB7 " + count;
+                if (!joined.empty())
+                {
+                    if (!text.empty()) text += "\n";
+                    text += members >= l.maxMembers ? "\xF0\x9F\x8E\xAE " + Names(joined) + " joined \xE2\x80\x94 " + host + " is full \xC2\xB7 " + count
+                                                    : "\xF0\x9F\x91\xA5 " + Names(joined) + " joined " + host + " \xC2\xB7 " + count;
+                }
+                if (text.empty()) text = "\xF0\x9F\x91\xA5 " + host + " \xC2\xB7 " + count;
             }
         }
         if (!text.empty()) Post(text);
