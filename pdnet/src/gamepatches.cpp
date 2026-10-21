@@ -512,6 +512,16 @@ namespace pdnet::gamepatches
         // does); the settings menu runs it when backing out. Opened from the lobby, that would tear down the live
         // lobby (other players dropped, endless loading), so it does nothing then.
         ScriptCommandFn g_abandonSession = nullptr;
+        // Session command 29 (0x140213b00 -> FUN_1401824c0) runs before it, polled until it returns 0: it finishes or
+        // cancels every pending session task, runs the network shutdown callback and resets the session state to
+        // idle. Same treatment: from the lobby it reports "done" without running.
+        ScriptCommandFn g_shutDownSession = nullptr;
+
+        int64_t HookedShutDownSession(int32_t* args)
+        {
+            if (g_ruleFromLobby && CurrentMenu(MenuManager()) == kRuleMenu) return 0;
+            return g_shutDownSession(args);
+        }
 
         int64_t HookedAbandonSession(int32_t* args)
         {
@@ -538,6 +548,7 @@ namespace pdnet::gamepatches
         {
             g_resetSettings = ReplaceSessionCommand(80, &HookedResetSettings);
             g_abandonSession = ReplaceSessionCommand(190, &HookedAbandonSession);
+            g_shutDownSession = ReplaceSessionCommand(29, &HookedShutDownSession);
         }
 
         void PublishRule()
