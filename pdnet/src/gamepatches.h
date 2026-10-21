@@ -4,4 +4,9 @@
 namespace pdnet::gamepatches
 {
     void Apply();
+
+    // Nametags on dead bodies can be switched at any time: in a lobby the game host's setting applies to everyone
+    // (xsapi/mpsd.cpp reads it from the host's lobby member attributes), otherwise this PC's nametags_on_bodies.
+    void SetNametagsOnBodies(bool on, const wchar_t* why);
+    void UseOwnSettings();
 }

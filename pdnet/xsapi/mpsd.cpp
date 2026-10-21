@@ -2,6 +2,8 @@
 #include "mpsd.h"
 #include "../src/lobbies.h"
 #include "../src/discord.h"
+#include "../src/config.h"
+#include "../src/gamepatches.h"
 #include "nametrace.h"
 #include <winrt/Windows.Data.Json.h>
 #include <bcrypt.h>
@@ -151,7 +153,23 @@ namespace pdnet::mpsd
             a["PD_STATUS"] = std::to_string(static_cast<int>(m.status));
             a["PD_INIT"] = m.initializeRequested ? "1" : "0";
             a["PD_JOIN"] = std::to_string(Ticks(m.joinTime));
+            a["PD_BODYTAGS"] = GetConfig().nametagsOnBodies ? "1" : "0"; // used by everyone when this PC is the game host
             return a;
+        }
+
+        // Lobby rules set by the game host (PD_HOST is the host's xuid): every player uses the host member's settings.
+        // Hosts with an older pdnet don't publish them; then each PC keeps its own.
+        void ApplyHostRules(const lobbies::Lobby& l)
+        {
+            std::string host = Attr(l.attributes, "PD_HOST");
+            if (!l.joined || host.empty()) return;
+            for (auto& m : l.members)
+            {
+                if (Attr(m.attributes, "PD_XUID") != host) continue;
+                std::string tags = Attr(m.attributes, "PD_BODYTAGS");
+                if (!tags.empty()) gamepatches::SetNametagsOnBodies(tags == "1", m.userId == lobbies::LocalUserId() ? L"this PC hosts the lobby" : L"the lobby host's setting");
+                return;
+            }
         }
 
         Changes Diff(const Attributes& before, const Attributes& after)
@@ -755,6 +773,7 @@ namespace pdnet::mpsd
                     OwnerDuties(lobbyId);
                     if (auto fresh = lobbies::Read(lobbyId); fresh && fresh->joined) lobby = fresh;
                     if (created && lobby->ownerId == lobbies::LocalUserId()) discord::LobbyOpened(*lobby);
+                    ApplyHostRules(*lobby);
                     doc = FromLobby(*lobby, &doc);
                     if (!created && written.edits.any())
                     {
@@ -767,6 +786,7 @@ namespace pdnet::mpsd
             else if (mine && doc.shared)
             {
                 Push(doc);
+                if (auto live = lobbies::Read(lobbyId)) ApplyHostRules(*live); // e.g. the game just named its host
             }
             else if (!mine && doc.shared)
             {
@@ -775,6 +795,7 @@ namespace pdnet::mpsd
                 if (live && live->joined && live->ownerId == lobbies::LocalUserId() && alone) lobbies::Destroy(lobbyId);
                 else lobbies::Leave(lobbyId);
                 discord::LobbyLeft(lobbyId, alone);
+                gamepatches::UseOwnSettings();
                 Log(L"xsapi-pdnet: left lobby %S (%s/%s)%s", lobbyId.c_str(), doc.templateName.c_str(), doc.sessionName.c_str(), alone ? L", destroyed" : L"");
                 doc.shared = false;
                 m_myRequests.erase(key);
@@ -920,11 +941,13 @@ namespace pdnet::mpsd
                 std::erase_if(doc.members, [&](const MemberDoc& m) { return m.xuid == xsapi::LocalXuid(); });
                 doc.shared = false;
                 discord::LobbyLost(lobbyId);
+                gamepatches::UseOwnSettings();
                 Log(L"xsapi-pdnet: lobby %S closed or this PC was removed; %s/%s is no longer shared", lobbyId.c_str(), doc.templateName.c_str(), doc.sessionName.c_str());
             }
             else
             {
                 discord::LobbyChanged(*lobby);
+                ApplyHostRules(*lobby);
                 doc = FromLobby(*lobby, &*old);
             }
 

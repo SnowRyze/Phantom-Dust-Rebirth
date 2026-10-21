@@ -9,37 +9,7 @@ namespace pdnet::gamepatches
     {
         constexpr uint64_t kGhidraBase = 0x140000000;
 
-        struct Patch
-        {
-            const wchar_t* name;
-            uint64_t address;               // Ghidra address in PDUWP.exe
-            std::vector<uint8_t> expected;  // bytes that must be there now (including some context before the change)
-            size_t offset;                  // where the change starts within `expected`
-            std::vector<uint8_t> replacement;
-        };
-
-        bool Apply(const Patch& p)
-        {
-            auto base = reinterpret_cast<uint8_t*>(GetModuleHandleW(nullptr));
-            uint8_t* at = base + (p.address - kGhidraBase);
-            if (memcmp(at, p.expected.data(), p.expected.size()) != 0)
-            {
-                Log(L"gamepatch: %s skipped - the game code is not what this pdnet expects (different game version?)", p.name);
-                return false;
-            }
-            uint8_t* target = at + p.offset;
-            DWORD old = 0;
-            if (!VirtualProtect(target, p.replacement.size(), PAGE_EXECUTE_READWRITE, &old))
-            {
-                Log(L"gamepatch: %s failed (VirtualProtect error %lu)", p.name, GetLastError());
-                return false;
-            }
-            memcpy(target, p.replacement.data(), p.replacement.size());
-            VirtualProtect(target, p.replacement.size(), old, &old);
-            FlushInstructionCache(GetCurrentProcess(), target, p.replacement.size());
-            Log(L"gamepatch: %s applied", p.name);
-            return true;
-        }
+        std::atomic<uint8_t> g_bodyTags{ 0 }; // read by the game's nametag code through the routine below
 
         uint8_t* Image() { return reinterpret_cast<uint8_t*>(GetModuleHandleW(nullptr)); }
         uint8_t* At(uint64_t ghidra) { return Image() + (ghidra - kGhidraBase); }
@@ -48,6 +18,7 @@ namespace pdnet::gamepatches
         // section (mapped executable, never used by the game).
         uint8_t* CodeCave(size_t size)
         {
+            static size_t used = 0; // caves handed out so far (each rounded up to 16 bytes)
             auto dos = reinterpret_cast<IMAGE_DOS_HEADER*>(Image());
             auto nt = reinterpret_cast<IMAGE_NT_HEADERS*>(Image() + dos->e_lfanew);
             auto section = IMAGE_FIRST_SECTION(nt);
@@ -56,10 +27,11 @@ namespace pdnet::gamepatches
                 if (memcmp(section->Name, ".text", 5) != 0) continue;
                 uint64_t start = (section->VirtualAddress + section->Misc.VirtualSize + 15) & ~15ull;
                 uint64_t pageEnd = (section->VirtualAddress + section->Misc.VirtualSize + 0xfff) & ~0xfffull;
-                if (pageEnd - start < size + 16) return nullptr;
-                uint8_t* cave = Image() + start + 16; // keep a little distance from the last real code
+                if (pageEnd - start < used + size + 16) return nullptr;
+                uint8_t* cave = Image() + start + 16 + used; // keep a little distance from the last real code
                 for (size_t k = 0; k < size; ++k)
                     if (cave[k] != 0) return nullptr;
+                used += (size + 15) & ~size_t{ 15 };
                 return cave;
             }
             return nullptr;
@@ -76,6 +48,7 @@ namespace pdnet::gamepatches
         }
 
         void Put32(std::vector<uint8_t>& b, int32_t v) { for (int i = 0; i < 4; ++i) b.push_back(static_cast<uint8_t>(v >> (8 * i))); }
+        void Put64(std::vector<uint8_t>& b, uint64_t v) { for (int i = 0; i < 8; ++i) b.push_back(static_cast<uint8_t>(v >> (8 * i))); }
         int32_t Rel32(const uint8_t* from, const uint8_t* to) { return static_cast<int32_t>(to - from); }
 
         // The nametag is drawn white: right before the draw call the game stores 0xffffffff in its text colour
@@ -136,6 +109,53 @@ namespace pdnet::gamepatches
             }
             Log(L"gamepatch: dead nametag colour applied (ARGB %08X)", argb);
         }
+
+        // FUN_140150c30 draws the white nametag over each other player only while their health (status record +0x0c)
+        // is not zero:   cmp dword ptr [rcx+0xc],0 / jz skip_nametag   (10 bytes at 0x1401511be)
+        // Those become a jump to a routine that skips the health check while g_bodyTags is 1, so the name stays on a
+        // player at 0 health (a dead body). g_bodyTags can change at any time (the lobby host's setting, see header).
+        // The checks after it are kept: status effect 8 (e.g. invisibility), on screen, +0x54/+0x5c.
+        bool NametagsOnBodies()
+        {
+            constexpr uint64_t kSite = 0x1401511be;
+            const std::vector<uint8_t> expected = { 0x83, 0x79, 0x0c, 0x00, 0x0f, 0x84, 0x84, 0x01, 0x00, 0x00 };
+            uint8_t* site = At(kSite);
+            if (memcmp(site, expected.data(), expected.size()) != 0)
+            {
+                Log(L"gamepatch: nametags on dead bodies skipped - the game code is not what this pdnet expects (different game version?)");
+                return false;
+            }
+            uint8_t* next = site + expected.size(); // 0x1401511c8
+            uint8_t* skip = next + 0x184;           // the jz target
+            uint8_t* cave = CodeCave(48);
+            if (!cave)
+            {
+                Log(L"gamepatch: nametags on dead bodies skipped - no free space for the check routine");
+                return false;
+            }
+            std::vector<uint8_t> code;
+            auto rip = [&](size_t instructionLength) { return cave + code.size() + instructionLength; };
+            code.insert(code.end(), { 0x50, 0x48, 0xb8 });                  // push rax ; mov rax, &g_bodyTags
+            Put64(code, reinterpret_cast<uint64_t>(&g_bodyTags));
+            code.insert(code.end(), { 0x80, 0x38, 0x00, 0x58 });            // cmp byte [rax], 0 ; pop rax
+            code.insert(code.end(), { 0x0f, 0x85 });                        // jne next (dead bodies keep their name)
+            Put32(code, Rel32(rip(4), next));
+            code.insert(code.end(), { 0x83, 0x79, 0x0c, 0x00, 0x0f, 0x84 }); // cmp dword [rcx+0xc], 0 ; je skip
+            Put32(code, Rel32(rip(4), skip));
+            code.push_back(0xe9);                                           // jmp next
+            Put32(code, Rel32(rip(4), next));
+
+            std::vector<uint8_t> jump = { 0xe9 };
+            Put32(jump, Rel32(site + 5, cave));
+            jump.resize(expected.size(), 0x90);
+            if (!Write(cave, code) || !Write(site, jump))
+            {
+                Log(L"gamepatch: nametags on dead bodies failed (VirtualProtect error %lu)", GetLastError());
+                return false;
+            }
+            Log(L"gamepatch: nametags on dead bodies installed (now %s)", g_bodyTags ? L"on" : L"off");
+            return true;
+        }
     }
 
     void Apply()
@@ -143,19 +163,16 @@ namespace pdnet::gamepatches
         static std::once_flag once;
         std::call_once(once, []
         {
-            if (GetConfig().nametagsOnBodies)
-            {
-                // FUN_140150c30 draws the white nametag over each other player only while their health
-                // (status record +0x0c) is not zero:   cmp dword ptr [rcx+0xc],0 / jz skip_nametag
-                // The jz becomes six NOPs, so the name stays on a player at 0 health (a dead body).
-                // The checks after it are kept: status effect 8 (e.g. invisibility), on screen, +0x54/+0x5c.
-                if (Apply(Patch{ L"nametags on dead bodies", 0x1401511be,
-                                 { 0x83, 0x79, 0x0c, 0x00, 0x0f, 0x84, 0x84, 0x01, 0x00, 0x00 }, 4,
-                                 { 0x90, 0x90, 0x90, 0x90, 0x90, 0x90 } }))
-                {
-                    DeadNametagColor(GetConfig().deadNametagColor);
-                }
-            }
+            g_bodyTags = GetConfig().nametagsOnBodies ? 1 : 0;
+            if (NametagsOnBodies()) DeadNametagColor(GetConfig().deadNametagColor);
         });
     }
+
+    void SetNametagsOnBodies(bool on, const wchar_t* why)
+    {
+        uint8_t want = on ? 1 : 0;
+        if (g_bodyTags.exchange(want) != want) Log(L"gamepatch: nametags on dead bodies %s (%s)", on ? L"on" : L"off", why);
+    }
+
+    void UseOwnSettings() { SetNametagsOnBodies(GetConfig().nametagsOnBodies, L"this PC's pdnet.ini"); }
 }
