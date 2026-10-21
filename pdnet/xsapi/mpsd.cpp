@@ -841,7 +841,11 @@ namespace pdnet::mpsd
         if (doc.search) handle.created = doc.search->created;
         if (!Ticks(handle.created)) handle.created = winrt::clock::now();
         doc.search = std::move(handle);
-        if (doc.shared && lobbies::Available()) Push(doc);
+        if (doc.shared && lobbies::Available())
+        {
+            Push(doc);
+            if (auto lobby = lobbies::Read(U8(doc.search->id)); lobby && lobby->joined) discord::LobbyChanged(*lobby); // "opened" waits for this
+        }
         std::lock_guard guard(m_lock);
         if (auto it = m_sessions.find(key); it != m_sessions.end()) it->second = std::move(doc);
         return true;

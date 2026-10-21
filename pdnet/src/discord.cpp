@@ -62,6 +62,7 @@ namespace pdnet::discord
         {
             std::string name;
             uint32_t members = 0;
+            bool opened = false; // "opened" waits for the game's search handle, which says the game type and rule
         };
         std::mutex g_lock;
         std::map<std::string, Announced> g_lobbies; // lobbies this PC owns and announces
@@ -83,6 +84,17 @@ namespace pdnet::discord
         std::string Players(uint32_t members, uint32_t max)
         {
             return std::to_string(members) + "/" + std::to_string(max) + " players";
+        }
+
+        // Posts "opened" once the lobby carries the game's search handle. Called with g_lock held.
+        std::string OpenedText(const lobbies::Lobby& l, Announced& a)
+        {
+            if (a.opened || lobbies::Joined(l.attributes, "PD_SEARCH").empty()) return {};
+            a.opened = true;
+            a.members = Members(l);
+            std::string match = MatchDescription(l);
+            return "\xF0\x9F\x9F\xA2 **" + Name(a.name) + "** opened a Phantom Dust lobby \xC2\xB7 " + (match.empty() ? "" : match + " \xC2\xB7 ") +
+                   Players(a.members, l.maxMembers);
         }
     }
 
@@ -145,18 +157,42 @@ namespace pdnet::discord
         return text;
     }
 
+    namespace
+    {
+        // A number the game put in its search handle (PD_SEARCH: {"numbers": {...}, "strings": {...}}), or -1.
+        int SearchNumber(const lobbies::Lobby& l, const wchar_t* name)
+        {
+            winrt::Windows::Data::Json::JsonObject search{ nullptr };
+            std::string json = lobbies::Joined(l.attributes, "PD_SEARCH");
+            if (json.empty() || !winrt::Windows::Data::Json::JsonObject::TryParse(winrt::to_hstring(json), search)) return -1;
+            auto numbers = search.GetNamedObject(L"numbers", winrt::Windows::Data::Json::JsonObject{});
+            return numbers.HasKey(name) ? static_cast<int>(numbers.GetNamedNumber(name)) : -1;
+        }
+    }
+
+    // The game's own names (Assets\Data\Menu\livesession_en.ssb lists them in this order).
+    std::string MatchDescription(const lobbies::Lobby& l)
+    {
+        static const char* kTypes[] = { "Battle Royale", "Tag Team", "One-on-One" };
+        static const char* kRules[] = { "Standard Battle", "Ante", "Quick", "Puny", "Heavy", "Special Environment",
+                                        "Single School", "Highlander", "Puny Only", "Heavy Only", "KO Battle", "Annihilate the Odd One" };
+        int type = SearchNumber(l, L"gametype"), rule = SearchNumber(l, L"gamerule");
+        std::string text;
+        if (type >= 0 && type < static_cast<int>(std::size(kTypes))) text = kTypes[type];
+        if (rule >= 0 && rule < static_cast<int>(std::size(kRules))) text += (text.empty() ? "" : " \xC2\xB7 ") + std::string(kRules[rule]);
+        return text;
+    }
+
     void LobbyOpened(const lobbies::Lobby& l)
     {
         if (GetConfig().discordWebhook.empty() || !Public(l)) return;
-        Announced a{ HostName(l), Members(l) };
+        std::string text;
         {
             std::lock_guard guard(g_lock);
             if (g_lobbies.count(l.id)) return;
-            g_lobbies[l.id] = a;
+            text = OpenedText(l, g_lobbies[l.id] = Announced{ HostName(l), Members(l) });
         }
-        std::string rating = LobbyProperty(l, L"rating");
-        Post("\xF0\x9F\x9F\xA2 **" + Name(a.name) + "** opened a Phantom Dust lobby \xC2\xB7 " + Players(a.members, l.maxMembers) +
-             (rating.empty() ? "" : " \xC2\xB7 rating " + rating));
+        if (!text.empty()) Post(text);
     }
 
     void LobbyChanged(const lobbies::Lobby& l)
@@ -175,29 +211,38 @@ namespace pdnet::discord
             }
             if (it == g_lobbies.end())
             {
-                g_lobbies[l.id] = Announced{ HostName(l), members }; // handed to this PC (host migration): announce changes from now on
+                g_lobbies[l.id] = Announced{ HostName(l), members, true }; // handed to this PC (host migration): announce changes from now on
                 return;
             }
-            if (it->second.members == members || members == 0) return;
-            it->second.members = members;
-            text = members >= l.maxMembers ? "\xF0\x9F\x8E\xAE **" + Name(it->second.name) + "**'s lobby is full \xC2\xB7 " + Players(members, l.maxMembers)
-                                           : "\xF0\x9F\x91\xA5 **" + Name(it->second.name) + "**'s lobby \xC2\xB7 " + Players(members, l.maxMembers);
+            Announced& a = it->second;
+            if (!a.opened)
+            {
+                text = OpenedText(l, a);
+            }
+            else if (a.members != members && members > 0)
+            {
+                a.members = members;
+                text = members >= l.maxMembers ? "\xF0\x9F\x8E\xAE **" + Name(a.name) + "**'s lobby is full \xC2\xB7 " + Players(members, l.maxMembers)
+                                               : "\xF0\x9F\x91\xA5 **" + Name(a.name) + "**'s lobby \xC2\xB7 " + Players(members, l.maxMembers);
+            }
         }
-        Post(text);
+        if (!text.empty()) Post(text);
     }
 
     void LobbyLeft(const std::string& id, bool lastMember)
     {
         std::string name;
+        bool opened = false;
         {
             std::lock_guard guard(g_lock);
             auto it = g_lobbies.find(id);
             if (it == g_lobbies.end()) return;
             name = it->second.name;
+            opened = it->second.opened;
             g_lobbies.erase(it);
         }
         // Leaving with others still in: EOS hands the lobby to one of them, whose game announces it from now on.
-        if (lastMember) Post("\xF0\x9F\x94\xB4 **" + Name(name) + "**'s lobby closed");
+        if (lastMember && opened) Post("\xF0\x9F\x94\xB4 **" + Name(name) + "**'s lobby closed");
     }
 
     void LobbyLost(const std::string& id) { LobbyLeft(id, true); }

@@ -16,9 +16,12 @@ namespace pdnet::discord
     // A session property from the lobby (PD_PROPS holds name -> raw JSON text); quotes around strings are removed.
     std::string LobbyProperty(const lobbies::Lobby& l, const wchar_t* name);
 
+    // "Tag Team · Standard Battle": the game type and rule from the lobby's search handle (empty if it has none yet).
+    std::string MatchDescription(const lobbies::Lobby& l);
+
     // Lobby announcements (no-ops without discord_webhook, and for lobbies other than the game's public SearchableGame).
-    void LobbyOpened(const lobbies::Lobby& l);   // this PC created it
-    void LobbyChanged(const lobbies::Lobby& l);  // live copy after any lobby event
+    void LobbyOpened(const lobbies::Lobby& l);   // this PC created it ("opened" is posted once it has the game's search handle)
+    void LobbyChanged(const lobbies::Lobby& l);  // live copy after any lobby event or search handle change
     void LobbyLeft(const std::string& id, bool lastMember); // this PC left (lastMember: the lobby was destroyed)
     void LobbyLost(const std::string& id);       // EOS closed the lobby or removed this PC
 }

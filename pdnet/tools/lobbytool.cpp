@@ -283,15 +283,15 @@ namespace
                 if (l.memberCount == 0) continue; // abandoned: Epic keeps an empty lobby around for a while after its host leaves
                 present.insert(l.id);
                 std::string name = discord::LobbyProperty(l, L"gamename");
-                std::string rating = discord::LobbyProperty(l, L"rating");
+                std::string match = discord::MatchDescription(l);
                 auto it = seen.find(l.id);
                 if (it == seen.end())
                 {
                     seen[l.id] = Seen{ name, l.memberCount, l.maxMembers };
                     // Lobbies that already exist when the watcher starts are listed quietly in the console only.
                     if (first) Log(L"watch: already open: %S's lobby (%u/%u)", name.c_str(), l.memberCount, l.maxMembers);
-                    else post("\xF0\x9F\x9F\xA2 **" + discord::Name(name) + "** opened a Phantom Dust lobby \xC2\xB7 " + std::to_string(l.memberCount) + "/" +
-                              std::to_string(l.maxMembers) + " players" + (rating.empty() ? "" : " \xC2\xB7 rating " + rating));
+                    else post("\xF0\x9F\x9F\xA2 **" + discord::Name(name) + "** opened a Phantom Dust lobby \xC2\xB7 " + (match.empty() ? "" : match + " \xC2\xB7 ") +
+                              std::to_string(l.memberCount) + "/" + std::to_string(l.maxMembers) + " players");
                     continue;
                 }
                 Seen& s = it->second;
