@@ -201,8 +201,9 @@ namespace pdnet::gamepatches
         // nametag_debug=on: the fields FUN_140150c30 checks before drawing a player's nametag, per player status
         // record (DAT_1404bc608[i]): health +0x0c, +0x54, +0x58, +0x5c, +0x60, the +0xf8 pointer and what it points
         // to, and the 16 status-effect values (+0x61b8/+0x61bc per 0xc entry; effect 8 hides the nametag).
-        constexpr int kFields = 9, kEffects = 16;
-        struct Snapshot { int32_t f[kFields]; int32_t effect[kEffects]; };
+        constexpr int kFields = 9, kStates = 9, kEffects = 16;
+        constexpr int kStateOffsets[kStates] = { 0x8, 0x3bc, 0x3cc, 0x4a0, 0x4a4, 0x4a8, 0x4b0, 0x504, 0x61a8 };
+        struct Snapshot { int32_t f[kFields]; int32_t state[kStates]; int32_t effect[kEffects]; };
 
         bool ReadSnapshot(const uint8_t* rec, Snapshot& s)
         {
@@ -215,6 +216,7 @@ namespace pdnet::gamepatches
                 s.f[6] = p ? *p : 0;
                 s.f[7] = *reinterpret_cast<const int32_t*>(rec + 0x4b4);
                 s.f[8] = *reinterpret_cast<const int32_t*>(rec + 0x4ac);
+                for (int k = 0; k < kStates; ++k) s.state[k] = *reinterpret_cast<const int32_t*>(rec + kStateOffsets[k]);
                 for (int k = 0; k < kEffects; ++k)
                     s.effect[k] = *reinterpret_cast<const int32_t*>(rec + 0x61b8 + k * 0xc) + *reinterpret_cast<const int32_t*>(rec + 0x61bc + k * 0xc);
                 return true;
@@ -307,10 +309,13 @@ namespace pdnet::gamepatches
                         wchar_t effects[256] = {};
                         for (int k = 0; k < kEffects; ++k)
                             if (s.effect[k]) swprintf_s(effects + wcslen(effects), _countof(effects) - wcslen(effects), L" e%d=%d", k, s.effect[k]);
+                        wchar_t states[256] = {};
+                        for (int k = 0; k < kStates; ++k)
+                            swprintf_s(states + wcslen(states), _countof(states) - wcslen(states), L" %X=%d", kStateOffsets[k], s.state[k]);
                         char name[0x41] = {};
                         memcpy(name, At(0x1404bca30) + i * 0x41, 0x40);
-                        Log(L"nametag-debug: P%d '%S' hp=%d 54=%d 58=0x%X 5c=%d 60=%d f8=%s%d action=%d phase=%d effects:%s", i + 1, name, s.f[0], s.f[1], s.f[2], s.f[3], s.f[4],
-                            s.f[5] ? L"*" : L"null ", s.f[6], s.f[7], s.f[8], effects[0] ? effects : L" none");
+                        Log(L"nametag-debug: P%d '%S' hp=%d 54=%d 58=0x%X 5c=%d 60=%d f8=%s%d action=%d phase=%d effects:%s |%s", i + 1, name, s.f[0], s.f[1], s.f[2], s.f[3], s.f[4],
+                            s.f[5] ? L"*" : L"null ", s.f[6], s.f[7], s.f[8], effects[0] ? effects : L" none", states);
                         last[i] = s;
                         had[i] = true;
                     }
