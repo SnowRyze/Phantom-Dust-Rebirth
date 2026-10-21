@@ -530,6 +530,9 @@ namespace pdnet::gamepatches
                 Log(L"menu: Change Stage in the lobby - opening the settings menu (game type %d, rule %d; page %d, c0e4 %d, c04c %d, c0ec %d, c12c %d)",
                     g_savedType, g_savedRule, var(0x140518ce4), var(0x14051c0e4), var(0x14051c04c), var(0x14051c0ec), var(0x14051c12c));
                 *reinterpret_cast<int32_t*>(At(0x140518ce4)) = 0;
+                // The menu treats a chosen stage (session command 41 reads DAT_14051775c) as "settings complete" and
+                // moves on at once; while creating a lobby it is -1. Cancelling restores it.
+                *reinterpret_cast<int32_t*>(At(0x14051775c)) = -1;
                 g_ruleFromLobby = true;
                 return g_pushMenu(manager, kRuleMenu, force);
             }
