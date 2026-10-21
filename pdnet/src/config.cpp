@@ -84,6 +84,7 @@ namespace pdnet
                 else if (key == "qos_probes") c.qosProbes = (std::max)(1ul, std::stoul(value));
                 else if (key == "test_peer") c.testPeer = _stricmp(value.c_str(), "on") == 0;
                 else if (key == "nametags_on_bodies") c.nametagsOnBodies = _stricmp(value.c_str(), "off") != 0;
+                else if (key == "dead_nametag_color" && value.size() == 6) c.deadNametagColor = 0xFF000000u | std::stoul(value, nullptr, 16);
                 else if (key == "name_trace") c.nameTrace = _stricmp(value.c_str(), "memory") == 0 ? 1 : (_stricmp(value.c_str(), "draw") == 0 || _stricmp(value.c_str(), "on") == 0) ? 2 : 0;
                 else if (key == "eos_test") c.eosTest = _stricmp(value.c_str(), "on") == 0;
                 else if (key == "eos") c.eos = _stricmp(value.c_str(), "on") == 0;
