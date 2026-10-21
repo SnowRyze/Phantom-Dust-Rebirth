@@ -388,5 +388,26 @@ Parked ideas and half-finished features, newest first. Each has its notes earlie
    testable offline; a non-playing seat is hard (4 fixed player slots). Suggested order: camera/HUD test, spectate-after-
    elimination, then a spare-slot spectator.
 6. **Tag Team lobby crash / team data** - only matters if 3 comes back.
+7. **Voice chat over EOS** (traced 2026-10-21, plan below, nothing built).
+
+Voice chat (backlog 7): the game uses GameChat 1 (`Microsoft.Xbox.GameChat.dll` + `ChatAudio.dll`, in-package). It is not
+behind XSAPI: ChatAudio gets Xbox tokens itself (WebAuthenticationCoreManager) and talks to the Xbox chat service over a
+MessageWebSocket, so it can't work without a real Xbox sign-in. Game side: wrapper `Xb1ChatManager` = `*(DAT_1404bbc48+0x18)`
+(+0x10 the GameChat ChatManager, +8 its lock). FUN_1400c5e20 creates the manager and registers the outgoing-packet (+0x58),
+compare-console (+0x68) and +0x88 handlers; FUN_1400c6850 joins = AddLocalUserToChatChannelAsync(channel 0, user XUID from
+`*(DAT_1404bbc48+0x28)+0xd0`); the JoinChatAsync/LeaveChatAsync errors are caught and logged (game carries on). Mesh console
+added/removed -> FUN_1400fc400 / FUN_1400fc380 -> HandleNewRemoteConsole / RemoveRemoteConsoleAsync. Packets ride the game's
+mesh as message type 3 (CHAT). Lobby option 4 "Voice Chat: On/Off" (`<MUTE TOGGLE>`, livelobby ahlmenu_s3) toggles settings
+flag 15 = byte DAT_1404bad34 (script group 10 #3 get 0x1400bde50 / #4 set 0x1400bdfc0); 1 = voice OFF: FUN_1400c64d0 calls
+MuteAll/UnmuteAll and FUN_1400c61f0 (outgoing packet handler) drops mic packets. FUN_140026150 (the game's debug print) is
+empty in this build. pdnet today: EOS platform created without RTCOptions (eossdk.cpp) and lobbies with bEnableRTCRoom =
+EOS_FALSE (lobbies.cpp), so EOS voice is off at both levels. SDK 1.19.2.1 has eos_rtc*.h.
+Plan: (1) RTCOptions on the platform + bEnableRTCRoom on lobby create (joiners get the room automatically), log
+RTC room connection changes, new pdnet.ini voice_chat=on; (2) follow the game's own Voice Chat On/Off (poll DAT_1404bad34 ->
+EOS_RTCAudio_UpdateSending) so the existing lobby option works; (3) leave GameChat failing quietly (no double audio), optional
+stub later; (4) check whether the EOS lobby lives through the match (mpsd.cpp leaves it when the MPSD member leaves) - if
+not, keep it open or move voice to a room of its own; (5) later: per-player mute (Gamertag window), volume. Needs: the
+tester client policy in the EOS dev portal allowing Voice/RTC, and Windows mic permission for Phantom Dust (manifest
+already declares microphone).
 
 Lobby Gamertag option (backlog 4): greyed (with Kick Player) when nobody else is in the lobby - not an Xbox privilege (CheckGamingPrivilege* never called). The lobby script asks session command 28 (0x140213a80: 1 if the slot is this PC or found in the peer list DAT_140595ea8/0x298 entries) for each slot; Gamertag and Kick share that. menu_debug=on (off by default) logs each distinct lobby script command+arg+result once while menu 44 is up. Fix (gamepatches.cpp LobbyGamertagOption): livelobby.ssb's player-count function (file 0x3634) gates Gamertag's draw (`count < 2` -> grey, 0x4608) and its host/client select handlers (`count > 1`, 0x42B0 / 0x446C -> Gamertag window at 0x3518). A watcher thread patches each loaded copy (menu table entry 44 +0x10) to `count < 0` / `count > -1`; Kick Player (0x46B4 / 0x4320, same pattern, its window titled "Kick Player") is left alone. ssb format: header +0 code base (0x20 in the file, reused at run time), +4 labels, +8 labels end, +12 strings (file offsets; relative to their own field once loaded). Labels are 12 bytes: two base-40 words (table 0x1402f76a0: 0-9 a-z _) + code offset in words from the file start. A select handler label is `a<h|c>lmenu_s<item>` (host/client), a draw handler is `draw_menu`.
