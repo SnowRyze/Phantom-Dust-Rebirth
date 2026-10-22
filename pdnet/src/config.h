@@ -20,7 +20,8 @@ namespace pdnet
         bool voiceChat = true;              // voice_chat=on: lobbies get an EOS voice room; the lobby's Mic option mutes only your mic (see lobbies.h)
         bool voiceListen = true;            // voice_listen=on: hear the other players in the voice room
         std::string voiceTalkMark = "\xE2\x99\xAA"; // voice_talk_mark=: blinks after a talking player's name in the lobby (UTF-8 text, or #N = the game's inline icon N); default a music note
-        bool voiceDebug = false;            // voice_debug=on: EOS voice logs at Info, the input devices EOS sees, and the mic level every 3 s (debug)
+        bool p2pDebug = false;              // p2p_debug=on: log every pdnet control message sent and received over EOS P2P (debug, see p2p.cpp)
+        bool voiceDebug = false;           // voice_debug=on: EOS voice logs at Info, the input devices EOS sees, and the mic level every 3 s (debug)
         bool iconGallery = false;          // icon_gallery=on: the main menu's hint line shows the game's 37 inline icons (debug, see gamepatches.cpp)
         bool nametagsOnBodies = true;    // nametags_on_bodies=on: keep nametags over dead players (game code patch, see gamepatches.h)
         uint32_t deadNametagColor = 0xFFFFE600; // dead_nametag_color=RRGGBB: colour of a dead player's nametag (default yellow)

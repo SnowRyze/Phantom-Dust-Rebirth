@@ -21,7 +21,7 @@ $start = ($lines | Select-String 'pdnet loaded from' | Select-Object -Last 1).Li
 if ($start) {
     Write-Host "`nLast game run, lobby and connection steps:"
     $lines[($start - 1)..($lines.Count - 1)] |
-        Where-Object { $_ -match 'pdnet loaded|gamepatch|eos: signed in|eos: .*fail|lobby .* created|joined lobby|could not|left lobby|changed remotely|search .*session|sda: (connect|inbound|.*TIMED|EOS)|lobby: |p2p: ' } |
+        Where-Object { $_ -match 'pdnet loaded|gamepatch|eos: signed in|eos: .*fail|lobby .* created|joined lobby|could not|left lobby|changed remotely|search .*session|sda: (connect|inbound|.*TIMED|EOS)|lobby: |p2p: |p2p-debug: ' } |
         Select-Object -Last 40 | ForEach-Object { "  $_" }
 }
 Write-Host "`nSaved $out$(if (Test-Path $launch) { ' and the pdlaunch log' }) on your Desktop - send them back."

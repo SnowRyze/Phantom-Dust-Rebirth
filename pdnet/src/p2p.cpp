@@ -145,6 +145,7 @@ namespace pdnet::p2p
                 if (pending) pending->reply = std::move(m);
             }
             if (pending) SetEvent(pending->event.get());
+            else if (GetConfig().p2pDebug) Log(L"p2p-debug: reply nonce %u matches no waiting request (too late?)", m.nonce);
         }
 
         void Dispatch(net::Message&& m)
@@ -284,6 +285,9 @@ namespace pdnet::p2p
                 EOS_EResult r = api.EOS_P2P_SendPacket(p2p, &s);
                 static int failures = 0;
                 if (r != EOS_EResult::EOS_Success && failures++ < 20) Log(L"p2p: send to %S failed: %s", o.peer.substr(0, 8).c_str(), Result(api, r).c_str());
+                net::Message sent;
+                if (GetConfig().p2pDebug && o.channel == kControl && net::Decode(o.data.data(), o.data.size(), sent))
+                    Log(L"p2p-debug: sent type %d nonce %u (%zu bytes) to %S: %s", static_cast<int>(sent.type), sent.nonce, o.data.size(), o.peer.substr(0, 8).c_str(), Result(api, r).c_str());
             }
 
             // Receive everything waiting.
@@ -317,8 +321,14 @@ namespace pdnet::p2p
                 }
 
                 net::Message m;
-                if (!net::Decode(buf, bytes, m)) continue;
+                if (!net::Decode(buf, bytes, m))
+                {
+                    if (GetConfig().p2pDebug) Log(L"p2p-debug: %u bytes on channel %u from %S did not decode", bytes, channel, peer.substr(0, 8).c_str());
+                    continue;
+                }
                 m.peer = peer;
+                if (GetConfig().p2pDebug && channel == kControl)
+                    Log(L"p2p-debug: received type %d nonce %u (%u bytes) from %S", static_cast<int>(m.type), m.nonce, bytes, peer.substr(0, 8).c_str());
                 if (channel == kPing && m.type == net::MsgType::Ping)
                 {
                     auto payload = PublishedPayload();
