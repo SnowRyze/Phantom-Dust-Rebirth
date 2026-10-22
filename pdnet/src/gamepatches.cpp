@@ -294,7 +294,8 @@ namespace pdnet::gamepatches
         void NametagColours()
         {
             auto twice = [](uint32_t argb) { return static_cast<uint64_t>(argb) << 32 | argb; };
-            uint64_t ally = twice(GetConfig().allyNametagColor), enemy = twice(GetConfig().enemyNametagColor);
+            bool colours = GetConfig().nametagColors; // nametag_colors=off: the game's white for everyone
+            uint64_t ally = twice(colours ? GetConfig().allyNametagColor : 0xffffffff), enemy = twice(colours ? GetConfig().enemyNametagColor : 0xffffffff);
             std::thread([ally, enemy, twice]
             {
                 std::wstring last;
@@ -911,7 +912,7 @@ namespace pdnet::gamepatches
             g_bodyTags = GetConfig().nametagsOnBodies ? 1 : 0;
             if (NametagsOnBodies())
             {
-                DeadNametagColor(GetConfig().deadNametagColor);
+                DeadNametagColor(GetConfig().nametagColors ? GetConfig().deadNametagColor : 0xffffffff);
                 NametagColours();
                 TrackPlayDead();
             }
