@@ -383,6 +383,16 @@ pdnet.ini text (promoted 2026-10-22). Built from commit 443e445. To go back to t
 Experimental 1 = build-resend1 (70A91FE2): join requests re-sent every 2 s until answered (an intermittent "hung on
 joining": the single request sent while EOS set up the P2P link was lost); voice + Gamertag on, p2p_debug=on.
 
+## Waiting for testers (as of 2026-10-22; newest kit Experimental 13 has all of these)
+1. **Nametag of a player who left a match** (Experimental 13): 3+ players, one leaves mid-match (disconnect / quit to
+   menu / close the game); their nametag should vanish. Log: "gamepatch: X left the match - nametag hidden". Risk: if
+   the game's peer list (0x140595ea8) doesn't list every player in a match, present players would be hidden too.
+2. **Tag Team voice channels** (Experimental 11+): lobby everyone hears everyone; Tag Team match only your team. Log:
+   "gamepatch: game state N (match)" (verifies the lobby/match detection), "voice: team channel: X muted".
+   Also try the pause menu's Voice Chat option mid-match (assumed to be the same setting flag 15).
+3. **Nametag colours in a real match** (Experimental 3+): enemy red everywhere, ally blue + dead yellow in Tag Team.
+4. **Other players' megaphone** following their Mic setting (Experimental 5+; only this PC's own was seen).
+
 ## Feature backlog (could be added / revisited)
 Parked ideas and half-finished features, newest first. Each has its notes earlier in this file.
 1. **Loading-screen timeout** (parked 2026-10-21). Step 1 was built and tested (commit 4cf65cb, observe-only "loading watchdog":
