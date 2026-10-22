@@ -943,6 +943,44 @@ namespace pdnet::gamepatches
             }
         }
 
+        // A new label longer than the old one ("OptiMatch" -> "Lobby Browser") can't be written in place. It is stored
+        // in a longer text that gets a shorter replacement (`donor`: the item's description), right after that text's
+        // new end, and the label's push-string instruction is pointed there. Returns 1 when the label shows `label`.
+        int RelabelLonger(uint8_t* script, const char* oldLabel, const char* label, const char* donorOld, const char* donorNew)
+        {
+            __try
+            {
+                auto code = reinterpret_cast<uint32_t*>(script);
+                uint32_t labelsAt = code[1], strings = code[3];
+                if (code[0] != 0x20) labelsAt += 4, strings += 12;
+                if (labelsAt <= 0x20 || labelsAt > 0x40000 || strings < labelsAt || strings > 0x80000) return -1;
+                char* pool = reinterpret_cast<char*>(script + strings);
+                uint32_t* labelWord = nullptr;
+                uint32_t donor = 0;
+                bool donorFound = false;
+                for (uint32_t* w = code + 0x20 / 4; w < code + labelsAt / 4; ++w)
+                {
+                    if ((*w & 0xffff) != 0x0011) continue;
+                    const char* text = pool + (*w >> 16);
+                    if (strcmp(text, oldLabel) == 0 || strcmp(text, label) == 0) labelWord = w;
+                    if (strcmp(text, donorOld) == 0 || strcmp(text, donorNew) == 0) { donor = *w >> 16; donorFound = true; }
+                }
+                if (!labelWord || !donorFound) return 0;
+                if (strcmp(pool + (*labelWord >> 16), label) == 0) return 1; // done before (a reused buffer)
+                size_t room = strlen(donorOld) + 1, need = strlen(donorNew) + 1 + strlen(label) + 1;
+                if (strcmp(pool + donor, donorOld) != 0 || need > room) return 0;
+                memcpy(pool + donor, donorNew, strlen(donorNew) + 1);
+                uint32_t at = donor + static_cast<uint32_t>(strlen(donorNew)) + 1;
+                memcpy(pool + at, label, strlen(label) + 1);
+                *labelWord = (*labelWord & 0xffff) | (at << 16);
+                return 1;
+            }
+            __except (EXCEPTION_EXECUTE_HANDLER)
+            {
+                return -1;
+            }
+        }
+
         void QuickJoinLabels()
         {
             std::thread([]
@@ -955,7 +993,10 @@ namespace pdnet::gamepatches
                     uint8_t* script = *entry;
                     if (script == done) continue;
                     done = script;
-                    if (script) Log(L"gamepatch: multiplayer menu: Quick Match renamed Quick Join (%d of 2 texts)", RelabelScript(script, kLiveMainTexts, std::size(kLiveMainTexts)));
+                    if (!script) continue;
+                    Log(L"gamepatch: multiplayer menu: Quick Match renamed Quick Join (%d of 2 texts)", RelabelScript(script, kLiveMainTexts, std::size(kLiveMainTexts)));
+                    Log(L"gamepatch: multiplayer menu: OptiMatch renamed Lobby Browser (%d of 1)", RelabelLonger(script, "OptiMatch", "Lobby Browser",
+                        "Select game attributes, and then search for a game session.", "Choose search options, then pick a session."));
                 }
             }).detach();
         }
