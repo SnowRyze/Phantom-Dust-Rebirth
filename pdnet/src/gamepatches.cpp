@@ -1045,6 +1045,26 @@ namespace pdnet::gamepatches
         });
     }
 
+    // In a match or in the lobby: the game's state 0x1404bc950 is 0 or 13 in the lobby / menus (session command 23
+    // then reads names from the lobby table), anything else in a match. Each change is logged once, to verify.
+    bool TagTeamMatch(std::map<std::string, int>& teamOf, int& myTeam)
+    {
+        static int lastState = -999;
+        int state = *reinterpret_cast<int32_t*>(At(0x1404bc950));
+        if (state != lastState)
+        {
+            Log(L"gamepatch: game state %d (%s)", state, state == 0 || state == 13 ? L"lobby / menus" : L"match");
+            lastState = state;
+        }
+        TeamView v{};
+        if (state == 0 || state == 13 || !ReadTeamView(v) || v.type != 1 || v.mySlot < 0 || v.mySlot > 3) return false;
+        myTeam = v.team[v.mySlot];
+        teamOf.clear();
+        for (int s = 0; s < 4; ++s)
+            if (v.lobbyName[s][0]) teamOf[v.lobbyName[s]] = v.team[s];
+        return true;
+    }
+
     bool GameMicOn()
     {
         return *At(0x1404bad34) == 0; // settings flag 15 (script group 10 #3/#4): 1 = voice off

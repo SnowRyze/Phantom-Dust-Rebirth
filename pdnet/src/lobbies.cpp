@@ -525,8 +525,49 @@ namespace pdnet::lobbies
         std::map<std::string, std::string> g_talkers; // EOS user id -> display name, while speaking
         // Every other participant of a connected voice room, with their mic state (EOS audio status: enabled = their
         // mic is on and sending). The lobby shows the megaphone for players whose mic is on (gamepatches.cpp).
-        struct Participant { std::string name, room; bool micOn = false; };
+        struct Participant { std::string name, room; bool micOn = false; int heard = -1; /* team channels: played here (1) or not (0) */ };
         std::map<std::string, Participant> g_participants; // EOS user id -> participant, under g_talkLock
+
+        // Tag Team voice channels. In the lobby everyone hears everyone; during a Tag Team match each PC plays only
+        // its own team (by the team slot, so a player who switches teams switches channel). Every PC mutes the
+        // other team's players on its own side (EOS_RTCAudio_UpdateReceiving per participant): one lobby voice room,
+        // no separate rooms (those need a token server).
+        std::mutex g_teamLock;
+        bool g_teamsActive = false;           // under g_teamLock
+        std::map<std::string, int> g_teamOf;  // player name -> team, under g_teamLock
+        int g_myTeam = -1;                    // under g_teamLock
+
+        void EOS_CALL OnTeamReceiving(const EOS_RTCAudio_UpdateReceivingCallbackInfo* info)
+        {
+            if (info->ResultCode != EOS_EResult::EOS_Success) Log(L"voice: team channel switch failed: %s", Result(*Sdk(), info->ResultCode).c_str());
+        }
+
+        // EOS thread: plays or mutes each participant as the team channels say.
+        void ApplyTeamChannels(const Api& api, EOS_ProductUserId me)
+        {
+            EOS_HRTCAudio audio = api.EOS_RTC_GetAudioInterface(api.EOS_Platform_GetRTCInterface(g_voicePlatform));
+            if (!audio) return;
+            bool active;
+            std::map<std::string, int> teamOf;
+            int myTeam;
+            {
+                std::lock_guard guard(g_teamLock);
+                active = g_teamsActive;
+                teamOf = g_teamOf;
+                myTeam = g_myTeam;
+            }
+            std::lock_guard guard(g_talkLock);
+            for (auto& [id, p] : g_participants)
+            {
+                auto team = teamOf.find(p.name);
+                int heard = active && team != teamOf.end() && team->second != myTeam ? 0 : 1; // unknown name: keep hearing
+                if (p.heard == heard || p.room.empty()) continue;
+                EOS_RTCAudio_UpdateReceivingOptions o{ EOS_RTCAUDIO_UPDATERECEIVING_API_LATEST, me, p.room.c_str(), api.EOS_ProductUserId_FromString(id.c_str()), heard ? EOS_TRUE : EOS_FALSE };
+                api.EOS_RTCAudio_UpdateReceiving(audio, &o, nullptr, OnTeamReceiving);
+                if (p.heard != -1 || !heard) Log(L"voice: team channel: %S %s", p.name.empty() ? id.c_str() : p.name.c_str(), heard ? L"heard" : L"muted (other team)");
+                p.heard = heard;
+            }
+        }
 
         // The display name of a voice room participant, from the lobby that owns the room.
         std::string ParticipantName(const Api& api, EOS_ProductUserId me, const std::string& roomName, EOS_ProductUserId participant)
@@ -739,6 +780,31 @@ namespace pdnet::lobbies
                             });
                         }
                         // voice_mode=classic: the game's option switches both ways; mic (default): only the microphone.
+                        // Team channels: who this PC plays, rechecked every second and at once when the teams change.
+                        {
+                            std::map<std::string, int> teamOf;
+                            int myTeam = -1;
+                            bool active = gamepatches::TagTeamMatch(teamOf, myTeam);
+                            bool changed;
+                            {
+                                std::lock_guard guard(g_teamLock);
+                                changed = active != g_teamsActive || (active && (myTeam != g_myTeam || teamOf != g_teamOf));
+                                if (changed && active != g_teamsActive)
+                                    Log(L"voice: %s", active ? L"Tag Team match - team channels on (you hear only your team)" : L"team channels off - everyone hears everyone");
+                                g_teamsActive = active;
+                                g_teamOf = std::move(teamOf);
+                                g_myTeam = myTeam;
+                            }
+                            if (changed || tick % 4 == 0)
+                            {
+                                std::string userId = winrt::to_string(eos::LocalUserId());
+                                eos::Post([userId](void*)
+                                {
+                                    const Api* api = Sdk();
+                                    if (api) ApplyTeamChannels(*api, api->EOS_ProductUserId_FromString(userId.c_str()));
+                                });
+                            }
+                        }
                         bool mic = gamepatches::GameMicOn(), listen = GetConfig().voiceClassic ? mic : GetConfig().voiceListen;
                         if (mic != g_wantMic.exchange(mic) || listen != g_wantListen.exchange(listen))
                         {

@@ -1,4 +1,6 @@
 #pragma once
+#include <map>
+#include <string>
 // Small in-memory changes to the game's own code (PDUWP.exe), applied once at startup. Each one checks that the bytes
 // it replaces are exactly the expected ones first, so a different game version is left alone. No files are changed.
 namespace pdnet::gamepatches
@@ -17,4 +19,8 @@ namespace pdnet::gamepatches
     // The game's own "Voice Chat" setting (lobby Options, settings flag 15; pdnet labels it "Mic"): false = off.
     // With voice_chat=on it switches only this PC's microphone in the EOS voice room.
     bool GameMicOn();
+
+    // Tag Team voice channels: true while a Tag Team match is being played (not in its lobby). Then `teamOf` maps
+    // each player's name (as shown in the lobby) to their team, and `myTeam` is this PC's team.
+    bool TagTeamMatch(std::map<std::string, int>& teamOf, int& myTeam);
 }
