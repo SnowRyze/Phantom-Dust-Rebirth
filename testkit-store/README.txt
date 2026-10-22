@@ -55,6 +55,8 @@ Edit with Notepad, then restart the game.
   dead_nametag_color=    colour of a defeated player's nametag (RRGGBB), FFE600 = yellow
                          (also shown on a player lying in Play Dead, until they move or are hit)
   lobby_arsenal_editor=  on/off: the lobby's Arsenal Lab button (was Invite) opens the Arsenal editor
+  shop_max_out=          on/off: the shop's Online Store item becomes Max Credits & Skills
+                         (999,999,999 credits and 99 of every skill, DLC skills too)
   voice_chat=            on/off: voice chat in lobbies (through Epic, no account needed)
   voice_mode=            mic: the in-game option is called Mic and turns only your microphone on/off
                          classic: the original Voice Chat option - Off means you neither talk nor hear
