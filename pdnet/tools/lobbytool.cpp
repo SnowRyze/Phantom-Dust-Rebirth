@@ -73,7 +73,11 @@ namespace pdnet
     int RedirectCredentialStore(HMODULE, const std::wstring&) { return 0; }
 
     // Voice: not the game, so its mic is simply on (lobbytool joins the lobby's voice room as a talking member).
-    namespace gamepatches { bool GameMicOn() { return true; } }
+    namespace gamepatches
+    {
+        bool GameMicOn() { return true; }
+        bool TagTeamMatch(std::map<std::string, int>&, int&) { return false; } // never in a match: hears everyone
+    }
 }
 
 namespace
