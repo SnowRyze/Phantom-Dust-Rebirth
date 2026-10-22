@@ -1040,7 +1040,8 @@ namespace pdnet::gamepatches
             if (GetConfig().nametagDebug) NametagDebug();
             if (GetConfig().lobbyArsenalEditor) LobbyArsenalEditor();
             if (GetConfig().voiceChat || GetConfig().iconGallery) LobbyTalkIndicator();
-            if (GetConfig().lobbyGamertagOption || GetConfig().voiceChat) LobbyScriptPatches(GetConfig().lobbyGamertagOption, GetConfig().voiceChat);
+            bool micLabel = GetConfig().voiceChat && !GetConfig().voiceClassic; // classic: the option keeps its "Voice Chat" name
+            if (GetConfig().lobbyGamertagOption || micLabel) LobbyScriptPatches(GetConfig().lobbyGamertagOption, micLabel);
         });
     }
 

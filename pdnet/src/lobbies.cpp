@@ -738,7 +738,8 @@ namespace pdnet::lobbies
                                 }
                             });
                         }
-                        bool mic = gamepatches::GameMicOn(), listen = GetConfig().voiceListen;
+                        // voice_mode=classic: the game's option switches both ways; mic (default): only the microphone.
+                        bool mic = gamepatches::GameMicOn(), listen = GetConfig().voiceClassic ? mic : GetConfig().voiceListen;
                         if (mic != g_wantMic.exchange(mic) || listen != g_wantListen.exchange(listen))
                         {
                             std::string userId = winrt::to_string(eos::LocalUserId());

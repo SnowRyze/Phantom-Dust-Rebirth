@@ -57,7 +57,9 @@ Edit with Notepad, then restart the game.
   lobby_arsenal_editor=  on/off: the lobby's Arsenal Lab button (was Invite) opens the Arsenal editor
   voice_chat=            on/off: voice chat in lobbies (Epic voice, no account). The lobby's Options > Mic
                          switches only your microphone.
-  voice_listen=          on/off: hear the other players
+  voice_listen=          on/off: hear the other players (voice_mode=mic)
+  voice_mode=            mic: the game's option is labelled Mic and switches only your microphone;
+                         classic: the original Voice Chat option, switching talking AND hearing
   discord_*              lobby announcements in Discord when you host
 
 If something goes wrong

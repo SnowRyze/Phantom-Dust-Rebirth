@@ -18,7 +18,9 @@ namespace pdnet
         bool lobbyArsenalEditor = true;     // lobby_arsenal_editor=on: the lobby's invite button opens the Arsenal editor (see gamepatches.h)
         bool lobbyGamertagOption = true;    // lobby_gamertag_option=on: the lobby's Gamertag option works even when alone (see gamepatches.cpp)
         bool voiceChat = true;              // voice_chat=on: lobbies get an EOS voice room; the lobby's Mic option mutes only your mic (see lobbies.h)
-        bool voiceListen = true;            // voice_listen=on: hear the other players in the voice room
+        bool voiceListen = true;            // voice_listen=on: hear the other players in the voice room (voice_mode=mic only)
+        bool voiceClassic = false;          // voice_mode=classic: the game's Voice Chat option switches talking AND hearing (original game);
+                                            // voice_mode=mic (default): it is labelled Mic and switches only this PC's microphone
         std::string voiceTalkMark = "\xE2\x99\xAA"; // voice_talk_mark=: blinks after a talking player's name in the lobby (UTF-8 text, or #N = the game's inline icon N); default a music note
         bool p2pDebug = false;              // p2p_debug=on: log every pdnet control message sent and received over EOS P2P (debug, see p2p.cpp)
         bool voiceDebug = false;           // voice_debug=on: EOS voice logs at Info, the input devices EOS sees, and the mic level every 3 s (debug)

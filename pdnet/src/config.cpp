@@ -88,6 +88,7 @@ namespace pdnet
                 else if (key == "lobby_gamertag_option") c.lobbyGamertagOption = _stricmp(value.c_str(), "off") != 0;
                 else if (key == "voice_chat") c.voiceChat = _stricmp(value.c_str(), "off") != 0;
                 else if (key == "voice_listen") c.voiceListen = _stricmp(value.c_str(), "off") != 0;
+                else if (key == "voice_mode") c.voiceClassic = _stricmp(value.c_str(), "classic") == 0;
                 else if (key == "voice_talk_mark") c.voiceTalkMark = value.substr(0, 24);
                 else if (key == "p2p_debug") c.p2pDebug = _stricmp(value.c_str(), "on") == 0;
                 else if (key == "voice_debug") c.voiceDebug = _stricmp(value.c_str(), "on") == 0;
