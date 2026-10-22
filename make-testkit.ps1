@@ -54,9 +54,17 @@ function SetZipLabel([string]$zip, [string]$label) {
 if ($Promote) {
     $from = "D:\PhantomDust-pdnet Experimental $Promote.zip"
     if (-not (Test-Path $from)) { throw "No $from." }
-    $label = "PhantomDust-pdnet Stable $((LastNumber 'Stable') + 1)"
+    $number = (LastNumber 'Stable') + 1
+    $label = "PhantomDust-pdnet Stable $number"
     Rename-Item $from "$label.zip"
     SetZipLabel "D:\$label.zip" $label
+    # The source of a stable kit: git tag stable-<M> on the commit its kit-version.txt names ("Source: <commit>").
+    $z = [IO.Compression.ZipFile]::OpenRead("D:\$label.zip")
+    $reader = New-Object IO.StreamReader($z.GetEntry('kit-version.txt').Open())
+    $source = ($reader.ReadToEnd() -split "`r?`n" | Where-Object { $_ -match '^Source: (\w+)' } | ForEach-Object { $Matches[1] } | Select-Object -First 1)
+    $reader.Dispose(); $z.Dispose()
+    if ($source) { git -C $root tag -f "stable-$number" $source | Out-Null; Write-Host "git tag stable-$number -> $source" }
+    else { Write-Host "No Source line in kit-version.txt: tag stable-$number by hand (git tag stable-$number <commit>)." -ForegroundColor Yellow }
     Write-Host "Experimental $Promote is now D:\$label.zip"
     exit 0
 }
@@ -119,7 +127,9 @@ if ($Stage -ne 'B') {
     Set-Content "$out\pdnet.ini" $ini -Encoding UTF8 -NoNewline
 }
 if ($Stage -eq 'Kit') {
-    $version = "$name`r`npdnet.dll MD5 $($md5.Substring(0, 8)) ($Build)`r`n" + $(if ($Set) { "Settings: $($Set -join ', ')`r`n" } else { '' }) + $(if ($Notes) { "$Notes`r`n" } else { '' })
+    $commit = (git -C $root rev-parse --short HEAD 2>$null)
+    $dirty = if (git -C $root status --porcelain -- pdnet testkit-store testkit-stagec 2>$null) { ' + uncommitted changes' } else { '' }
+    $version = "$name`r`npdnet.dll MD5 $($md5.Substring(0, 8)) ($Build)`r`nSource: $commit$dirty`r`n" + $(if ($Set) { "Settings: $($Set -join ', ')`r`n" } else { '' }) + $(if ($Notes) { "$Notes`r`n" } else { '' })
     [IO.File]::WriteAllText("$out\kit-version.txt", $version, (New-Object Text.UTF8Encoding $false))
 }
 
