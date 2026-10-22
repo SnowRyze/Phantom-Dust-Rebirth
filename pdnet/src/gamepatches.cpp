@@ -12,7 +12,11 @@ namespace pdnet::gamepatches
     {
         constexpr uint64_t kGhidraBase = 0x140000000;
 
-        std::atomic<uint8_t> g_bodyTags{ 0 }; // read by the game's nametag code through the routine below
+        std::atomic<uint8_t> g_bodyTags{ 0 }; // nametags on dead bodies wanted (the lobby host's setting)
+        // What the game's nametag code reads (routines below), kept current by NametagColours: dead bodies keep their
+        // tag only in Tag Team, and each other player's tag colour by match slot (ally / enemy, both ARGB twice).
+        std::atomic<uint8_t> g_bodyTagsNow{ 0 };
+        std::atomic<uint64_t> g_tagColour[8]{ ~0ull, ~0ull, ~0ull, ~0ull, ~0ull, ~0ull, ~0ull, ~0ull };
         std::atomic<uint8_t> g_playDead[4]{}; // per player slot: lying in Play Dead (TrackPlayDead), read by the colour routine
 
         uint8_t* Image() { return reinterpret_cast<uint8_t*>(GetModuleHandleW(nullptr)); }
@@ -57,10 +61,11 @@ namespace pdnet::gamepatches
 
         // The nametag is drawn white: right before the draw call the game stores 0xffffffff in its text colour
         // (two qwords at 0x14054c9b0 / 0x14054c9b8). Those two stores become a call to a small routine that stores
-        // `argb` instead, while nametags on dead bodies are on (g_bodyTags, the lobby host's setting), for a player
-        // who is dead (health +0x0c of DAT_1404bc608[r15], the record the game's health check uses) or playing dead
-        // (g_playDead[slot], set by TrackPlayDead, for r15 or the drawn slot rbx; the two differ in some battle types).
-        // A fake death then looks like a real one.
+        // `argb` instead, while dead bodies are tagged (g_bodyTagsNow: the lobby host's setting, in Tag Team), for a
+        // player who is dead (health +0x0c of DAT_1404bc608[r15], the record the game's health check uses) or playing
+        // dead (g_playDead[slot], set by TrackPlayDead, for r15 or the drawn slot rbx; the two differ in some battle
+        // types). A fake death then looks like a real one. Anyone else gets their slot's ally / enemy colour
+        // (g_tagColour[r15], NametagColours).
         void DeadNametagColor(uint32_t argb)
         {
             constexpr uint64_t kSite = 0x1401512cf;
@@ -101,15 +106,16 @@ namespace pdnet::gamepatches
                 }
                 from.clear();
             };
-            code.insert(code.end(), { 0x48, 0xb8 });                 // mov rax, &g_bodyTags
-            Put64(code, reinterpret_cast<uint64_t>(&g_bodyTags));
+            std::vector<size_t> toNormal;
+            code.insert(code.end(), { 0x48, 0xb8 });                 // mov rax, &g_bodyTagsNow
+            Put64(code, reinterpret_cast<uint64_t>(&g_bodyTagsNow));
             code.insert(code.end(), { 0x80, 0x38, 0x00 });           // cmp byte [rax], 0
-            jump(kJe, toWhite);
+            jump(kJe, toNormal);
             code.insert(code.end(), { 0x48, 0x8d, 0x05 });           // lea rax, [DAT_1404bc608]
             Put32(code, Rel32(rip(4), At(0x1404bc608)));
             code.insert(code.end(), { 0x4a, 0x8b, 0x04, 0xf8 });     // mov rax, [rax + r15*8]
             code.insert(code.end(), { 0x48, 0x85, 0xc0 });           // test rax, rax
-            jump(kJe, toWhite);
+            jump(kJe, toNormal);
             code.insert(code.end(), { 0x83, 0x78, 0x0c, 0x00 });     // cmp dword [rax+0xc], 0
             jump(kJe, toDead);
             code.insert(code.end(), { 0x48, 0xb8 });                 // mov rax, &g_playDead
@@ -120,14 +126,21 @@ namespace pdnet::gamepatches
             jump(kJne, toDead);
             label(toNext);
             code.insert(code.end(), { 0x83, 0xfb, 0x03 });           // cmp ebx, 3 (the drawn slot, as the game checks it)
-            jump(kJa, toWhite);
+            jump(kJa, toNormal);
             code.insert(code.end(), { 0x80, 0x3c, 0x18, 0x00 });     // cmp byte [rax + rbx], 0
             jump(kJne, toDead);
-            jump(kJmp, toWhite);
+            jump(kJmp, toNormal);
             label(toDead);
             code.insert(code.end(), { 0x48, 0xb8 });                 // dead: mov rax, colour
             Put64(code, (static_cast<uint64_t>(argb) << 32) | argb);
             std::vector<size_t> toStore;
+            jump(kJmp, toStore);
+            label(toNormal);                                         // alive: the slot's ally / enemy colour
+            code.insert(code.end(), { 0x49, 0x83, 0xff, 0x07 });     // cmp r15, 7
+            jump(kJa, toWhite);
+            code.insert(code.end(), { 0x48, 0xb8 });                 // mov rax, &g_tagColour
+            Put64(code, reinterpret_cast<uint64_t>(&g_tagColour[0]));
+            code.insert(code.end(), { 0x4a, 0x8b, 0x04, 0xf8 });     // mov rax, [rax + r15*8]
             jump(kJmp, toStore);
             label(toWhite);
             code.insert(code.end(), { 0x48, 0xc7, 0xc0, 0xff, 0xff, 0xff, 0xff }); // white: mov rax, -1
@@ -153,8 +166,8 @@ namespace pdnet::gamepatches
 
         // FUN_140150c30 draws the white nametag over each other player only while their health (status record +0x0c)
         // is not zero:   cmp dword ptr [rcx+0xc],0 / jz skip_nametag   (10 bytes at 0x1401511be)
-        // Those become a jump to a routine that skips the health check while g_bodyTags is 1, so the name stays on a
-        // player at 0 health (a dead body). g_bodyTags can change at any time (the lobby host's setting, see header).
+        // Those become a jump to a routine that skips the health check while g_bodyTagsNow is 1, so the name stays on a
+        // player at 0 health (a dead body). It is 1 only in Tag Team with the lobby host's setting on (NametagColours).
         // The checks after it are kept: status effect 8 (e.g. invisibility), on screen, +0x54/+0x5c.
         bool NametagsOnBodies()
         {
@@ -176,8 +189,8 @@ namespace pdnet::gamepatches
             }
             std::vector<uint8_t> code;
             auto rip = [&](size_t instructionLength) { return cave + code.size() + instructionLength; };
-            code.insert(code.end(), { 0x50, 0x48, 0xb8 });                  // push rax ; mov rax, &g_bodyTags
-            Put64(code, reinterpret_cast<uint64_t>(&g_bodyTags));
+            code.insert(code.end(), { 0x50, 0x48, 0xb8 });                  // push rax ; mov rax, &g_bodyTagsNow
+            Put64(code, reinterpret_cast<uint64_t>(&g_bodyTagsNow));
             code.insert(code.end(), { 0x80, 0x38, 0x00, 0x58 });            // cmp byte [rax], 0 ; pop rax
             code.insert(code.end(), { 0x0f, 0x85 });                        // jne next (dead bodies keep their name)
             Put32(code, Rel32(rip(4), next));
@@ -241,6 +254,94 @@ namespace pdnet::gamepatches
             {
                 return false;
             }
+        }
+
+        // Nametag colours. Three kinds: enemy (every game type), ally (Tag Team only: same team as this PC's player) and
+        // dead body (Tag Team only, the existing dead colour). Read from the game's session data:
+        //   game type 0x1405277b4 (0 Battle Royale, 1 Tag Team, 2 One-on-One; session command 55),
+        //   this PC's lobby slot 0x140527bc4, each lobby slot's team 0x140527c40[slot] (session command 134),
+        //   lobby names 0x140527ac0 + slot*64; the nametag code's players (match slot r15) are named at
+        //   0x1404bca30 + i*0x41, so each one is matched to its lobby slot by name.
+        struct TeamView
+        {
+            int32_t type, mySlot, team[4];
+            char lobbyName[4][64];
+            char matchName[4][0x41];
+        };
+
+        bool ReadTeamView(TeamView& v)
+        {
+            __try
+            {
+                v.type = *reinterpret_cast<int32_t*>(At(0x1405277b4));
+                v.mySlot = *reinterpret_cast<int32_t*>(At(0x140527bc4));
+                memcpy(v.team, At(0x140527c40), sizeof(v.team));
+                for (int i = 0; i < 4; ++i)
+                {
+                    memcpy(v.lobbyName[i], At(0x140527ac0) + i * 64, 64);
+                    v.lobbyName[i][63] = 0;
+                    memcpy(v.matchName[i], At(0x1404bca30) + i * 0x41, 0x41);
+                    v.matchName[i][0x40] = 0;
+                }
+                return true;
+            }
+            __except (EXCEPTION_EXECUTE_HANDLER)
+            {
+                return false;
+            }
+        }
+
+        void NametagColours()
+        {
+            auto twice = [](uint32_t argb) { return static_cast<uint64_t>(argb) << 32 | argb; };
+            uint64_t ally = twice(GetConfig().allyNametagColor), enemy = twice(GetConfig().enemyNametagColor);
+            std::thread([ally, enemy, twice]
+            {
+                std::wstring last;
+                for (;;)
+                {
+                    Sleep(100);
+                    TeamView v{};
+                    if (!ReadTeamView(v)) continue;
+                    bool tag = v.type == 1;
+                    g_bodyTagsNow = g_bodyTags && tag ? 1 : 0;
+                    int myTeam = v.mySlot >= 0 && v.mySlot < 4 ? v.team[v.mySlot] : -1;
+                    std::wstring summary = tag ? L"Tag Team" : L"no teams";
+                    for (int i = 0; i < 4; ++i)
+                    {
+                        uint64_t colour = enemy;
+                        const wchar_t* kind = L"enemy";
+                        if (!v.matchName[i][0])
+                        {
+                            colour = twice(0xffffffff);
+                            kind = L"-";
+                        }
+                        else if (tag)
+                        {
+                            int team = -1;
+                            for (int s = 0; s < 4; ++s)
+                                if (strcmp(v.lobbyName[s], v.matchName[i]) == 0) team = v.team[s];
+                            if (team < 0 || myTeam < 0)
+                            {
+                                colour = twice(0xffffffff); // team unknown: the game's own white
+                                kind = L"unknown";
+                            }
+                            else if (team == myTeam)
+                            {
+                                colour = ally;
+                                kind = L"ally";
+                            }
+                        }
+                        g_tagColour[i] = colour;
+                        summary += L", " + std::to_wstring(i) + L" " + kind;
+                    }
+                    if (summary != last)
+                    {
+                        Log(L"gamepatch: nametag colours: %s (dead bodies %s)", summary.c_str(), g_bodyTagsNow ? L"tagged" : L"not tagged");
+                        last = summary;
+                    }
+                }
+            }).detach();
         }
 
         // Sets g_playDead[slot] while a player lies in Play Dead (skill 360), for the colour routine. Other players'
@@ -811,6 +912,7 @@ namespace pdnet::gamepatches
             if (NametagsOnBodies())
             {
                 DeadNametagColor(GetConfig().deadNametagColor);
+                NametagColours();
                 TrackPlayDead();
             }
             if (GetConfig().nametagDebug) NametagDebug();
