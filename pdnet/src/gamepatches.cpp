@@ -16,6 +16,7 @@ namespace pdnet::gamepatches
         // What the game's nametag code reads (routines below), kept current by NametagColours: dead bodies keep their
         // tag only in Tag Team, and each other player's tag colour by match slot (ally / enemy, both ARGB twice).
         std::atomic<uint8_t> g_bodyTagsNow{ 0 };
+        std::atomic<uint8_t> g_slotGone[4]{}; // per match slot: that player left (no nametag), set by NametagColours
         std::atomic<uint64_t> g_tagColour[8]{ ~0ull, ~0ull, ~0ull, ~0ull, ~0ull, ~0ull, ~0ull, ~0ull };
         std::atomic<uint8_t> g_playDead[4]{}; // per player slot: lying in Play Dead (TrackPlayDead), read by the colour routine
 
@@ -181,7 +182,7 @@ namespace pdnet::gamepatches
             }
             uint8_t* next = site + expected.size(); // 0x1401511c8
             uint8_t* skip = next + 0x184;           // the jz target
-            uint8_t* cave = CodeCave(48);
+            uint8_t* cave = CodeCave(96);
             if (!cave)
             {
                 Log(L"gamepatch: nametags on dead bodies skipped - no free space for the check routine");
@@ -189,7 +190,21 @@ namespace pdnet::gamepatches
             }
             std::vector<uint8_t> code;
             auto rip = [&](size_t instructionLength) { return cave + code.size() + instructionLength; };
-            code.insert(code.end(), { 0x50, 0x48, 0xb8 });                  // push rax ; mov rax, &g_bodyTagsNow
+            // A player who left the match (g_slotGone[r15]) has no nametag at all.
+            code.insert(code.end(), { 0x50 });                              // push rax
+            code.insert(code.end(), { 0x49, 0x83, 0xff, 0x03 });            // cmp r15, 3
+            code.insert(code.end(), { 0x77, 0x00 });                        // ja present (patched below)
+            size_t jaAt = code.size() - 1;
+            code.insert(code.end(), { 0x48, 0xb8 });                        // mov rax, &g_slotGone
+            Put64(code, reinterpret_cast<uint64_t>(&g_slotGone[0]));
+            code.insert(code.end(), { 0x42, 0x80, 0x3c, 0x38, 0x00 });      // cmp byte [rax + r15], 0
+            code.insert(code.end(), { 0x74, 0x00 });                        // je present (patched below)
+            size_t jeAt = code.size() - 1;
+            code.insert(code.end(), { 0x58, 0xe9 });                        // pop rax ; jmp skip (no nametag)
+            Put32(code, Rel32(rip(4), skip));
+            code[jaAt] = static_cast<uint8_t>(code.size() - (jaAt + 1));    // present:
+            code[jeAt] = static_cast<uint8_t>(code.size() - (jeAt + 1));
+            code.insert(code.end(), { 0x48, 0xb8 });                        // mov rax, &g_bodyTagsNow (rax still pushed)
             Put64(code, reinterpret_cast<uint64_t>(&g_bodyTagsNow));
             code.insert(code.end(), { 0x80, 0x38, 0x00, 0x58 });            // cmp byte [rax], 0 ; pop rax
             code.insert(code.end(), { 0x0f, 0x85 });                        // jne next (dead bodies keep their name)
@@ -291,6 +306,45 @@ namespace pdnet::gamepatches
             }
         }
 
+        // Which match slots still have their player, as session command 28 (0x140213a80) decides it: this PC's own slot
+        // (0x140527bc4), or an active entry for the slot in the game's peer list (count 0x140594ea4; 0x298-byte entries,
+        // active flag at 0x140595ea8, slot at 0x140595eac). `state` is the game state (0 / 13: lobby or menus).
+        bool ReadPresence(bool present[4], int32_t& state)
+        {
+            __try
+            {
+                state = *reinterpret_cast<int32_t*>(At(0x1404bc950));
+                int32_t mine = *reinterpret_cast<int32_t*>(At(0x140527bc4));
+                int32_t peers = *reinterpret_cast<int32_t*>(At(0x140594ea4));
+                for (int s = 0; s < 4; ++s) present[s] = s == mine;
+                for (int i = 0; i < peers && i < 16; ++i)
+                {
+                    uint8_t* entry = At(0x140595ea8) + i * 0x298;
+                    int32_t active = *reinterpret_cast<int32_t*>(entry), slot = *reinterpret_cast<int32_t*>(entry + 4);
+                    if (active && slot >= 0 && slot < 4) present[slot] = true;
+                }
+                return true;
+            }
+            __except (EXCEPTION_EXECUTE_HANDLER)
+            {
+                return false;
+            }
+        }
+
+        // During a match, a slot whose player left (named, but no longer present) gets no nametag (g_slotGone).
+        void UpdateLeftPlayers(const TeamView& v)
+        {
+            bool present[4];
+            int32_t state = 0;
+            if (!ReadPresence(present, state)) return;
+            bool match = state != 0 && state != 13;
+            for (int s = 0; s < 4; ++s)
+            {
+                uint8_t gone = match && v.matchName[s][0] && !present[s] ? 1 : 0;
+                if (g_slotGone[s].exchange(gone) != gone && gone) Log(L"gamepatch: %S left the match - nametag hidden", v.matchName[s]);
+            }
+        }
+
         void NametagColours()
         {
             auto twice = [](uint32_t argb) { return static_cast<uint64_t>(argb) << 32 | argb; };
@@ -304,6 +358,7 @@ namespace pdnet::gamepatches
                     Sleep(100);
                     TeamView v{};
                     if (!ReadTeamView(v)) continue;
+                    UpdateLeftPlayers(v);
                     bool tag = v.type == 1;
                     g_bodyTagsNow = g_bodyTags && tag ? 1 : 0;
                     int myTeam = v.mySlot >= 0 && v.mySlot < 4 ? v.team[v.mySlot] : -1;
