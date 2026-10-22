@@ -435,8 +435,18 @@ namespace pdnet::p2p
     {
         uint32_t nonce = net::NewNonce();
         auto pending = AddPending(nonce);
-        SendControl(peer, type, nonce, body);
-        bool ok = WaitForSingleObject(pending->event.get(), timeoutMs) == WAIT_OBJECT_0;
+        // Sent again every 2 s until answered: a request sent while EOS is still setting up the connection can be
+        // lost (joins then hung on "joining"). The other side answers each copy; the extra answers are ignored.
+        constexpr DWORD kResendMs = 2000;
+        bool ok = false;
+        for (DWORD waited = 0, sends = 1; !ok && waited < timeoutMs; ++sends)
+        {
+            SendControl(peer, type, nonce, body);
+            DWORD slice = (std::min)(kResendMs, timeoutMs - waited);
+            ok = WaitForSingleObject(pending->event.get(), slice) == WAIT_OBJECT_0;
+            waited += slice;
+            if (!ok && waited < timeoutMs && sends == 1) Log(L"p2p: no answer from %S yet - sending the request again every %lu s", peer.substr(0, 8).c_str(), kResendMs / 1000);
+        }
         RemovePending(nonce);
         if (ok)
         {
