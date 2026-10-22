@@ -659,6 +659,24 @@ namespace pdnet::gamepatches
                     t.values[i] = lobbyGallery.data();
                     continue;
                 }
+                // Non-hosts' lobby hint lines have no Invite entry: they get the Arsenal Lab button (Y, icon 5) after
+                // Options, written with the text code character the line already uses (0x07).
+                if (GetConfig().lobbyArsenalEditor && (strcmp(key, "lobby_client") == 0 || strcmp(key, "lobby_team_client") == 0))
+                {
+                    if (!CopyString(t.values[i], value, sizeof(value))) return;
+                    std::string text = value;
+                    size_t at = text.find("4#Options");
+                    if (at != std::string::npos && at > 0 && text.find("Arsenal Lab") == std::string::npos)
+                    {
+                        char code = text[at - 1];
+                        text.insert(at + strlen("4#Options"), std::string(1, code) + "5#Arsenal Lab");
+                        std::string& stored = renamed[key];
+                        stored = text;
+                        t.values[i] = stored.data();
+                        Log(L"gamepatch: text '%S' now has the Arsenal Lab button", key);
+                    }
+                    continue;
+                }
                 for (auto& r : kRenames)
                 {
                     if (strcmp(key, r.key) != 0) continue;
@@ -817,9 +835,10 @@ namespace pdnet::gamepatches
 
         // Returns how many Gamertag checks were patched (-1: not a script this pdnet understands); `labels` counts
         // the relabelled strings.
-        int PatchLobbyScript(uint8_t* script, bool gamertag, bool micLabel, int& labels)
+        int PatchLobbyScript(uint8_t* script, bool gamertag, bool micLabel, bool arsenal, int& labels, int& arsenalPatched)
         {
             labels = 0;
+            arsenalPatched = 0;
             __try
             {
                 // Header: +0 code offset (0x20), +4 labels, +8 end of labels, +12 strings, as file offsets. Once
@@ -852,6 +871,15 @@ namespace pdnet::gamepatches
                             ++labels; // relabelled now, or already (the loaded copy can keep an earlier patch)
                         }
                     }
+                    // Arsenal Lab for everyone: the Y handler (albmain_ty) opens the invite screen (session command 318,
+                    // the Arsenal editor in pdnet) only for the host: `session 32; push ret; push 0; ==; jz +3; push 0;
+                    // g1#43; session 318`. The jz becomes a jump to the next word, so clients get it too.
+                    if (arsenal && w[0] == 0x42380001 && w[1] == kPushResult && w[2] == 0x0000000E && w[3] == 0x00000017 && w[4] == 0x00030207 &&
+                        w[5] == 0x0000000E && w[6] == 0x102B0101 && w[7] == 0x43560001)
+                    {
+                        w[4] = 0x00000207;
+                        ++arsenalPatched;
+                    }
                     if (!gamertag || !LabelTarget(w) || w[1] != kPushResult) continue;
                     // Draw: count; push 2; less-than; jump-if-zero +0x1C; ... push "$GAMERTAG" 0x98 bytes on.
                     if (w[2] == kPush2 && w[3] == 0x00030017 && w[4] == 0x001C0207 && (w[38] & 0xffff) == 0x0011 &&
@@ -875,11 +903,11 @@ namespace pdnet::gamepatches
             }
         }
 
-        void LobbyScriptPatches(bool gamertag, bool micLabel)
+        void LobbyScriptPatches(bool gamertag, bool micLabel, bool arsenal)
         {
             // Each load is patched once; the entry goes back to null when the lobby closes (QuitMenu frees the
             // script), which also covers the next load reusing the same buffer.
-            std::thread([gamertag, micLabel]
+            std::thread([gamertag, micLabel, arsenal]
             {
                 auto entry = reinterpret_cast<uint8_t* volatile*>(At(0x1403fa3d0) + kLobbyMenu * 0x18 + 0x10);
                 uint8_t* done = nullptr;
@@ -890,17 +918,18 @@ namespace pdnet::gamepatches
                     if (script == done) continue;
                     done = script;
                     if (!script) continue;
-                    int labels = 0;
-                    int n = PatchLobbyScript(script, gamertag, micLabel, labels);
+                    int labels = 0, arsenalPatched = 0;
+                    int n = PatchLobbyScript(script, gamertag, micLabel, arsenal, labels, arsenalPatched);
                     if (gamertag)
                     {
                         if (n == 3) Log(L"gamepatch: lobby Gamertag option enabled (3 script checks)");
                         else Log(L"gamepatch: lobby Gamertag option - %d of 3 script checks matched (script at %p)", n, script);
                     }
                     if (micLabel) Log(L"gamepatch: lobby Voice Chat option relabelled Mic (%d of 2 texts)", labels);
+                    if (arsenal) Log(L"gamepatch: lobby Arsenal Lab button for every player (%d of 1 check)", arsenalPatched);
                 }
             }).detach();
-            Log(L"gamepatch: lobby script watcher started (Gamertag option %s, Mic label %s)", gamertag ? L"on" : L"off", micLabel ? L"on" : L"off");
+            Log(L"gamepatch: lobby script watcher started (Gamertag option %s, Mic label %s, Arsenal Lab for all %s)", gamertag ? L"on" : L"off", micLabel ? L"on" : L"off", arsenal ? L"on" : L"off");
         }
 
         // Lobby talking indicator (voice_chat=on), as the original Xbox game had: while a player speaks in the voice
@@ -1096,7 +1125,8 @@ namespace pdnet::gamepatches
             if (GetConfig().lobbyArsenalEditor) LobbyArsenalEditor();
             if (GetConfig().voiceChat || GetConfig().iconGallery) LobbyTalkIndicator();
             bool micLabel = GetConfig().voiceChat && !GetConfig().voiceClassic; // classic: the option keeps its "Voice Chat" name
-            if (GetConfig().lobbyGamertagOption || micLabel) LobbyScriptPatches(GetConfig().lobbyGamertagOption, micLabel);
+            bool arsenal = GetConfig().lobbyArsenalEditor; // the Arsenal Lab button for clients too
+            if (GetConfig().lobbyGamertagOption || micLabel || arsenal) LobbyScriptPatches(GetConfig().lobbyGamertagOption, micLabel, arsenal);
         });
     }
 

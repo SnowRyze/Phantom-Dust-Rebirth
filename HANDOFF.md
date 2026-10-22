@@ -383,7 +383,7 @@ pdnet.ini text (promoted 2026-10-22). Built from commit 443e445. To go back to t
 Experimental 1 = build-resend1 (70A91FE2): join requests re-sent every 2 s until answered (an intermittent "hung on
 joining": the single request sent while EOS set up the P2P link was lost); voice + Gamertag on, p2p_debug=on.
 
-## Waiting for testers (as of 2026-10-22; newest kit Experimental 13 has all of these)
+## Waiting for testers (as of 2026-10-22; newest kit Experimental 14 has all of these)
 1. **Nametag of a player who left a match** (Experimental 13): 3+ players, one leaves mid-match (disconnect / quit to
    menu / close the game); their nametag should vanish. Log: "gamepatch: X left the match - nametag hidden". Risk: if
    the game's peer list (0x140595ea8) doesn't list every player in a match, present players would be hidden too.
@@ -392,6 +392,10 @@ joining": the single request sent while EOS set up the P2P link was lost); voice
    Also try the pause menu's Voice Chat option mid-match (assumed to be the same setting flag 15).
 3. **Nametag colours in a real match** (Experimental 3+): enemy red everywhere, ally blue + dead yellow in Tag Team.
 4. **Other players' megaphone** following their Mic setting (Experimental 5+; only this PC's own was seen).
+5. **Arsenal Lab for non-hosts** (Experimental 14): a player who joined (not the host) sees "Arsenal Lab" (Y) in the
+   lobby's hint line and Y opens the Arsenal editor, backing out returns to the lobby. Log: "gamepatch: lobby Arsenal
+   Lab button for every player (1 of 1 check)" when a lobby opens (livelobby albmain_ty's host check: its jz +3 ->
+   jz +0), "text 'lobby_client' now has the Arsenal Lab button" (seen on this PC already).
 
 ## Feature backlog (could be added / revisited)
 Parked ideas and half-finished features, newest first. Each has its notes earlier in this file.
