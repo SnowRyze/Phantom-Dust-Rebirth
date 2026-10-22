@@ -55,11 +55,10 @@ Edit with Notepad, then restart the game.
   dead_nametag_color=    colour of a defeated player's nametag (RRGGBB), FFE600 = yellow
                          (also shown on a player lying in Play Dead, until they move or are hit)
   lobby_arsenal_editor=  on/off: the lobby's Arsenal Lab button (was Invite) opens the Arsenal editor
-  voice_chat=            on/off: voice chat in lobbies (Epic voice, no account). The lobby's Options > Mic
-                         switches only your microphone.
-  voice_listen=          on/off: hear the other players (voice_mode=mic)
-  voice_mode=            mic: the game's option is labelled Mic and switches only your microphone;
-                         classic: the original Voice Chat option, switching talking AND hearing
+  voice_chat=            on/off: voice chat in lobbies (through Epic, no account needed)
+  voice_mode=            mic: the in-game option is called Mic and turns only your microphone on/off
+                         classic: the original Voice Chat option - Off means you neither talk nor hear
+  voice_listen=          on/off: hear other players (mic mode only)
   discord_*              lobby announcements in Discord when you host
 
 If something goes wrong
@@ -67,4 +66,5 @@ If something goes wrong
 - The game starts with Xbox Live as usual: pdnet didn't load. Run Collect-Log.bat and send pdlaunch-log.
 - "Windows refused to attach pdlaunch": send a screenshot.
 - Lobbies work but matches don't connect: run Setup.bat again and allow the administrator prompt.
-- Nobody hears you: check Options > Mic says On, and Settings > Privacy > Microphone allows Phantom Dust.
+- Nobody hears you: check the lobby's Options > Mic (Voice Chat in classic mode) is On, and that Windows allows
+  Phantom Dust to use the microphone (Settings > Privacy > Microphone).
