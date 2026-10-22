@@ -9,7 +9,13 @@ $ErrorActionPreference = 'Stop'
 $kit = $PSScriptRoot
 $package = 'Microsoft.MSEsper'
 $testedVersion = '1.3.25854.2'
-function Done { if (-not $NoPause) { Read-Host 'Press Enter to close' | Out-Null } }
+# Asks a question after dropping keypresses already waiting: the Enter that opened Setup.bat could otherwise answer
+# the first question with nothing (Windows Terminal passes it on).
+function Ask([string]$question) {
+    try { $Host.UI.RawUI.FlushInputBuffer() } catch {}
+    Read-Host $question
+}
+function Done { if (-not $NoPause) { Ask 'Press Enter to close' | Out-Null } }
 function Fail($msg) { Write-Host "`nERROR: $msg" -ForegroundColor Red; Done; exit 1 }
 
 foreach ($f in 'pdlaunch.exe', 'pdnet.dll', 'EOSSDK-Win64-Shipping.dll', 'pdnet.ini') {
@@ -34,7 +40,7 @@ function Register($folder) {
 $pkg = Get-AppxPackage $package
 if (-not $pkg) {
     Write-Host 'Phantom Dust is not installed. If you have the Microsoft Store version, install it from the Store first and run this again.'
-    if (-not $GameFolder) { $GameFolder = Read-Host 'If you have an unpacked copy instead, enter its folder (the one with PDUWP.exe and AppxManifest.xml)' }
+    if (-not $GameFolder) { $GameFolder = Ask 'If you have an unpacked copy instead, enter its folder (the one with PDUWP.exe and AppxManifest.xml)' }
     $GameFolder = $GameFolder.Trim('"').TrimEnd('\')
     if (-not $GameFolder -or -not (Test-Path "$GameFolder\AppxManifest.xml") -or -not (Test-Path "$GameFolder\PDUWP.exe")) { Fail "No PDUWP.exe / AppxManifest.xml in '$GameFolder'." }
     $head = [IO.File]::ReadAllBytes("$GameFolder\PDUWP.exe")[0..1]
@@ -77,12 +83,31 @@ if (-not $store) {
 }
 
 # --- name -----------------------------------------------------------------------------------------
-if (-not $Name) { $Name = Read-Host 'Your player name (what the other players will see, max 32 characters)' }
+# The name used last time is offered, so pressing Enter (or setting up a newer kit) keeps it: remembered in
+# %LOCALAPPDATA%\pdnet-name.txt, else the name pdnet last signed in with (its log in the game's data).
+$nameFile = Join-Path $env:LOCALAPPDATA 'pdnet-name.txt'
+$previous = if (Test-Path $nameFile) { (Get-Content $nameFile -Raw -Encoding UTF8).Trim() } else { '' }
+if (-not $previous) {
+    $log = Join-Path $env:LOCALAPPDATA "Packages\$($pkg.PackageFamilyName)\LocalState\pdnet.log"
+    if (Test-Path $log) {
+        $signedIn = Select-String -Path $log -Pattern "eos: signed in as '(.+?)'" -Encoding UTF8 | Select-Object -Last 1
+        if ($signedIn) { $previous = $signedIn.Matches[0].Groups[1].Value }
+    }
+}
+if ($previous -eq $env:COMPUTERNAME) { $previous = '' } # an earlier empty answer, not a chosen name
+$prompt = 'Your player name (what the other players will see, max 32 characters)'
+if ($previous) { $prompt += " [$previous - press Enter to keep it]" }
+for ($try = 0; -not $Name -and $try -lt 3; ++$try) {
+    $Name = ((Ask $prompt) -replace '[\r\n=$]', '').Trim()
+    if (-not $Name -and $previous) { $Name = $previous }
+    elseif (-not $Name) { Write-Host 'Please type a name.' -ForegroundColor Yellow }
+}
 $Name = ($Name -replace '[\r\n=$]', '').Trim()
-if (-not $Name) { $Name = $env:COMPUTERNAME }
+if (-not $Name) { $Name = $env:COMPUTERNAME } # three empty answers with no earlier name
 if ($Name.Length -gt 32) { $Name = $Name.Substring(0, 32) }
 $ini = Get-Content "$kit\pdnet.ini" -Raw -Encoding UTF8 # UTF-8: voice_talk_mark is a music note
 Set-Content "$kit\pdnet.ini" ($ini -replace '(?m)^display_name=.*$', "display_name=$Name") -Encoding UTF8 -NoNewline
+Set-Content $nameFile $Name -Encoding UTF8 -ErrorAction SilentlyContinue
 
 # --- let the game load pdnet from this folder -----------------------------------------------------
 # The game runs in a sandbox; let it read (only) this folder, so it can load pdnet.dll and the settings files.
@@ -130,7 +155,7 @@ if ($voiceOff) { } # this kit has voice chat switched off: the microphone isn't 
 elseif ($current -eq 'Allow') { Write-Host "`nMicrophone: Phantom Dust may already use it (voice chat)." }
 else {
     if (-not $Mic -and -not $NoPause) {
-        $answer = Read-Host "`nAllow Phantom Dust to use your microphone for voice chat? You can mute yourself in the lobby (Options > Mic). (Y/N)"
+        $answer = Ask "`nAllow Phantom Dust to use your microphone for voice chat? You can mute yourself in the lobby (Options > Mic). (Y/N)"
         $Mic = if ($answer -match '^\s*y') { 'yes' } else { 'no' }
     }
     if ($Mic -eq 'yes') {
