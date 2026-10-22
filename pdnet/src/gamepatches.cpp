@@ -1001,6 +1001,108 @@ namespace pdnet::gamepatches
             }).detach();
         }
 
+        // The shop's Online Store item (multiplayer only; Xbox store, dead without Xbox Live) becomes Max Credits &
+        // Skills. Its handler calls the store routine at 0x1F04 (header, then g9 #3 with 1 starts fetching offers).
+        // That routine is rewritten to push kMaxOutCode and call g9 #3, whose table entry is wrapped (HookedStoreStart)
+        // to give the active profile max credits and 99 of every skill instead. The store's own texts (pool 1643-1736,
+        // used only by the store's states) hold the item's new label and hint.
+        constexpr int kShopMenu = 6;
+        constexpr int64_t kMaxOutCode = 2001;
+        using NativeFn = int64_t (*)(int64_t* args);
+        NativeFn g_storeStart = nullptr;
+
+        // The game's own reward routines (daily rewards, FUN_1400bb6c0). mode 1: story profile, 2: multiplayer profile.
+        // Skills by catalog number from-to, each + count, capped at 99 (FUN_14015aae0); credits capped at 999,999,999.
+        using GiveSkillsFn = void (*)(uint32_t mode, int from, int to, int count);
+        using GiveCreditsFn = void (*)(uint32_t mode, int amount);
+
+        void MaxOut()
+        {
+            uint8_t* save = *reinterpret_cast<uint8_t**>(At(0x1404bec10));
+            if (!save) return;
+            uint32_t mode = *reinterpret_cast<uint8_t**>(save + 0x33a0) == save + 0x3fb8 ? 2 : 1;
+            auto& credits = *reinterpret_cast<int32_t*>(At(0x14059a9d8));
+            int before = credits;
+            reinterpret_cast<GiveSkillsFn>(At(0x14015bdd0))(mode, 1, 999, 99);
+            reinterpret_cast<GiveCreditsFn>(At(0x14015bf90))(mode, 999999999);
+            // Skill counts of the active profile: one byte per skill (internal id) at *(save + 0x3a38).
+            auto counts = *reinterpret_cast<int8_t**>(save + 0x3a38);
+            uint8_t* skills = *reinterpret_cast<uint8_t**>(At(0x1404c5228));
+            int total = skills ? *reinterpret_cast<int32_t*>(skills + 8) - 1 : 0, full = 0;
+            for (int i = 1; counts && i < total && i < 1000; ++i) full += counts[i] == 99;
+            Log(L"gamepatch: shop Max Credits & Skills (%s profile): credits %d -> %d, %d of %d skills at 99",
+                mode == 2 ? L"multiplayer" : L"story", before, credits, full, total - 1);
+        }
+
+        int64_t HookedStoreStart(int64_t* args)
+        {
+            if (!args || args[0] != kMaxOutCode) return g_storeStart(args);
+            MaxOut();
+            return 0;
+        }
+
+        // Returns 1 when patched (now or before), 0 when the script is not the expected one.
+        int PatchShopScript(uint8_t* script)
+        {
+            __try
+            {
+                auto code = reinterpret_cast<uint32_t*>(script);
+                uint32_t labelsAt = code[1], strings = code[3];
+                if (code[0] != 0x20) labelsAt += 4, strings += 12;
+                if (labelsAt <= 0x2400 || labelsAt > 0x40000 || strings < labelsAt || strings > 0x80000) return 0;
+                char* pool = reinterpret_cast<char*>(script + strings);
+                const uint32_t routine[3] = { 0x0000000Eu | static_cast<uint32_t>(kMaxOutCode) << 16, 0x90030101, 0x00000005 };
+                uint32_t* at = code + 0x1F04 / 4;
+                if (memcmp(at, routine, sizeof(routine)) == 0) return 1;
+                if (at[0] != 0x0000000E || at[1] != 0x069E0011 || at[2] != 0x0001000E || at[3] != 0x20980301 || at[5] != 0x90030101 ||
+                    code[0x23F4 / 4] != 0xFEC30003 || code[0x1BD0 / 4] != 0x05290011 || code[0x1C58 / 4] != 0x064B0011 ||
+                    strcmp(pool + 1643, "$STORE_TITLE") != 0 || strcmp(pool + 1725, "$STORE_WAIT") != 0)
+                    return 0;
+                const char label[] = "Max Credits & Skills";
+                const char hint[] = "Credits to 999,999,999 and every skill (DLC included) to 99.";
+                static_assert(sizeof(label) + sizeof(hint) <= 1737 - 1643, "store texts too short");
+                memcpy(pool + 1643, label, sizeof(label));
+                memcpy(pool + 1643 + sizeof(label), hint, sizeof(hint));
+                code[0x1BD0 / 4] = 0x0011u | 1643u << 16;
+                code[0x1C58 / 4] = 0x0011u | static_cast<uint32_t>(1643 + sizeof(label)) << 16;
+                memcpy(at, routine, sizeof(routine));
+                return 1;
+            }
+            __except (EXCEPTION_EXECUTE_HANDLER)
+            {
+                return 0;
+            }
+        }
+
+        void ShopMaxOut()
+        {
+            auto entry = reinterpret_cast<NativeFn*>(At(0x1403dd3e0) + 3 * 8);
+            DWORD old = 0;
+            if (*entry != reinterpret_cast<NativeFn>(At(0x1400bc710)) || memcmp(At(0x14015bdd0), "\x4c\x8b\xdc\x53", 4) != 0 ||
+                memcmp(At(0x14015bf90), "\x48\x89\x5c\x24\x08", 5) != 0)
+            {
+                Log(L"gamepatch: shop Max Credits & Skills skipped - the game code is not what this pdnet expects");
+                return;
+            }
+            if (!VirtualProtect(entry, 8, PAGE_READWRITE, &old)) return;
+            g_storeStart = *entry;
+            *entry = &HookedStoreStart;
+            VirtualProtect(entry, 8, old, &old);
+            std::thread([]
+            {
+                auto script = reinterpret_cast<uint8_t* volatile*>(At(0x1403fa3d0) + kShopMenu * 0x18 + 0x10);
+                uint8_t* done = nullptr;
+                for (;;)
+                {
+                    Sleep(50);
+                    uint8_t* now = *script;
+                    if (now == done) continue;
+                    done = now;
+                    if (now) Log(L"gamepatch: shop: Online Store %s", PatchShopScript(now) ? L"is now Max Credits & Skills" : L"left as it is (script not as expected)");
+                }
+            }).detach();
+        }
+
         void LobbyScriptPatches(bool gamertag, bool micLabel, bool arsenal)
         {
             // Each load is patched once; the entry goes back to null when the lobby closes (QuitMenu frees the
@@ -1224,6 +1326,7 @@ namespace pdnet::gamepatches
             if (GetConfig().voiceChat || GetConfig().iconGallery) LobbyTalkIndicator();
             bool micLabel = GetConfig().voiceChat && !GetConfig().voiceClassic; // classic: the option keeps its "Voice Chat" name
             QuickJoinLabels();
+            if (GetConfig().shopMaxOut) ShopMaxOut();
             bool arsenal = GetConfig().lobbyArsenalEditor; // the Arsenal Lab button for clients too
             if (GetConfig().lobbyGamertagOption || micLabel || arsenal) LobbyScriptPatches(GetConfig().lobbyGamertagOption, micLabel, arsenal);
         });

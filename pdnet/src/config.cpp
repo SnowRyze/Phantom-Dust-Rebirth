@@ -85,6 +85,7 @@ namespace pdnet
                 else if (key == "test_peer") c.testPeer = _stricmp(value.c_str(), "on") == 0;
                 else if (key == "menu_debug") c.menuDebug = _stricmp(value.c_str(), "on") == 0;
                 else if (key == "lobby_arsenal_editor") c.lobbyArsenalEditor = _stricmp(value.c_str(), "off") != 0;
+                else if (key == "shop_max_out") c.shopMaxOut = _stricmp(value.c_str(), "off") != 0;
                 else if (key == "lobby_gamertag_option") c.lobbyGamertagOption = _stricmp(value.c_str(), "off") != 0;
                 else if (key == "voice_chat") c.voiceChat = _stricmp(value.c_str(), "off") != 0;
                 else if (key == "voice_listen") c.voiceListen = _stricmp(value.c_str(), "off") != 0;
