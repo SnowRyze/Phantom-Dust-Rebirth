@@ -73,6 +73,7 @@ namespace pdnet::lobbies
     bool Available() { return false; }
     std::string LocalUserId() { return {}; }
     bool IsTalking(const char*) { return false; }
+    bool IsMicOn(const char*) { return false; }
     std::optional<Lobby> Create(const std::string&, const std::string&, uint32_t, const Attributes&, const Attributes&) { return std::nullopt; }
     std::optional<Lobby> Join(const std::string&, const Attributes&) { return std::nullopt; }
     bool Update(const std::string&, const Changes&, const Changes&, uint32_t) { return false; }
@@ -522,6 +523,10 @@ namespace pdnet::lobbies
         // Written on the EOS thread, read by the game's lobby drawing (gamepatches.cpp).
         std::mutex g_talkLock;
         std::map<std::string, std::string> g_talkers; // EOS user id -> display name, while speaking
+        // Every other participant of a connected voice room, with their mic state (EOS audio status: enabled = their
+        // mic is on and sending). The lobby shows the megaphone for players whose mic is on (gamepatches.cpp).
+        struct Participant { std::string name, room; bool micOn = false; };
+        std::map<std::string, Participant> g_participants; // EOS user id -> participant, under g_talkLock
 
         // The display name of a voice room participant, from the lobby that owns the room.
         std::string ParticipantName(const Api& api, EOS_ProductUserId me, const std::string& roomName, EOS_ProductUserId participant)
@@ -545,8 +550,19 @@ namespace pdnet::lobbies
         {
             const Api& api = *Sdk();
             std::string id = Narrow(api, info->ParticipantId);
-            std::string name = info->bSpeaking ? ParticipantName(api, info->LocalUserId, info->RoomName ? info->RoomName : "", info->ParticipantId) : std::string();
+            std::string room = info->RoomName ? info->RoomName : "";
+            std::string name = ParticipantName(api, info->LocalUserId, room, info->ParticipantId);
             std::lock_guard guard(g_talkLock);
+            if (id != Narrow(api, info->LocalUserId))
+            {
+                Participant& p = g_participants[id];
+                bool micOn = info->AudioStatus == EOS_ERTCAudioStatus::EOS_RTCAS_Enabled;
+                if (!name.empty()) p.name = name;
+                p.room = room;
+                if (p.micOn != micOn) Log(L"voice: %S's mic is %s", p.name.empty() ? id.c_str() : p.name.c_str(), micOn ? L"on" : L"off");
+                p.micOn = micOn;
+            }
+            if (!info->bSpeaking) name.clear();
             auto was = g_talkers.find(id);
             if (was != g_talkers.end() && !info->bSpeaking) name = was->second; // for the log line
             bool wasTalking = was != g_talkers.end();
@@ -610,10 +626,21 @@ namespace pdnet::lobbies
         void EOS_CALL OnParticipant(const EOS_RTC_ParticipantStatusChangedCallbackInfo* info)
         {
             Log(L"voice: %s %s the voice room", UserId(*Sdk(), info->ParticipantId).c_str(), info->ParticipantStatus == EOS_ERTCParticipantStatus::EOS_RTCPS_Joined ? L"joined" : L"left");
+            const Api& api = *Sdk();
+            std::string id = Narrow(api, info->ParticipantId);
             if (info->ParticipantStatus != EOS_ERTCParticipantStatus::EOS_RTCPS_Joined)
             {
                 std::lock_guard guard(g_talkLock);
-                g_talkers.erase(Narrow(*Sdk(), info->ParticipantId));
+                g_talkers.erase(id);
+                g_participants.erase(id);
+            }
+            else if (id != Narrow(api, info->LocalUserId))
+            {
+                std::string name = ParticipantName(api, info->LocalUserId, info->RoomName ? info->RoomName : "", info->ParticipantId);
+                std::lock_guard guard(g_talkLock);
+                Participant& p = g_participants[id];
+                if (!name.empty()) p.name = name;
+                p.room = info->RoomName ? info->RoomName : "";
             }
         }
 
@@ -634,6 +661,8 @@ namespace pdnet::lobbies
                 g_voiceRooms.erase(found);
                 std::lock_guard guard(g_talkLock);
                 g_talkers.clear();
+                g_participants.clear();
+                g_myName.clear();
             }
             if (!info->bIsConnected)
             {
@@ -684,8 +713,31 @@ namespace pdnet::lobbies
             {
                 std::thread([]
                 {
-                    for (;;)
+                    for (int tick = 0;; ++tick)
                     {
+                        // Every 2 s: names of participants whose lobby name (PD_NAME) wasn't there yet.
+                        if (tick % 8 == 0)
+                        {
+                            std::string userId = winrt::to_string(eos::LocalUserId());
+                            eos::Post([userId](void*)
+                            {
+                                const Api* api = Sdk();
+                                if (!api) return;
+                                EOS_ProductUserId me = api->EOS_ProductUserId_FromString(userId.c_str());
+                                std::vector<std::pair<std::string, std::string>> unnamed; // id, room
+                                {
+                                    std::lock_guard guard(g_talkLock);
+                                    for (auto& [id, p] : g_participants) if (p.name.empty()) unnamed.emplace_back(id, p.room);
+                                }
+                                for (auto& [id, room] : unnamed)
+                                {
+                                    std::string name = ParticipantName(*api, me, room, api->EOS_ProductUserId_FromString(id.c_str()));
+                                    if (name.empty()) continue;
+                                    std::lock_guard guard(g_talkLock);
+                                    if (auto it = g_participants.find(id); it != g_participants.end()) it->second.name = name;
+                                }
+                            });
+                        }
                         bool mic = gamepatches::GameMicOn(), listen = GetConfig().voiceListen;
                         if (mic != g_wantMic.exchange(mic) || listen != g_wantListen.exchange(listen))
                         {
@@ -748,6 +800,15 @@ namespace pdnet::lobbies
         if (!g_myName.empty() && g_myName == name) return GetTickCount64() < g_localTalkUntil;
         for (auto& [id, talker] : g_talkers)
             if (talker == name) return true;
+        return false;
+    }
+
+    bool IsMicOn(const char* name)
+    {
+        std::lock_guard guard(g_talkLock);
+        if (!g_myName.empty() && g_myName == name) return g_wantMic; // this PC, while in a voice room
+        for (auto& [id, p] : g_participants)
+            if (p.name == name) return p.micOn;
         return false;
     }
 

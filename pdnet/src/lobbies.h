@@ -46,6 +46,8 @@ namespace pdnet::lobbies
 
     // Voice: true while the lobby member shown as `name` (UTF-8, the lobby's player name) is speaking in the voice room.
     bool IsTalking(const char* name);
+    // Voice: true while that lobby member is in the voice room with their mic on (this PC: its Mic option).
+    bool IsMicOn(const char* name);
 
     // Creates a public lobby with a fixed id (join by id enabled, host migration on, no presence) and sets the first
     // lobby and member attributes. Returns the lobby as EOS now reports it.

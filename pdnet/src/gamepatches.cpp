@@ -860,8 +860,8 @@ namespace pdnet::gamepatches
         // The lobby's player rows also draw a status lamp per slot with menu command 95 (0x1402077a0: sprite from a
         // loaded texture slot; args sheet, sprite, x, y, colour, 8 bytes each): sprite 34 or 35 of MNET (texture slot 3,
         // loaded by livelobbyres; 84 sprites) right after session command 26 for that row's slot.
-        //   voice_talk_icon=N: a talking player's row also blinks MNET sprite N (the original game's megaphone) next to
-        //   the lamp; icon_gallery=on: this PC's own lamp steps through MNET sprites 0-83 (1.5 s each) and its name
+        //   voice_talk_icon=N: MNET sprite N (the original game's megaphone) after the name of each player whose mic is
+        //   on, in the name's colour (HookedDrawText); icon_gallery=on: this PC's own lamp steps through MNET sprites 0-83 (1.5 s each) and its name
         //   shows the number, to find a sprite.
         using MenuCommandFn = int64_t (*)(int64_t* args);
         MenuCommandFn g_drawSprite = nullptr;
@@ -899,10 +899,11 @@ namespace pdnet::gamepatches
             if (indent < 0 || slot < 0 || slot >= 4) return result;
             char name[64];
             if (!CopyString(reinterpret_cast<const char*>(args[3]), name, sizeof(name)) || !name[0]) return result;
-            bool talking = lobbies::IsTalking(name);
-            if (!GetConfig().voiceDebug && !(talking && (GetTickCount64() / 300) % 2 == 0)) return result; // voice_debug: always, to see where it lands
+            if (!GetConfig().voiceDebug && !lobbies::IsMicOn(name)) return result; // voice_debug: always, to see where it lands
             int width = (std::min)(reinterpret_cast<MeasureFn>(At(0x140247550))(name, 0, 0), 190);
-            int64_t megaphone[5] = { 3, icon, args[0] + indent + width + GetConfig().voiceTalkIconX, g_lampY, static_cast<int64_t>(0xffffffff) };
+            // In the colour the name was just drawn in: the game's current text colour (ARGB, 0x14054c9b0).
+            uint32_t colour = *reinterpret_cast<uint32_t*>(At(0x14054c9b0));
+            int64_t megaphone[5] = { 3, icon, args[0] + indent + width + GetConfig().voiceTalkIconX, g_lampY, static_cast<int64_t>(colour) };
             g_drawSprite(megaphone);
             return result;
         }
