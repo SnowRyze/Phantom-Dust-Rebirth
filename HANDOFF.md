@@ -371,6 +371,14 @@ Import fallback (build-import5): unpacked copies read the local Xbox save cache 
 Loading watchdog (build-watch1, loading_watchdog=on default, observe only): stubs on both script command tables (menu 0x1403eefe0 x136, session 0x1403f1150 x196) report each command's result; a command polled non-stop (gaps < 1 s) with the same result for 30 s on one menu is logged once ('watchdog: ... waiting on it?'), plus 'menu N has been on screen for 60 s'. Normal screens log a few constant getters; a hang adds the stuck one. Step 2 (time out those specific waits) once hang logs exist.
 Watchdog baseline (normal play, 35 menu changes incl. a lobby): only the title/start screen (menu 7) idle logged menu commands 6 and 109 = 1 for 30 s+ - normal, not a hang. Everything else quiet.
 
+## Tester kit names (from 2026-10-22)
+Kits are `D:\PhantomDust-pdnet Experimental <N>.zip` (make-testkit.ps1 numbers them; kit-version.txt inside says the
+build and settings). A kit becomes `Stable <M>` only when the owner says so: `make-testkit.ps1 -Promote <N>`.
+Per-kit settings: `-Set voice_chat=off,p2p_debug=on`; `-Notes "..."` for kit-version.txt.
+Stable 1 = build-hook2 (AFCEAD9F) with voice_chat=off, lobby_gamertag_option=off (a join worked).
+Experimental 1 = build-resend1 (70A91FE2): join requests re-sent every 2 s until answered (an intermittent "hung on
+joining": the single request sent while EOS set up the P2P link was lost); voice + Gamertag on, p2p_debug=on.
+
 ## Feature backlog (could be added / revisited)
 Parked ideas and half-finished features, newest first. Each has its notes earlier in this file.
 1. **Loading-screen timeout** (parked 2026-10-21). Step 1 was built and tested (commit 4cf65cb, observe-only "loading watchdog":

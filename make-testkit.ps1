@@ -4,16 +4,62 @@
 #   .\make-testkit.ps1 -Stage C -EosIni .\eos.tester.ini     stage C kit (EOS P2P), credentials inside
 #   .\make-testkit.ps1 -Stage B                              stage B kit (direct UDP), no eos.ini (send it separately)
 #   .\make-testkit.ps1 -EosIni .\eos.tester.ini              the kit (default, -Stage Kit): Store install AND unpacked copies, no game
-#                                                            files changed (pdlaunch, testkit-store\) -> D:\PhantomDust-pdnet-TestKit-<md5>...
+#                                                            files changed (pdlaunch, testkit-store\) -> D:\PhantomDust-pdnet Experimental <N>.zip
 #   -Stage C / B: the older kits that replace Microsoft.Xbox.Services.dll in an unpacked copy (testkit-stagec\ / b\)
 #   -Build <folder under pdnet>   default build-discord4
 # eos.ini holds an EOS client id and secret. Use the tester client (eos.tester.ini), not the development client
 # in _netmod\eos.local.ini (see HANDOFF §9).
 #   -Webhook <Discord webhook URL>   stage C: players' games announce the lobbies they host there
 #            (default: webhook_url from pdnet\tools\out\lobbywatch.ini; -Webhook none = no Discord messages)
-param([ValidateSet('B', 'C', 'Store', 'Kit')][string]$Stage = 'Kit', [string]$EosIni, [string]$Build, [string]$Webhook)
+#
+# Kit names (-Stage Kit), as the project owner asked (2026-10-22): every new kit is the next
+#   D:\PhantomDust-pdnet Experimental <N>.zip
+# and a kit becomes D:\PhantomDust-pdnet Stable <M>.zip only when the owner says it is stable:
+#   .\make-testkit.ps1 -Promote <N>        renames Experimental N to the next Stable number
+# Each kit carries kit-version.txt (label, pdnet.dll MD5, build, -Notes).
+#   -Set key=value,...   pdnet.ini overrides for this kit (e.g. -Set voice_chat=off,p2p_debug=on)
+#   -Notes "..."         one line for kit-version.txt (what changed, what to test)
+param([ValidateSet('B', 'C', 'Store', 'Kit')][string]$Stage = 'Kit', [string]$EosIni, [string]$Build, [string]$Webhook,
+      [string[]]$Set, [string]$Notes, [int]$Promote)
 $ErrorActionPreference = 'Stop'
 $root = $PSScriptRoot
+Add-Type -AssemblyName System.IO.Compression, System.IO.Compression.FileSystem
+
+# The highest "<kind> N" number among D:\PhantomDust-pdnet <kind> N.zip.
+function LastNumber([string]$kind) {
+    $numbers = Get-ChildItem 'D:\' -Filter "PhantomDust-pdnet $kind *.zip" | ForEach-Object { if ($_.BaseName -match " $kind (\d+)$") { [int]$Matches[1] } }
+    if ($numbers) { ($numbers | Measure-Object -Maximum).Maximum } else { 0 }
+}
+
+# Rewrites kit-version.txt inside a kit zip: first line the label, the rest kept.
+function SetZipLabel([string]$zip, [string]$label) {
+    $z = [IO.Compression.ZipFile]::Open($zip, 'Update')
+    try {
+        $entry = $z.GetEntry('kit-version.txt')
+        $rest = ''
+        if ($entry) {
+            $reader = New-Object IO.StreamReader($entry.Open())
+            $lines = $reader.ReadToEnd() -split "`r?`n"
+            $reader.Dispose()
+            $rest = ($lines | Select-Object -Skip 1) -join "`r`n"
+            $entry.Delete()
+        }
+        $writer = New-Object IO.StreamWriter($z.CreateEntry('kit-version.txt').Open(), (New-Object Text.UTF8Encoding $false))
+        $writer.Write("$label`r`n$rest")
+        $writer.Dispose()
+    }
+    finally { $z.Dispose() }
+}
+
+if ($Promote) {
+    $from = "D:\PhantomDust-pdnet Experimental $Promote.zip"
+    if (-not (Test-Path $from)) { throw "No $from." }
+    $label = "PhantomDust-pdnet Stable $((LastNumber 'Stable') + 1)"
+    Rename-Item $from "$label.zip"
+    SetZipLabel "D:\$label.zip" $label
+    Write-Host "Experimental $Promote is now D:\$label.zip"
+    exit 0
+}
 if (-not $Build) { $Build = 'build-discord4' }
 $launcherKit = $Stage -in 'Store', 'Kit'
 $kitSource = if ($launcherKit) { "$root\testkit-store" } else { "$root\testkit-stage$($Stage.ToLower())" }
@@ -21,7 +67,8 @@ $kitSource = if ($launcherKit) { "$root\testkit-store" } else { "$root\testkit-s
 $dll = "$root\pdnet\$Build\Microsoft.Xbox.Services.dll"
 if (-not (Test-Path $dll)) { throw "No DLL at $dll. Build it first: pdnet\build.cmd $Build" }
 $md5 = (Get-FileHash $dll -Algorithm MD5).Hash
-$name = "PhantomDust-pdnet-$(if ($Stage -eq 'Kit') { 'TestKit' } elseif ($Stage -eq 'Store') { 'StageC-Store-TestKit' } else { "Stage$Stage-TestKit" })-$($md5.Substring(0, 8))" + $(if ($EosIni) { '-with-eos' } else { '' })
+$name = if ($Stage -eq 'Kit') { "PhantomDust-pdnet Experimental $((LastNumber 'Experimental') + 1)" }
+        else { "PhantomDust-pdnet-$(if ($Stage -eq 'Store') { 'StageC-Store-TestKit' } else { "Stage$Stage-TestKit" })-$($md5.Substring(0, 8))" + $(if ($EosIni) { '-with-eos' } else { '' }) }
 $out = "D:\$name"
 $zip = "D:\$name.zip"
 $sdkDll = Get-ChildItem 'C:\Users\ryhol\tools\downloads\eos-sdk' -Recurse -Filter 'EOSSDK-Win64-Shipping.dll' | Select-Object -First 1
@@ -61,7 +108,16 @@ if ($Stage -ne 'B') {
     }
     if ($Webhook -eq 'none') { $Webhook = '' }
     $ini = (Get-Content "$out\pdnet.ini" -Raw -Encoding UTF8) -replace '(?m)^discord_webhook=.*$', "discord_webhook=$Webhook"
+    foreach ($pair in $Set) {
+        $key, $value = $pair -split '=', 2
+        if ($ini -match "(?m)^$([regex]::Escape($key))=") { $ini = $ini -replace "(?m)^$([regex]::Escape($key))=.*$", "$key=$value" }
+        else { $ini = $ini.TrimEnd() + "`r`n$key=$value`r`n" }
+    }
     Set-Content "$out\pdnet.ini" $ini -Encoding UTF8 -NoNewline
+}
+if ($Stage -eq 'Kit') {
+    $version = "$name`r`npdnet.dll MD5 $($md5.Substring(0, 8)) ($Build)`r`n" + $(if ($Set) { "Settings: $($Set -join ', ')`r`n" } else { '' }) + $(if ($Notes) { "$Notes`r`n" } else { '' })
+    [IO.File]::WriteAllText("$out\kit-version.txt", $version, (New-Object Text.UTF8Encoding $false))
 }
 
 if (Test-Path $zip) { Remove-Item $zip -Force }
