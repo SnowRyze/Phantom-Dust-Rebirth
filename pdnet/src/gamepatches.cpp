@@ -584,6 +584,7 @@ namespace pdnet::gamepatches
                 if (!CopyString(t.keys[i], key, sizeof(key))) return;
                 // icon_gallery=on: the main menu's hint line (Import Xbox Save highlighted) shows every inline icon
                 // (text code 0x07 N '#', icons 0-36) with its number, to pick one for voice_talk_mark.
+                // In the lobby (its own sprite sheet), the bottom hint line shows icons 19-36 instead.
                 if (GetConfig().iconGallery && strcmp(key, "help_hint") == 0)
                 {
                     static std::string gallery;
@@ -592,6 +593,15 @@ namespace pdnet::gamepatches
                             gallery += "\a" + std::to_string(n) + "#" + std::to_string(n) + (n % 10 == 9 ? "\n" : "  ");
                     if (t.values[i] != gallery.data()) Log(L"gamepatch: icon gallery in the main menu's hint line");
                     t.values[i] = gallery.data();
+                    continue;
+                }
+                if (GetConfig().iconGallery && (strcmp(key, "lobby_normal") == 0 || strcmp(key, "lobby_team") == 0 || strcmp(key, "lobby_locked_out") == 0))
+                {
+                    static std::string lobbyGallery;
+                    if (lobbyGallery.empty())
+                        for (int n = 19; n <= 36; ++n) lobbyGallery += "\a" + std::to_string(n) + "#" + std::to_string(n) + " ";
+                    if (t.values[i] != lobbyGallery.data()) Log(L"gamepatch: icon gallery (19-36) in the lobby's hint line '%S'", key);
+                    t.values[i] = lobbyGallery.data();
                     continue;
                 }
                 for (auto& r : kRenames)
@@ -847,21 +857,131 @@ namespace pdnet::gamepatches
         SessionCommandFn g_playerName = nullptr;
         std::string g_talkMark;
 
+        // The lobby's player rows also draw a status lamp per slot with menu command 95 (0x1402077a0: sprite from a
+        // loaded texture slot; args sheet, sprite, x, y, colour, 8 bytes each): sprite 34 or 35 of MNET (texture slot 3,
+        // loaded by livelobbyres; 84 sprites) right after session command 26 for that row's slot.
+        //   voice_talk_icon=N: a talking player's row also blinks MNET sprite N (the original game's megaphone) next to
+        //   the lamp; icon_gallery=on: this PC's own lamp steps through MNET sprites 0-83 (1.5 s each) and its name
+        //   shows the number, to find a sprite.
+        using MenuCommandFn = int64_t (*)(int64_t* args);
+        MenuCommandFn g_drawSprite = nullptr;
+        SessionCommandFn g_slotStatus = nullptr;
+        std::atomic<int> g_rowSlot{ -1 };
+        constexpr int kMnetSprites = 84;
+
+        int GallerySprite() { return static_cast<int>(GetTickCount64() / 1500 % kMnetSprites); }
+
+        // The megaphone goes right after the player's name. The row draws its lamp first (its y is kept for the
+        // megaphone), then the name with menu command 23 (0x140207840; args x, y, format, name, ...): format
+        // "\a20s\a105s\a190w%s" (Tag Team) or "\a12s\a98s\a190w%s\a370r%d" - the name starts 125 / 110 px right of x
+        // and is clipped at 190 px. Its width comes from the game's own text measure (FUN_140247550, as used for
+        // right-aligned text).
+        MenuCommandFn g_drawText = nullptr;
+        std::atomic<int64_t> g_lampY{ 0 };
+        using MeasureFn = int (*)(const char* text, uint32_t font, int mode);
+
+        int NameIndent(const char* format)
+        {
+            char f[64];
+            if (!CopyString(format, f, sizeof(f)) || !strstr(f, "190w%s")) return -1;
+            if (strstr(f, "20s\a105s")) return 125;
+            if (strstr(f, "12s\a98s")) return 110;
+            return -1;
+        }
+
+        int64_t HookedDrawText(int64_t* args)
+        {
+            int64_t result = g_drawText(args);
+            int icon = GetConfig().voiceTalkIcon;
+            if (!args || icon < 0 || icon >= kMnetSprites || !g_drawSprite || CurrentMenu(MenuManager()) != kLobbyMenu) return result;
+            int indent = NameIndent(reinterpret_cast<const char*>(args[2]));
+            int slot = g_rowSlot;
+            if (indent < 0 || slot < 0 || slot >= 4) return result;
+            char name[64];
+            if (!CopyString(reinterpret_cast<const char*>(args[3]), name, sizeof(name)) || !name[0]) return result;
+            bool talking = lobbies::IsTalking(name);
+            if (!GetConfig().voiceDebug && !(talking && (GetTickCount64() / 300) % 2 == 0)) return result; // voice_debug: always, to see where it lands
+            int width = (std::min)(reinterpret_cast<MeasureFn>(At(0x140247550))(name, 0, 0), 190);
+            int64_t megaphone[5] = { 3, icon, args[0] + indent + width + GetConfig().voiceTalkIconX, g_lampY, static_cast<int64_t>(0xffffffff) };
+            g_drawSprite(megaphone);
+            return result;
+        }
+
+        int64_t HookedSlotStatus(int32_t* args)
+        {
+            if (args) g_rowSlot = args[0];
+            return g_slotStatus(args);
+        }
+
+        int64_t HookedDrawSprite(int64_t* args)
+        {
+            if (!args || args[0] != 3 || (args[1] != 34 && args[1] != 35) || CurrentMenu(MenuManager()) != kLobbyMenu) return g_drawSprite(args);
+            int slot = g_rowSlot;
+            int mine = *reinterpret_cast<int32_t*>(At(0x140527bc4));
+            if (GetConfig().iconGallery && slot == mine)
+            {
+                int64_t gallery[5] = { 3, GallerySprite(), args[2], args[3], static_cast<int64_t>(0xffffffff) };
+                return g_drawSprite(gallery);
+            }
+            g_lampY = args[3]; // the megaphone is drawn at this height, after the name (HookedDrawText)
+            if (GetConfig().voiceDebug && slot >= 0 && slot < 4)
+            {
+                static uint64_t next[4] = {};
+                if (GetTickCount64() >= next[slot])
+                {
+                    char name[64];
+                    bool named = CopyString(reinterpret_cast<const char*>(At(0x140527ac0) + slot * 64), name, sizeof(name)) && name[0];
+                    Log(L"voice-debug: lobby row slot %d '%S' talking %d, lamp at %lld,%lld", slot, named ? name : "", named && lobbies::IsTalking(name) ? 1 : 0, args[2], args[3]);
+                    next[slot] = GetTickCount64() + 3000;
+                }
+            }
+            return g_drawSprite(args);
+        }
+
         int64_t HookedPlayerName(int32_t* args)
         {
             int64_t result = g_playerName(args);
             int slot = args ? args[0] : -1;
             if (!result || slot < 0 || slot >= 8 || CurrentMenu(MenuManager()) != kLobbyMenu) return result;
-            if ((GetTickCount64() / 300) % 2) return result; // blink: the mark shows 300 ms, hides 300 ms
             static char named[8][160];
+            if (GetConfig().iconGallery && slot == *reinterpret_cast<int32_t*>(At(0x140527bc4)))
+            {
+                if (!CopyString(reinterpret_cast<const char*>(result), named[slot], 64)) return result;
+                strcat_s(named[slot], (" [" + std::to_string(GallerySprite()) + "]").c_str());
+                return reinterpret_cast<int64_t>(named[slot]);
+            }
+            if (GetConfig().voiceTalkIcon >= 0) return result; // the megaphone sprite shows talking instead of a text mark
+            if ((GetTickCount64() / 300) % 2) return result; // blink: the mark shows 300 ms, hides 300 ms
             if (!CopyString(reinterpret_cast<const char*>(result), named[slot], 64) || !named[slot][0] || !lobbies::IsTalking(named[slot])) return result;
             strcat_s(named[slot], " ");
             strcat_s(named[slot], g_talkMark.c_str());
             return reinterpret_cast<int64_t>(named[slot]);
         }
 
+        template <typename Fn>
+        bool WrapCommand(uint64_t tableEntry, uint64_t expected, Fn hook, Fn& original, const wchar_t* name)
+        {
+            auto entry = reinterpret_cast<Fn*>(At(tableEntry));
+            DWORD old = 0;
+            if (*entry != reinterpret_cast<Fn>(At(expected)))
+            {
+                Log(L"gamepatch: %s skipped - the game code is not what this pdnet expects", name);
+                return false;
+            }
+            if (!VirtualProtect(entry, 8, PAGE_READWRITE, &old)) return false;
+            original = *entry;
+            *entry = hook;
+            VirtualProtect(entry, 8, old, &old);
+            return true;
+        }
+
         void LobbyTalkIndicator()
         {
+            if (WrapCommand<MenuCommandFn>(0x1403eefe0 + 95 * 8, 0x1402077a0, &HookedDrawSprite, g_drawSprite, L"lobby sprite hook") &&
+                WrapCommand<SessionCommandFn>(0x1403f1150 + 26 * 8, 0x140213a30, &HookedSlotStatus, g_slotStatus, L"lobby row hook") &&
+                WrapCommand<MenuCommandFn>(0x1403eefe0 + 23 * 8, 0x140207840, &HookedDrawText, g_drawText, L"lobby name hook"))
+                Log(L"gamepatch: lobby talking icon %s%s", GetConfig().voiceTalkIcon >= 0 ? (L"MNET sprite " + std::to_wstring(GetConfig().voiceTalkIcon)).c_str() : L"off (text mark)",
+                    GetConfig().iconGallery ? L"; sprite gallery on this PC's lamp" : L"");
             const std::string& mark = GetConfig().voiceTalkMark;
             g_talkMark = mark.size() > 1 && mark[0] == '#' && isdigit(static_cast<unsigned char>(mark[1])) ? "\a" + mark.substr(1) + "#" : mark;
             auto entry = reinterpret_cast<SessionCommandFn*>(At(0x1403f1150) + 23 * 8);
@@ -918,7 +1038,7 @@ namespace pdnet::gamepatches
             }
             if (GetConfig().nametagDebug) NametagDebug();
             if (GetConfig().lobbyArsenalEditor) LobbyArsenalEditor();
-            if (GetConfig().voiceChat) LobbyTalkIndicator();
+            if (GetConfig().voiceChat || GetConfig().iconGallery) LobbyTalkIndicator();
             if (GetConfig().lobbyGamertagOption || GetConfig().voiceChat) LobbyScriptPatches(GetConfig().lobbyGamertagOption, GetConfig().voiceChat);
         });
     }
