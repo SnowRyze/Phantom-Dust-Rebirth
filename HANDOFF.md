@@ -376,6 +376,8 @@ Kits are `D:\PhantomDust-pdnet Experimental <N>.zip` (make-testkit.ps1 numbers t
 build and settings). A kit becomes `Stable <M>` only when the owner says so: `make-testkit.ps1 -Promote <N>`.
 Per-kit settings: `-Set voice_chat=off,p2p_debug=on`; `-Notes "..."` for kit-version.txt.
 Stable 1 = build-hook2 (AFCEAD9F) with voice_chat=off, lobby_gamertag_option=off (a join worked).
+Stable 2 = build-icons7 (F2117D66, was Experimental 7): megaphone mic indicator, nametag colours, join retry,
+lobbytool left out of sessions, Setup name prompt fix (promoted 2026-10-22). kit-counter.txt keeps the last Experimental number.
 Experimental 1 = build-resend1 (70A91FE2): join requests re-sent every 2 s until answered (an intermittent "hung on
 joining": the single request sent while EOS set up the P2P link was lost); voice + Gamertag on, p2p_debug=on.
 

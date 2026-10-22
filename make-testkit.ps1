@@ -67,7 +67,10 @@ $kitSource = if ($launcherKit) { "$root\testkit-store" } else { "$root\testkit-s
 $dll = "$root\pdnet\$Build\Microsoft.Xbox.Services.dll"
 if (-not (Test-Path $dll)) { throw "No DLL at $dll. Build it first: pdnet\build.cmd $Build" }
 $md5 = (Get-FileHash $dll -Algorithm MD5).Hash
-$name = if ($Stage -eq 'Kit') { "PhantomDust-pdnet Experimental $((LastNumber 'Experimental') + 1)" }
+# Experimental numbers never repeat, even after one was promoted to Stable: the last one used is kept in kit-counter.txt.
+$counterFile = "$root\kit-counter.txt"
+$experimental = [Math]::Max((LastNumber 'Experimental'), $(if (Test-Path $counterFile) { [int](Get-Content $counterFile -Raw).Trim() } else { 0 })) + 1
+$name = if ($Stage -eq 'Kit') { "PhantomDust-pdnet Experimental $experimental" }
         else { "PhantomDust-pdnet-$(if ($Stage -eq 'Store') { 'StageC-Store-TestKit' } else { "Stage$Stage-TestKit" })-$($md5.Substring(0, 8))" + $(if ($EosIni) { '-with-eos' } else { '' }) }
 $out = "D:\$name"
 $zip = "D:\$name.zip"
@@ -122,6 +125,7 @@ if ($Stage -eq 'Kit') {
 
 if (Test-Path $zip) { Remove-Item $zip -Force }
 Compress-Archive -Path "$out\*" -DestinationPath $zip
+if ($Stage -eq 'Kit') { Set-Content $counterFile $experimental }
 # Only the zip is for handing out: an unzipped copy here gets used by mistake (Setup.bat run from it points the game
 # at a folder this script deletes and rebuilds).
 Remove-Item $out -Recurse -Force
