@@ -9,6 +9,7 @@
 #include "Multiplayer.MultiplayerSearchHandleDetails.h"
 #include <algorithm>
 #include "../repeatable.h"
+#include "../../src/gamepatches.h"
 
 
 namespace winrt::Microsoft::Xbox::Services::Multiplayer::implementation
@@ -221,9 +222,31 @@ namespace winrt::Microsoft::Xbox::Services::Multiplayer::implementation
         co_await winrt::resume_background();
         auto all = ::pdnet::mpsd::SessionStore::Instance().SearchHandles(std::wstring{ serviceConfigurationId }, std::wstring{ sessionTemplateName });
         std::wstring filter{ searchFilter };
+        // Quick Join (the menu's former Quick Match, the only search asking for "numbers/gamerule eq 2"): any open
+        // lobby, of any game type and rule, as long as this player can play its rule (a usable arsenal, or Quick, which
+        // needs none - so without one only Quick lobbies are found). The game joins the first result.
+        uint32_t joinable = 0;
+        for (const wchar_t* clause : { L" and numbers/gamerule eq 2", L"numbers/gamerule eq 2 and " })
+            if (size_t at = filter.find(clause); at != std::wstring::npos)
+            {
+                filter.erase(at, wcslen(clause));
+                joinable = ::pdnet::gamepatches::JoinableRules();
+                break;
+            }
         std::vector<::pdnet::mpsd::SessionPtr> matched;
         for (auto& doc : all)
-            if (filter.empty() || ::pdnet::mpsd::MatchesFilter(*doc->search, filter)) matched.push_back(doc);
+        {
+            if (!filter.empty() && !::pdnet::mpsd::MatchesFilter(*doc->search, filter)) continue;
+            if (joinable)
+            {
+                int rule = 0;
+                for (auto& [k, v] : doc->search->numbers)
+                    if (_wcsicmp(k.c_str(), L"gamerule") == 0) rule = static_cast<int>(v);
+                if (rule < 0 || rule > 11 || !(joinable & (1u << rule))) continue;
+            }
+            matched.push_back(doc);
+        }
+        if (joinable) ::pdnet::Log(L"xsapi-pdnet: Quick Join - any game type; rules this player can play: mask 0x%03X (Quick is bit 2)", joinable);
 
         std::wstring order{ orderBy };
         for (auto& c : order) c = static_cast<wchar_t>(towlower(c));

@@ -20,6 +20,11 @@ namespace pdnet::gamepatches
     // With voice_chat=on it switches only this PC's microphone in the EOS voice room.
     bool GameMicOn();
 
+    // Quick Join: bit N set = this player could play a lobby with game rule N (0-11), i.e. the rule needs no arsenal
+    // (Quick) or one of the player's multiplayer arsenals is legal for it - the same test the lobby makes before it
+    // sends a player out with "no arsenals for this session". All bits set if the save can't be read.
+    uint32_t JoinableRules();
+
     // Tag Team voice channels: true while a Tag Team match is being played (not in its lobby). Then `teamOf` maps
     // each player's name (as shown in the lobby) to their team, and `myTeam` is this PC's team.
     bool TagTeamMatch(std::map<std::string, int>& teamOf, int& myTeam);

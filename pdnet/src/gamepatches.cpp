@@ -624,6 +624,8 @@ namespace pdnet::gamepatches
             { "help_main", "HELP & SUPPORT", "IMPORT XBOX SAVE" },
             { "help", "Help & Support", "Import Xbox Save" },
             { "help_hint", "Go to the Phantom Dust page on Xbox.com.", "Copy your Xbox Live save (progress, arsenals, play time) into this game. Restart the game afterwards." },
+            // Quick Join finds nothing: no lobby this player can play (QuickJoinLabels).
+            { "quick_match_hint", "No Quick Matches found", "No game sessions you can join right now" },
         };
 
         void RenameStrings()
@@ -903,6 +905,61 @@ namespace pdnet::gamepatches
             }
         }
 
+        // Quick Join: the multiplayer menu (livemain, menu 36) calls its quick search "Quick Match" and describes it
+        // as Quick-rule only; it now joins any lobby the player can play (MultiplayerService search, pdnet). Its two
+        // texts in the loaded script's string pool are overwritten in place (the new ones are shorter).
+        constexpr int kLiveMainMenu = 36;
+        constexpr Relabel kLiveMainTexts[] = {
+            { "Quick Match", "Quick Join" },
+            { "Search for a game session with the Quick game rule.", "Join the first open game session you can play in." },
+        };
+
+        int RelabelScript(uint8_t* script, const Relabel* texts, size_t count)
+        {
+            __try
+            {
+                auto code = reinterpret_cast<uint32_t*>(script);
+                uint32_t labelsAt = code[1], strings = code[3];
+                if (code[0] != 0x20) labelsAt += 4, strings += 12; // loaded: offsets relative to their own field
+                if (labelsAt <= 0x20 || labelsAt > 0x40000 || strings < labelsAt || strings > 0x80000) return -1;
+                const char* pool = reinterpret_cast<const char*>(script + strings);
+                int done = 0;
+                for (uint32_t* w = code + 0x20 / 4; w < code + labelsAt / 4; ++w)
+                {
+                    if ((*w & 0xffff) != 0x0011) continue; // push string
+                    char* text = const_cast<char*>(pool + (*w >> 16));
+                    for (size_t i = 0; i < count; ++i)
+                    {
+                        if (strcmp(text, texts[i].find) == 0) memcpy(text, texts[i].replace, strlen(texts[i].replace) + 1);
+                        else if (strcmp(text, texts[i].replace) != 0) continue;
+                        ++done;
+                    }
+                }
+                return done;
+            }
+            __except (EXCEPTION_EXECUTE_HANDLER)
+            {
+                return -1;
+            }
+        }
+
+        void QuickJoinLabels()
+        {
+            std::thread([]
+            {
+                auto entry = reinterpret_cast<uint8_t* volatile*>(At(0x1403fa3d0) + kLiveMainMenu * 0x18 + 0x10);
+                uint8_t* done = nullptr;
+                for (;;)
+                {
+                    Sleep(50);
+                    uint8_t* script = *entry;
+                    if (script == done) continue;
+                    done = script;
+                    if (script) Log(L"gamepatch: multiplayer menu: Quick Match renamed Quick Join (%d of 2 texts)", RelabelScript(script, kLiveMainTexts, std::size(kLiveMainTexts)));
+                }
+            }).detach();
+        }
+
         void LobbyScriptPatches(bool gamertag, bool micLabel, bool arsenal)
         {
             // Each load is patched once; the entry goes back to null when the lobby closes (QuitMenu frees the
@@ -1125,6 +1182,7 @@ namespace pdnet::gamepatches
             if (GetConfig().lobbyArsenalEditor) LobbyArsenalEditor();
             if (GetConfig().voiceChat || GetConfig().iconGallery) LobbyTalkIndicator();
             bool micLabel = GetConfig().voiceChat && !GetConfig().voiceClassic; // classic: the option keeps its "Voice Chat" name
+            QuickJoinLabels();
             bool arsenal = GetConfig().lobbyArsenalEditor; // the Arsenal Lab button for clients too
             if (GetConfig().lobbyGamertagOption || micLabel || arsenal) LobbyScriptPatches(GetConfig().lobbyGamertagOption, micLabel, arsenal);
         });
@@ -1148,6 +1206,37 @@ namespace pdnet::gamepatches
         for (int s = 0; s < 4; ++s)
             if (v.lobbyName[s][0]) teamOf[v.lobbyName[s]] = v.team[s];
         return true;
+    }
+
+    // As FUN_1401831f0 (session command 144) works it out, read-only: rule N needs the arsenal flags in the rule
+    // table 0x1402dbc78[N] (0 = no arsenal needed: Quick); the multiplayer arsenals are up to 16 entries of 100 bytes
+    // at *(save + 0x10a*0x38) (save = DAT_1404bec10), an entry with byte +4 == 0 ends the list, flags word at +0x52.
+    uint32_t JoinableRules()
+    {
+        __try
+        {
+            auto table = reinterpret_cast<const int32_t*>(At(0x1402dbc78));
+            uint8_t* save = *reinterpret_cast<uint8_t**>(At(0x1404bec10));
+            uint8_t* arsenals = save ? *reinterpret_cast<uint8_t**>(save + 0x10a * 0x38) : nullptr;
+            uint32_t mask = 0;
+            for (int rule = 0; rule < 12; ++rule)
+            {
+                uint32_t need = static_cast<uint32_t>(table[rule]);
+                bool ok = need == 0;
+                for (int i = 0; !ok && arsenals && i < 16; ++i)
+                {
+                    uint8_t* arsenal = arsenals + i * 100;
+                    if (!arsenal[4]) break;
+                    ok = (*reinterpret_cast<uint16_t*>(arsenal + 0x52) & need) != 0;
+                }
+                if (ok) mask |= 1u << rule;
+            }
+            return mask;
+        }
+        __except (EXCEPTION_EXECUTE_HANDLER)
+        {
+            return 0xfff;
+        }
     }
 
     bool GameMicOn()

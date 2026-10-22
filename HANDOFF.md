@@ -383,7 +383,7 @@ pdnet.ini text (promoted 2026-10-22). Built from commit 443e445. To go back to t
 Experimental 1 = build-resend1 (70A91FE2): join requests re-sent every 2 s until answered (an intermittent "hung on
 joining": the single request sent while EOS set up the P2P link was lost); voice + Gamertag on, p2p_debug=on.
 
-## Waiting for testers (as of 2026-10-22; newest kit Experimental 14 has all of these)
+## Waiting for testers (as of 2026-10-22; newest kit Experimental 15 has all of these)
 1. **Nametag of a player who left a match** (Experimental 13): 3+ players, one leaves mid-match (disconnect / quit to
    menu / close the game); their nametag should vanish. Log: "gamepatch: X left the match - nametag hidden". Risk: if
    the game's peer list (0x140595ea8) doesn't list every player in a match, present players would be hidden too.
@@ -396,6 +396,10 @@ joining": the single request sent while EOS set up the P2P link was lost); voice
    lobby's hint line and Y opens the Arsenal editor, backing out returns to the lobby. Log: "gamepatch: lobby Arsenal
    Lab button for every player (1 of 1 check)" when a lobby opens (livelobby albmain_ty's host check: its jz +3 ->
    jz +0), "text 'lobby_client' now has the Arsenal Lab button" (seen on this PC already).
+6. **Quick Join** (Experimental 15; was Quick Match): with a tester hosting a NON-Quick lobby (e.g. Standard), Quick
+   Join should join it. A player with no usable multiplayer arsenal should only find Quick lobbies. Log: "Quick Join -
+   any game type; rules this player can play: mask 0x..." (bit N = rule N; this PC: 0xDFF, no Heavy Only arsenal).
+   The rename and the search change were checked on this PC with no lobbies open.
 
 ## Feature backlog (could be added / revisited)
 Parked ideas and half-finished features, newest first. Each has its notes earlier in this file.
