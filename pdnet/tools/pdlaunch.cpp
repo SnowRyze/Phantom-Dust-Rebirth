@@ -327,8 +327,32 @@ int wmain(int argc, wchar_t** argv)
     }
     if (!pid || !tid)
     {
-        wprintf(L"pdlaunch is started by Windows when Phantom Dust starts (after store-setup.ps1). Run the game normally.\n");
+        // pdlaunch has no console window (it runs in the background while the game is open), so this goes in a box.
+        MessageBoxW(nullptr, L"pdlaunch is started by Windows when Phantom Dust starts (after Setup.bat). Start the game the normal way.", L"pdlaunch", MB_OK | MB_ICONINFORMATION);
         return 2;
+    }
+
+    // Windows starts pdlaunch for every process of the game's package, including its RuntimeBroker.exe helper, which
+    // outlives the game: only PDUWP.exe gets pdnet; anything else just continues, and pdlaunch exits at once.
+    {
+        wchar_t image[MAX_PATH] = {};
+        DWORD size = MAX_PATH;
+        HANDLE target = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, pid);
+        bool queried = target && QueryFullProcessImageNameW(target, 0, image, &size);
+        if (target) CloseHandle(target);
+        const wchar_t* file = wcsrchr(image, L'\\');
+        file = file ? file + 1 : image;
+        if (queried && _wcsicmp(file, L"PDUWP.exe") != 0)
+        {
+            HANDLE thread = OpenThread(THREAD_SUSPEND_RESUME, FALSE, tid);
+            if (thread)
+            {
+                ResumeThread(thread);
+                CloseHandle(thread);
+            }
+            Log(L"%s (pid %lu) is not the game - left alone", file, pid);
+            return 0;
+        }
     }
 
     Log(L"game started (pid %lu, main thread %lu)", pid, tid);
