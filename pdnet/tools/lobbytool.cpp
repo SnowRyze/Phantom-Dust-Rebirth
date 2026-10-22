@@ -444,6 +444,9 @@ int wmain(int argc, wchar_t** argv)
     int64_t ticks = (static_cast<int64_t>(now.dwHighDateTime) << 32) | now.dwLowDateTime;
     lobbies::Attributes me = {
         { "PD_XUID", "2533274790395903" }, { "PD_NAME", "lobbytool" }, { "PD_STATUS", "3" /* Active */ }, { "PD_INIT", "0" }, { "PD_JOIN", std::to_string(ticks) },
+        // Marks a test client: games from 2026-10-22 on leave it out of the session (players joining the lobby used to
+        // hang trying to reach the address below). It still joins the lobby's voice room.
+        { "PD_TOOL", "1" },
         // A well-formed pdnet snapshot (game 43213, control 43212) at 192.0.2.1, a TEST-NET address nobody answers on,
         // so the game can parse it and its connection attempt simply times out.
         { "PD_ADDR", "UEROMQEAqM2ozAAAAAAAAAAAAAD//8AAAgEAAAAB2x7nAQ==" },

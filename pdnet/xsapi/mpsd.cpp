@@ -233,6 +233,7 @@ namespace pdnet::mpsd
                 MemberDoc m;
                 m.xuid = U16(Attr(ma, "PD_XUID"));
                 if (m.xuid.empty()) continue; // joined, attributes not set yet
+                if (Attr(ma, "PD_TOOL") == "1") continue; // lobbytool (a test client, no game): never a session member, or joining players wait on it
                 m.gamertag = U16(Attr(ma, "PD_NAME"));
                 m.deviceAddressBase64 = U16(Attr(ma, "PD_ADDR"));
                 m.customConstantsJson = U16(lobbies::Joined(ma, "PD_MCONST"));
