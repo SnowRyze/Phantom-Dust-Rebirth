@@ -8,8 +8,11 @@ from PIL import Image, ImageDraw, ImageFont, ImageFilter, ImageChops
 
 W, H, GW, GH = 560, 32, 576, 48
 random.seed(11)
-font = ImageFont.truetype(r'C:\Windows\Fonts\georgiab.ttf', 28)
-text, track = "Rebirth", 4
+# Grenze Gotisch (SIL OFL 1.1, github.com/google/fonts ofl/grenzegotisch): GRENZE env var or next to this script.
+import os
+font = ImageFont.truetype(os.environ.get('GRENZE', os.path.join(os.path.dirname(__file__), 'GrenzeGotisch.ttf')), 36)
+font.set_variation_by_name('Bold')
+text, track = "Rebirth", 6
 widths = [font.getlength(c) for c in text]
 m = Image.new('L', (int(sum(widths) + track * len(text)) + 8, 40), 0)
 draw, x = ImageDraw.Draw(m), 4
@@ -48,7 +51,7 @@ def array(name, image):
     return 'const uint8_t %s[%d] = {\n%s\n};\n' % (name, len(data), '\n'.join(rows))
 
 with open(sys.argv[1], 'w') as out:
-    out.write('// "Rebirth" under the title screen logo (gamepatches.cpp), made by tools\\subtitle.py (Georgia Bold).\n')
+    out.write('// "Rebirth" under the title screen logo (gamepatches.cpp), made by tools\\subtitle.py (Grenze Gotisch Bold).\n')
     out.write('// kSubW x kSubH masks for the logo: letters, dark outline, pits, bevel highlight and shadow;\n')
     out.write('// kGlowW x kGlowH for the glow texture, from its row 96.\n#pragma once\n#include <cstdint>\n')
     out.write('constexpr int kSubW = %d, kSubH = %d, kGlowW = %d, kGlowH = %d;\n' % (W, H, GW, GH))
