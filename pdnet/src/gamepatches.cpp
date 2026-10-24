@@ -1845,8 +1845,8 @@ namespace pdnet::gamepatches
             g_drawWindow(popup);
             *reinterpret_cast<int64_t*>(manager + 0x10408) = reinterpret_cast<int64_t>(WindowAt(manager, kPopupWindow));
             auto text = [](int x, int y, const char* s) { int64_t a[8] = { x, y, reinterpret_cast<int64_t>(s) }; reinterpret_cast<MenuCommandFn>(At(0x140207870))(a); };
-            text(kPopupX, kPopupY + 34, "\a340cSave all settings?");
-            text(kPopupX, kPopupY + 64, "\a340c\a2#Save      \a3#Cancel");
+            text(kPopupX, kPopupY + 18, "\a340cSave all settings?");
+            text(kPopupX, kPopupY + 44, "\a340c\a2#Save      \a3#Cancel");
             *reinterpret_cast<int64_t*>(manager + 0x10408) = 0;
             return result;
         }
@@ -1870,7 +1870,7 @@ namespace pdnet::gamepatches
                 if (a && fresh) // also while a name is being typed: saving counts it as entered
                 {
                     last = GetTickCount64();
-                    int64_t sound[2] = { 37, 0 };
+                    int64_t sound[2] = { 0, 0 };
                     reinterpret_cast<InputFn>(At(0x140261750))(sound);
                     SetConfirming(true);
                 }
@@ -1879,7 +1879,7 @@ namespace pdnet::gamepatches
             if ((a || b) && fresh)
             {
                 last = GetTickCount64();
-                int64_t sound[2] = { 37, 0 };
+                int64_t sound[2] = { a ? 0 : 1, 0 }; // the menu's select / back sounds
                 reinterpret_cast<InputFn>(At(0x140261750))(sound);
                 if (a) SaveAllSettings();
                 SetConfirming(false);
