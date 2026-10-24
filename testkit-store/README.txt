@@ -52,18 +52,20 @@ Settings (pdnet.ini in this folder)
 Edit with Notepad, then restart the game.
   display_name=          your name (Setup.bat sets it)
   nametags_on_bodies=    on/off: defeated players keep their nametag. In a lobby the HOST's setting applies.
+  nametag_colors=        on/off: coloured nametags (off: all white)
   dead_nametag_color=    colour of a defeated player's nametag (RRGGBB), FFE600 = yellow
                          (also shown on a player lying in Play Dead, until they move or are hit)
-  lobby_arsenal_editor=  on/off: the lobby's Arsenal Lab button (was Invite) opens the Arsenal editor
-  shop_max_out=          on/off: the shop's Online Store item becomes Max Credits & Skills
-                         (up to 5,000,000 credits, 80 of every skill incl. DLC, one 2-School Arsenal Case)
-  rated_lobbies=         on/off: the lobby's Rating option is Unrated / Rated (only Rated matches change ratings)
-  scoreboard=            on/off: global scoreboards (rating, Battle Royale / Tag Team / One-on-One wins)
+  ally_nametag_color=    teammates' nametags (Tag Team), RRGGBB
+  enemy_nametag_color=   opponents' nametags, RRGGBB
   voice_chat=            on/off: voice chat in lobbies (through Epic, no account needed)
   voice_mode=            mic: the in-game option is called Mic and turns only your microphone on/off
                          classic: the original Voice Chat option - Off means you neither talk nor hear
   voice_listen=          on/off: hear other players (mic mode only)
+  splash_volume=         % of your volume during the start-up logos; splash_seconds= how long
   discord_*              lobby announcements in Discord when you host
+Always on: the lobby's Arsenal Lab button, Gamertag when alone, Max Credits & Skills in the shop
+(up to 5,000,000 credits, 80 of every skill incl. DLC, one 2-School Arsenal Case), the global scoreboards,
+and Rated / Unrated lobbies (pick it with the Rating option when you create a game).
 
 If something goes wrong
 -----------------------

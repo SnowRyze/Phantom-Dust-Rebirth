@@ -4,10 +4,13 @@
 
 namespace pdnet
 {
+    // Fixed (not read from pdnet.ini, 2026-10-24): networking (EOS P2P, no Xbox Live, ports, relay), test_peer, eos_test,
+    // and the features lobby_arsenal_editor, lobby_gamertag_option, shop_max_out, rated_lobbies (each lobby picks Rated /
+    // Unrated in the game), scoreboard, the megaphone voice icon and remember_volume (pdlaunch).
     struct Config
     {
         bool teredo = false;                // network_mode=teredo: leave Xbox networking (Teredo/SDA) to Windows
-        bool p2p = false;                   // network_mode=eos: match traffic through EOS P2P (NAT traversal + relays, see p2p.h)
+        bool p2p = true;                    // match traffic through EOS P2P (NAT traversal + relays, see p2p.h)
         std::wstring p2pRelay = L"allow";   // p2p_relay=allow|force|off: EOS relay use (force = always relay, for testing)
         std::wstring advertiseIp = L"auto"; // address peers use to reach this PC, or "auto" (primary IPv4)
         uint16_t gamePort = 43210;          // must match networkmanifest.xml (PeerSocketUDP)
@@ -38,8 +41,8 @@ namespace pdnet
         int nametagDebug = 0;               // nametag_debug=on (1): log the nametag-related fields of each player when they change; deep (2): also rare changes in player 1's game structures (debug, see gamepatches.cpp)
         int nameTrace = 0;                  // name_trace=draw|on (2): log game text draws of other players' names; memory (1): log reads of name copies (debug, see xsapi/nametrace.h)
         bool eosTest = false;               // eos_test=on: one-shot Epic Online Services feasibility check (see eostest.h)
-        bool eos = false;                   // eos=on: stay signed in to Epic Online Services (see eos.h)
-        bool xboxOff = false;               // xbox=off: pdnet answers every Xbox Live (XSAPI) class itself (see xsapi/)
+        bool eos = true;                    // stay signed in to Epic Online Services (see eos.h)
+        bool xboxOff = true;                // pdnet answers every Xbox Live (XSAPI) class itself (see xsapi/)
         std::wstring displayName = L"Player"; // display_name=: name shown to other players (max 32 characters)
         std::wstring discordWebhook;        // discord_webhook=<URL>: announce lobbies this PC hosts in a Discord channel (see discord.h)
         bool discordLobbyMessages = true;   // discord_lobby_messages=on|off: "opened" / "closed" messages

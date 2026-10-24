@@ -185,10 +185,10 @@ namespace
     // settings after the splash screen, so the logos play at full volume. While the game runs: once its audio
     // session appears, hold it at splash_volume% of the remembered level for splash_seconds, then the remembered
     // level; after that, remember every change the player makes (volume.txt next to pdlaunch.exe).
-    //   pdnet.ini: remember_volume=on|off, splash_volume=40 (percent), splash_seconds=12
+    //   pdnet.ini: splash_volume=40 (percent), splash_seconds=12 (the level is always remembered)
     void WatchVolume(DWORD pid)
     {
-        bool remember = _wcsicmp(Setting(L"remember_volume", L"on").c_str(), L"off") != 0;
+        const bool remember = true; // always on (no longer a pdnet.ini setting)
         float splash = std::clamp(static_cast<float>(_wtof(Setting(L"splash_volume", L"40").c_str())) / 100.0f, 0.0f, 1.0f);
         DWORD splashMs = static_cast<DWORD>(std::clamp(_wtoi(Setting(L"splash_seconds", L"12").c_str()), 0, 120)) * 1000;
         std::wstring file = g_dir + L"volume.txt";
