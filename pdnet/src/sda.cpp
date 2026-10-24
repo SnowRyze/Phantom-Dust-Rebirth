@@ -331,11 +331,16 @@ namespace pdnet
                 body.push_back(static_cast<uint8_t>(name.size()));
                 body.insert(body.end(), name.begin(), name.end());
 
+                // A join waits for the host: up to 12 s over EOS P2P (connections that work answer within a few seconds),
+                // then 3 s of direct UDP (the same LAN only); without EOS, 10 s of direct UDP.
                 net::Message reply;
+                // A join waits for the host: up to 12 s over EOS P2P (working connections answer within a few seconds),
+                // then 3 s of direct UDP (reaches the same LAN only); without EOS, 10 s of direct UDP.
+                bool triedP2P = false;
                 if (!remote.eosUser.empty() && p2p::Enabled())
                 {
                     Log(L"sda: connecting to %s over EOS P2P (template %s)", remote.Describe().c_str(), m_name.c_str());
-                    if (p2p::Request(remote.eosUser, net::MsgType::Connect, body, 20000, reply))
+                    if (p2p::Request(remote.eosUser, net::MsgType::Connect, body, 12000, reply))
                     {
                         bool created;
                         auto pair = GetOrAdd(remote, net::InterfaceIp(), created, remote.eosUser);
@@ -346,10 +351,11 @@ namespace pdnet
                         }
                     }
                     Log(L"sda: EOS P2P connect to %s failed; trying direct UDP", remote.Describe().c_str());
+                    triedP2P = true;
                 }
 
                 Log(L"sda: connecting to %s (template %s)", remote.Describe().c_str(), m_name.c_str());
-                if (!net::Request(remote, net::MsgType::Connect, body, 10000, 250, reply))
+                if (!net::Request(remote, net::MsgType::Connect, body, triedP2P ? 3000 : 10000, 250, reply))
                 {
                     Log(L"sda: connect to %s TIMED OUT - check the other PC is running pdnet and UDP %u/%u are reachable", remote.Describe().c_str(), remote.gamePort, remote.controlPort);
                     co_return Make<xl::XboxLiveEndpointPairCreationResult, CreationResult>(address, Status::TimedOut, false, nullptr);

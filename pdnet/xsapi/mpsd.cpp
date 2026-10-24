@@ -646,6 +646,18 @@ namespace pdnet::mpsd
             for (auto& [k, v] : mids) changes.set[k] = v;
         }
 
+        // Ghost lobbies: the game host (PD_HOST, its xuid) left, but other members stayed, so EOS made one of them
+        // the owner and the lobby still showed in searches although no game hosts it any more (joiners then wait for
+        // a host that never answers). Once the host is gone, the lobby stops being advertised; a new game host (the
+        // game's own host migration) publishes its search handle again.
+        std::string gameHost = Attr(a, "PD_HOST");
+        if (!gameHost.empty() && !present.count(U16(gameHost)) && !lobbies::SplitKeys(a, "PD_SEARCH").empty())
+        {
+            for (auto& k : lobbies::SplitKeys(a, "PD_SEARCH")) changes.remove.push_back(k);
+            changes.set.erase("PD_SEARCH");
+            Log(L"xsapi-pdnet: the game host left lobby %S - no longer listed in searches", lobbyId.c_str());
+        }
+
         bool changed = false;
         if (!changes.empty()) changed = lobbies::Update(lobbyId, changes, Changes{});
 
