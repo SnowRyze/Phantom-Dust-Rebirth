@@ -5,7 +5,8 @@
 #include "scores.h"
 #include "log.h"
 #include <fstream>
-#pragma comment(lib, "user32.lib") // GetAsyncKeyState (Settings: typing a name)
+#include <winrt/Windows.ApplicationModel.Core.h>
+#include <winrt/Windows.UI.Core.h>
 #include <intrin.h>
 #include <set>
 #include <tuple>
@@ -747,9 +748,12 @@ namespace pdnet::gamepatches
             }
         }
 
+        std::atomic<uint64_t> g_settingsOpenedAt{ 0 }; // when menu 68 (Settings) was last opened (HookedSettingFlag)
+
         int HookedPushMenu(int64_t manager, int menu, char force)
         {
             int current = CurrentMenu(manager);
+            if (menu == 68) g_settingsOpenedAt = GetTickCount64();
             RenameStrings(); // cheap; covers string tables loaded after start-up
             if (menu != current) Log(L"menu: open %d (from %d)", menu, current);
             if (g_editorFromLobby && current == kEditorMenu && menu != kEditorMenu && menu != kStockMenu)
@@ -1486,6 +1490,7 @@ namespace pdnet::gamepatches
         // "Offline" / "Voice: Off" lines show the selected setting's description (menu command 23; session command 104
         // tells which row the panel is for). Changes go to pdnet.ini (SaveSetting) and apply at once where they can.
         constexpr int kSettingsMenu = 68;
+        bool InSettings() { return CurrentMenu(MenuManager()) == kSettingsMenu; }
         struct Colour { const char* name; uint32_t rgb; };
         constexpr Colour kColours[] = { { "Yellow", 0xFFE600 }, { "Red", 0xFF5A5A }, { "Blue", 0x4FB4FF }, { "Green", 0x5AFF6E },
                                         { "Purple", 0xB46EFF }, { "Orange", 0xFFA03C }, { "Cyan", 0x3CF0FF }, { "Pink", 0xFF78C8 },
@@ -1582,8 +1587,8 @@ namespace pdnet::gamepatches
             return "";
         }
 
-        // Name typing: A on the Name row starts it; letters, digits, space, - and _ are added, Backspace removes,
-        // Enter (or A) keeps the name, Esc drops it. Polled from the keyboard while the Settings menu shows.
+        // Name typing: left / right on the Name row starts it; typed characters are added, Backspace removes, Enter
+        // keeps the name, Esc drops it (TypingThread). Leaving the Settings screen drops it too.
         void FinishTyping(bool keep)
         {
             std::wstring name;
@@ -1601,45 +1606,45 @@ namespace pdnet::gamepatches
             RefreshSettingRows();
         }
 
+        // Keys come from the game's own window (a UWP CoreWindow: GetAsyncKeyState sees nothing there). Its character and
+        // key-down events are subscribed once, on the window's thread; while a name is being typed they go to the name
+        // and are marked handled.
         void TypingThread()
         {
             static std::once_flag once;
             std::call_once(once, []
             {
-                std::thread([]
+                try
                 {
-                    bool down[256] = {};
-                    for (;;)
+                    using namespace winrt::Windows::UI::Core;
+                    auto window = winrt::Windows::ApplicationModel::Core::CoreApplication::MainView().CoreWindow();
+                    window.Dispatcher().RunAsync(CoreDispatcherPriority::Normal, [window]
                     {
-                        Sleep(15);
-                        if (!g_typingName) { memset(down, 0, sizeof(down)); continue; }
-                        if (CurrentMenu(MenuManager()) != kSettingsMenu) { FinishTyping(false); continue; }
-                        for (int vk = 8; vk < 256; ++vk)
+                        window.CharacterReceived([](CoreWindow const&, CharacterReceivedEventArgs const& e)
                         {
-                            bool now = (GetAsyncKeyState(vk) & 0x8000) != 0;
-                            bool pressed = now && !down[vk];
-                            down[vk] = now;
-                            if (!pressed) continue;
-                            bool shift = (GetAsyncKeyState(VK_SHIFT) & 0x8000) != 0;
-                            wchar_t ch = 0;
-                            if (vk >= 'A' && vk <= 'Z') ch = static_cast<wchar_t>(shift ? vk : vk + 32);
-                            else if (vk >= '0' && vk <= '9' && !shift) ch = static_cast<wchar_t>(vk);
-                            else if (vk == VK_SPACE) ch = L' ';
-                            else if (vk == VK_OEM_MINUS) ch = shift ? L'_' : L'-';
-                            if (vk == VK_RETURN) { FinishTyping(true); break; }
-                            if (vk == VK_ESCAPE) { FinishTyping(false); break; }
+                            if (!g_typingName) return;
+                            if (!InSettings()) { FinishTyping(false); return; } // left the Settings screen
+                            e.Handled(true);
+                            uint32_t ch = e.KeyCode();
+                            if (ch == 13) { FinishTyping(true); return; }
+                            if (ch == 27) { FinishTyping(false); return; }
                             {
                                 std::lock_guard guard(g_typedLock);
-                                if (vk == VK_BACK && !g_typedName.empty()) g_typedName.pop_back();
-                                else if (ch && g_typedName.size() < 32) g_typedName += ch;
+                                if (ch == 8) { if (!g_typedName.empty()) g_typedName.pop_back(); }
+                                else if (ch >= 32 && ch < 0xFFFF && g_typedName.size() < 32) g_typedName += static_cast<wchar_t>(ch);
                             }
                             RefreshSettingRows();
-                        }
-                    }
-                }).detach();
+                        });
+                        window.KeyDown([](CoreWindow const&, KeyEventArgs const& e) { if (g_typingName && InSettings()) e.Handled(true); });
+                        Log(L"gamepatch: settings: keyboard input for names ready");
+                    });
+                }
+                catch (...)
+                {
+                    Log(L"gamepatch: settings: no keyboard input for names (0x%08X)", winrt::to_hresult());
+                }
             });
         }
-
         void ChangeSetting(int row, int direction)
         {
             Config& c = EditableConfig();
@@ -1671,7 +1676,7 @@ namespace pdnet::gamepatches
             RefreshSettingRows();
         }
 
-        bool InSettings() { return CurrentMenu(MenuManager()) == kSettingsMenu; }
+
 
         // The Options screen's rows: Cross Play (1), Voice Chat (2), then pdnet's rows (3 on). Each row is one list
         // item "\a160w<label>\a1#\a230c<value>\a0#"; its draw callback (DRAW_OTHER) formats the item text, so pdnet's
@@ -1724,14 +1729,15 @@ namespace pdnet::gamepatches
         // The Options screen's Voice Chat row (and its hint) is replaced by pdnet's rows (and hints); Cross Play is
         // left out by PatchSettingsScript. Returns true when it added them instead of `added`.
         // g10 #3 (0x1400bde50, the game's settings flags): flag 3 means "Cross Play can be chosen" and is always 1 on
-        // PC. While the Settings screen's script is loaded (menu table entry 68; it is loaded before its setup runs) it
-        // reads 0, so Cross Play (row, hint, detail box) is left out from the first draw. Elsewhere it stays 1: the
-        // multiplayer menu shows its Settings item only when it is.
+        // PC. While the Settings screen opens (its setup runs inside the menu-open call, before it becomes the current
+        // menu: the first 0.5 s after HookedPushMenu saw it) and while it is on screen it reads 0, so Cross Play (row,
+        // hint, detail box) is left out. Elsewhere it stays 1: the multiplayer menu shows its Settings item only when it
+        // is, and errors out when it reads 0 there.
         NativeFn g_settingFlag = nullptr;
         int64_t HookedSettingFlag(int64_t* args)
         {
-            bool settingsLoaded = *reinterpret_cast<uint8_t* volatile*>(At(0x1403fa3d0) + kSettingsMenu * 0x18 + 0x10) != nullptr;
-            return args && args[0] == 3 && settingsLoaded ? 0 : g_settingFlag(args);
+            bool settings = InSettings() || GetTickCount64() - g_settingsOpenedAt < 500;
+            return args && args[0] == 3 && settings ? 0 : g_settingFlag(args);
         }
 
         bool SettingsItems(const char* added)
