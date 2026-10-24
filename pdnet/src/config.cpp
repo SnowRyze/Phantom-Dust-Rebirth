@@ -1,6 +1,7 @@
 #include "pch.h"
 #include "config.h"
 #include "log.h"
+#include <algorithm>
 #include <fstream>
 #include <mutex>
 #include <vector>
@@ -35,7 +36,10 @@ namespace pdnet
             return dir.substr(0, dir.find_last_of(L'\\') + 1) + L"pdnet.ini";
         }
 
-        std::wstring g_iniPath; // the pdnet.ini Load read (SaveSetting writes back to it)
+        std::wstring g_iniPath; // the pdnet.ini Load read
+
+        // Where the in-game Settings menu saves (the game, a UWP app, can write only its own data folders).
+        std::wstring SettingsPath() { return LocalStatePath() + L"\\pdnet\\settings.ini"; }
 
         Config Load()
         {
@@ -56,6 +60,8 @@ namespace pdnet
             }
             Log(L"config: reading %s", path.c_str());
             g_iniPath = path;
+            auto apply = [&](std::istream& in)
+            {
             std::string line;
             while (std::getline(in, line))
             {
@@ -82,11 +88,22 @@ namespace pdnet
                 else if (key == "discord_webhook") c.discordWebhook = std::wstring(value.begin(), value.end());
                 else if (key == "discord_lobby_messages") c.discordLobbyMessages = _stricmp(value.c_str(), "off") != 0;
                 else if (key == "discord_player_messages") c.discordPlayerMessages = _stricmp(value.c_str(), "off") != 0;
+                else if (key == "splash_volume" && !value.empty()) c.splashVolume = (std::clamp)(std::stoi(value), 0, 100);
+                else if (key == "splash_seconds" && !value.empty()) c.splashSeconds = (std::clamp)(std::stoi(value), 0, 60);
                 else if (key == "display_name" && !value.empty())
                 {
                     std::wstring name{ winrt::to_hstring(value) };
                     c.displayName = name.substr(0, 32);
                 }
+            }
+            };
+            apply(in);
+            // The in-game Settings menu saves to LocalState\pdnet\settings.ini (the game can't write the kit folder):
+            // its values override pdnet.ini.
+            if (std::ifstream saved(SettingsPath()); saved)
+            {
+                Log(L"config: reading %s (in-game Settings)", SettingsPath().c_str());
+                apply(saved);
             }
             if (c.testPeer) Log(L"config: test_peer=on (fake second player starts when a lobby is created)");
             if (c.nameTrace) Log(L"config: name_trace=%s (debug only)", c.nameTrace == 2 ? L"draw (logs game text draws of other players' names)" : L"memory (logs reads of copies of other players' names)");
@@ -113,14 +130,15 @@ namespace pdnet
 
     const Config& GetConfig() { return EditableConfig(); }
 
-    void SaveSetting(const std::string& key, const std::string& value)
+    void SaveSettings(const std::vector<std::pair<std::string, std::string>>& values)
     {
         static std::mutex lock;
         std::lock_guard guard(lock);
-        if (g_iniPath.empty()) EditableConfig(); // loads it
+        std::wstring path = SettingsPath();
+        CreateDirectoryW((LocalStatePath() + L"\\pdnet").c_str(), nullptr);
         std::vector<std::string> lines;
         {
-            std::ifstream in(g_iniPath, std::ios::binary);
+            std::ifstream in(path, std::ios::binary);
             std::string line;
             while (std::getline(in, line))
             {
@@ -128,17 +146,25 @@ namespace pdnet
                 lines.push_back(line);
             }
         }
-        bool found = false;
-        for (auto& line : lines)
-            if (Trim(line).rfind(key + "=", 0) == 0)
-            {
-                line = key + "=" + value;
-                found = true;
-                break;
-            }
-        if (!found) lines.push_back(key + "=" + value);
-        std::ofstream out(g_iniPath, std::ios::binary | std::ios::trunc);
+        if (lines.empty()) lines.push_back("; pdnet settings saved from the game's Settings menu (they override pdnet.ini)");
+        for (auto& [key, value] : values)
+        {
+            bool found = false;
+            for (auto& line : lines)
+                if (Trim(line).rfind(key + "=", 0) == 0)
+                {
+                    line = key + "=" + value;
+                    found = true;
+                    break;
+                }
+            if (!found) lines.push_back(key + "=" + value);
+        }
+        std::ofstream out(path, std::ios::binary | std::ios::trunc);
         for (auto& line : lines) out << line << "\r\n";
-        Log(L"config: %S=%S saved (in-game Settings)", key.c_str(), value.c_str());
+        out.close();
+        if (out.fail()) Log(L"config: could not write %s", path.c_str());
+        else Log(L"config: %zu setting(s) saved to %s (in-game Settings)", values.size(), path.c_str());
     }
+
+    void SaveSetting(const std::string& key, const std::string& value) { SaveSettings({ { key, value } }); }
 }

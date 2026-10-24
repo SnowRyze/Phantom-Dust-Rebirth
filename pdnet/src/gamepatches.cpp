@@ -1174,6 +1174,7 @@ namespace pdnet::gamepatches
             return g_addItem(args);
         }
         void SettingsScriptPatch(int menu, uint8_t* script, bool fresh); // the in-game Settings menu (below)
+        void SettingsTick();
 
         // Every menu script as it loads (menu table, 87 entries): the Rated texts, and the scoreboard list.
         void MenuTextPatches(bool rated, bool scoreboard)
@@ -1185,6 +1186,7 @@ namespace pdnet::gamepatches
                 for (;;)
                 {
                     Sleep(50);
+                    SettingsTick();
                     for (int m = 2; m < kMenus; ++m)
                     {
                         uint8_t* script = *reinterpret_cast<uint8_t* volatile*>(At(0x1403fa3d0) + m * 0x18 + 0x10);
@@ -1503,24 +1505,11 @@ namespace pdnet::gamepatches
         const char* kOptionLabels[kSettingRows] = { "Name", "Voice Mode", "Body Tags", "Tag Colours", "Dead Colour", "Ally Colour", "Foe Colour",
                                                     "Logo Volume", "Logo Time", "Discord Lobby", "Discord Join" };
         std::atomic<bool> g_typingName{ false };
+        std::atomic<bool> g_settingsDirty{ false }; // changed in the Settings screen since it opened or was last saved
+        Config g_settingsSaved;                     // the settings as they were then (restored when leaving unsaved)
         std::wstring g_typedName;
         std::mutex g_typedLock;
 
-        // splash_volume / splash_seconds belong to pdlaunch (it reads pdnet.ini itself); read here for the menu only.
-        int IniNumber(const char* key, int fallback)
-        {
-            wchar_t path[MAX_PATH] = {};
-            HMODULE self = nullptr;
-            GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT, reinterpret_cast<LPCWSTR>(&IniNumber), &self);
-            GetModuleFileNameW(self, path, MAX_PATH);
-            std::wstring ini = path;
-            std::ifstream in(ini.substr(0, ini.find_last_of(L'\\') + 1) + L"pdnet.ini");
-            std::string line, prefix = std::string(key) + "=";
-            while (std::getline(in, line))
-                if (line.rfind(prefix, 0) == 0) return atoi(line.c_str() + prefix.size());
-            return fallback;
-        }
-        int g_splashVolume = -1, g_splashSeconds = -1;
 
         std::string ColourName(uint32_t argb)
         {
@@ -1542,8 +1531,7 @@ namespace pdnet::gamepatches
         void RefreshSettingRows()
         {
             const Config& c = GetConfig();
-            if (g_splashVolume < 0) g_splashVolume = IniNumber("splash_volume", 40);
-            if (g_splashSeconds < 0) g_splashSeconds = IniNumber("splash_seconds", 12);
+
             auto onOff = [](bool on) { return on ? "On" : "Off"; };
             std::string name;
             {
@@ -1557,8 +1545,8 @@ namespace pdnet::gamepatches
             sprintf_s(g_rowText[kDeadColour], "Dead colour: %s", ColourName(c.deadNametagColor).c_str());
             sprintf_s(g_rowText[kAllyColour], "Teammate colour: %s", ColourName(c.allyNametagColor).c_str());
             sprintf_s(g_rowText[kEnemyColour], "Opponent colour: %s", ColourName(c.enemyNametagColor).c_str());
-            sprintf_s(g_rowText[kSplashVolume], "Logo volume: %d%%", g_splashVolume);
-            sprintf_s(g_rowText[kSplashSeconds], "Logo length: %d s", g_splashSeconds);
+            sprintf_s(g_rowText[kSplashVolume], "Logo volume: %d%%", c.splashVolume);
+            sprintf_s(g_rowText[kSplashSeconds], "Logo length: %d s", c.splashSeconds);
             sprintf_s(g_rowText[kDiscordLobby], "Discord lobby posts: %s", onOff(c.discordLobbyMessages));
             sprintf_s(g_rowText[kDiscordPlayers], "Discord player posts: %s", onOff(c.discordPlayerMessages));
             for (int r = 0; r < kSettingRows; ++r)
@@ -1600,8 +1588,8 @@ namespace pdnet::gamepatches
             if (keep && !name.empty())
             {
                 EditableConfig().displayName = name.substr(0, 32);
-                SaveSetting("display_name", winrt::to_string(EditableConfig().displayName));
-                Log(L"gamepatch: settings: name is now '%s' (other players see it from the next lobby)", EditableConfig().displayName.c_str());
+                g_settingsDirty = true;
+                Log(L"gamepatch: settings: name typed: '%s' (A saves)", EditableConfig().displayName.c_str());
             }
             RefreshSettingRows();
         }
@@ -1648,8 +1636,6 @@ namespace pdnet::gamepatches
         void ChangeSetting(int row, int direction)
         {
             Config& c = EditableConfig();
-            auto onOff = [](bool on) { return std::string(on ? "on" : "off"); };
-            auto hex = [](uint32_t argb) { char s[8]; sprintf_s(s, "%06X", argb & 0xFFFFFF); return std::string(s); };
             switch (row)
             {
             case kName:
@@ -1662,17 +1648,18 @@ namespace pdnet::gamepatches
                 TypingThread();
                 Log(L"gamepatch: settings: typing a new name");
                 break;
-            case kVoiceMode: c.voiceClassic = !c.voiceClassic; SaveSetting("voice_mode", c.voiceClassic ? "classic" : "mic"); break;
-            case kBodyTags: c.nametagsOnBodies = !c.nametagsOnBodies; SaveSetting("nametags_on_bodies", onOff(c.nametagsOnBodies)); UseOwnSettings(); break;
-            case kTagColours: c.nametagColors = !c.nametagColors; SaveSetting("nametag_colors", onOff(c.nametagColors)); break;
-            case kDeadColour: c.deadNametagColor = NextColour(c.deadNametagColor, direction); SaveSetting("dead_nametag_color", hex(c.deadNametagColor)); break;
-            case kAllyColour: c.allyNametagColor = NextColour(c.allyNametagColor, direction); SaveSetting("ally_nametag_color", hex(c.allyNametagColor)); break;
-            case kEnemyColour: c.enemyNametagColor = NextColour(c.enemyNametagColor, direction); SaveSetting("enemy_nametag_color", hex(c.enemyNametagColor)); break;
-            case kSplashVolume: g_splashVolume = (std::clamp)((g_splashVolume + 5) / 10 * 10 + direction * 10, 0, 100); SaveSetting("splash_volume", std::to_string(g_splashVolume)); break;
-            case kSplashSeconds: g_splashSeconds = (std::clamp)(g_splashSeconds / 2 * 2 + direction * 2, 0, 30); SaveSetting("splash_seconds", std::to_string(g_splashSeconds)); break;
-            case kDiscordLobby: c.discordLobbyMessages = !c.discordLobbyMessages; SaveSetting("discord_lobby_messages", onOff(c.discordLobbyMessages)); break;
-            case kDiscordPlayers: c.discordPlayerMessages = !c.discordPlayerMessages; SaveSetting("discord_player_messages", onOff(c.discordPlayerMessages)); break;
+            case kVoiceMode: c.voiceClassic = !c.voiceClassic; break;
+            case kBodyTags: c.nametagsOnBodies = !c.nametagsOnBodies; UseOwnSettings(); break;
+            case kTagColours: c.nametagColors = !c.nametagColors; break;
+            case kDeadColour: c.deadNametagColor = NextColour(c.deadNametagColor, direction); break;
+            case kAllyColour: c.allyNametagColor = NextColour(c.allyNametagColor, direction); break;
+            case kEnemyColour: c.enemyNametagColor = NextColour(c.enemyNametagColor, direction); break;
+            case kSplashVolume: c.splashVolume = (std::clamp)((c.splashVolume + 5) / 10 * 10 + direction * 10, 0, 100); break;
+            case kSplashSeconds: c.splashSeconds = (std::clamp)(c.splashSeconds / 2 * 2 + direction * 2, 0, 30); break;
+            case kDiscordLobby: c.discordLobbyMessages = !c.discordLobbyMessages; break;
+            case kDiscordPlayers: c.discordPlayerMessages = !c.discordPlayerMessages; break;
             }
+            if (row != kName) g_settingsDirty = true;
             RefreshSettingRows();
         }
 
@@ -1760,10 +1747,87 @@ namespace pdnet::gamepatches
             return g_placeWindow(args);
         }
 
+        // Save / leave. Changes show at once (nametag colours too) but are written only when A is pressed (the button bar
+        // reads "A Save"); leaving the screen unsaved puts the settings back as they were.
+        void SaveAllSettings()
+        {
+            const Config& c = EditableConfig();
+            auto onOff = [](bool on) { return std::string(on ? "on" : "off"); };
+            auto hex = [](uint32_t argb) { char s[8]; sprintf_s(s, "%06X", argb & 0xFFFFFF); return std::string(s); };
+            SaveSettings({ { "display_name", winrt::to_string(c.displayName) }, { "voice_mode", c.voiceClassic ? "classic" : "mic" },
+                           { "nametags_on_bodies", onOff(c.nametagsOnBodies) }, { "nametag_colors", onOff(c.nametagColors) },
+                           { "dead_nametag_color", hex(c.deadNametagColor) }, { "ally_nametag_color", hex(c.allyNametagColor) },
+                           { "enemy_nametag_color", hex(c.enemyNametagColor) }, { "splash_volume", std::to_string(c.splashVolume) },
+                           { "splash_seconds", std::to_string(c.splashSeconds) }, { "discord_lobby_messages", onOff(c.discordLobbyMessages) },
+                           { "discord_player_messages", onOff(c.discordPlayerMessages) } });
+            g_settingsSaved = c;
+            g_settingsDirty = false;
+        }
+
+        void RevertSettings()
+        {
+            Config& c = EditableConfig();
+            const Config& s = g_settingsSaved;
+            c.displayName = s.displayName; c.voiceClassic = s.voiceClassic; c.nametagsOnBodies = s.nametagsOnBodies; c.nametagColors = s.nametagColors;
+            c.deadNametagColor = s.deadNametagColor; c.allyNametagColor = s.allyNametagColor; c.enemyNametagColor = s.enemyNametagColor;
+            c.splashVolume = s.splashVolume; c.splashSeconds = s.splashSeconds;
+            c.discordLobbyMessages = s.discordLobbyMessages; c.discordPlayerMessages = s.discordPlayerMessages;
+            g_settingsDirty = false;
+            UseOwnSettings();
+            Log(L"gamepatch: settings: left without saving - changes dropped");
+        }
+
+        // Every 50 ms (MenuTextPatches): leaving the Settings screen with unsaved changes drops them.
+        void SettingsTick()
+        {
+            if (!InSettings() && GetTickCount64() - g_settingsOpenedAt > 1000 && (g_settingsDirty || g_typingName))
+            {
+                g_typingName = false;
+                RevertSettings();
+            }
+        }
+
+        // Each frame the Settings screen draws (HookedDrawText): A (button bits 0x1010, as the scripts test it) saves.
+        void SettingsPollSave()
+        {
+            static bool held = false;
+            int64_t input[2] = { 0, 0 };
+            bool a = (reinterpret_cast<InputFn>(At(0x1402168a0))(input) & 0x1010) != 0;
+            if (a && !held && !g_typingName)
+            {
+                int64_t sound[2] = { 37, 0 };
+                reinterpret_cast<InputFn>(At(0x140261750))(sound);
+                SaveAllSettings();
+            }
+            held = a;
+        }
+
+        // The button bar (menu command 88 with 2, text): the Options screen's "Change / Back" gets "A Save".
+        MenuCommandFn g_buttonBar = nullptr;
+        int64_t HookedButtonBar(int64_t* args)
+        {
+            static const char kSave[] = "\a8#Select \a7#Change \a580r\a2#Save \a3#Back";
+            char text[64];
+            if (args && (InSettings() || GetTickCount64() - g_settingsOpenedAt < 500) && CopyString(reinterpret_cast<const char*>(args[1]), text, sizeof(text)) &&
+                (strcmp(text, "\a7#Change \a580r\a3#Back") == 0 || strcmp(text, "\a8#Select \a7#Change \a580r\a3#Back") == 0))
+            {
+                int64_t changed[8];
+                memcpy(changed, args, sizeof(changed));
+                changed[1] = reinterpret_cast<int64_t>(kSave);
+                return g_buttonBar(changed);
+            }
+            return g_buttonBar(args);
+        }
+
         bool SettingsItems(const char* added)
         {
             bool rows = strcmp(added, "\a160wVoice Chat\f\a1#\a230c%s\f\a0#") == 0, hints = strcmp(added, "Set your voice chat status.") == 0;
             if (!rows && !hints) return false;
+            if (rows)
+            {
+                g_settingsSaved = EditableConfig(); // what leaving unsaved goes back to
+                g_settingsDirty = false;
+            }
             RefreshSettingRows();
             for (int r = 0; r < kSettingRows; ++r)
             {
@@ -1795,6 +1859,7 @@ namespace pdnet::gamepatches
 
         int64_t HookedDrawText(int64_t* args)
         {
+            if (InSettings()) SettingsPollSave();
             if (args && GetConfig().ratedLobbies && CurrentMenu(MenuManager()) == kSessionListMenu)
             {
                 static char text[96];
@@ -1965,6 +2030,7 @@ namespace pdnet::gamepatches
             // The in-game Settings menu (what was Xbox Live Options): left / right on pdnet's rows.
             WrapCommand<NativeFn>(0x1403ddde0 + 3 * 8, 0x1400bde50, &HookedSettingFlag, g_settingFlag, L"no Cross Play option");
             WrapCommand<MenuCommandFn>(0x1403eefe0 + 37 * 8, 0x140207d50, &HookedPlaceWindow, g_placeWindow, L"settings window position");
+            WrapCommand<MenuCommandFn>(0x1403eefe0 + 88 * 8, 0x140207650, &HookedButtonBar, g_buttonBar, L"settings save button");
             if (WrapCommand<SessionCommandFn>(0x1403f1150 + 154 * 8, 0x140214d60, &HookedOptionChanged, g_optionChanged, L"settings rows"))
                 Log(L"gamepatch: in-game Settings ready (multiplayer menu > Settings)");
             if (WrapCommand<MenuCommandFn>(0x1403eefe0 + 40 * 8, 0x140207e20, &HookedAddItem, g_addItem, L"menu item names"))

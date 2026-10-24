@@ -1,6 +1,7 @@
 #pragma once
 #include <string>
 #include <cstdint>
+#include <vector>
 
 namespace pdnet
 {
@@ -47,13 +48,17 @@ namespace pdnet
         std::wstring discordWebhook;        // discord_webhook=<URL>: announce lobbies this PC hosts in a Discord channel (see discord.h)
         bool discordLobbyMessages = true;   // discord_lobby_messages=on|off: "opened" / "closed" messages
         bool discordPlayerMessages = true;  // discord_player_messages=on|off: "<name> joined / left" (and "full") messages
+        int splashVolume = 40;              // splash_volume=: % of the remembered volume during the start-up logos (pdlaunch; the Settings menu shows it)
+        int splashSeconds = 12;             // splash_seconds=: how long the start-up logos stay quieter (pdlaunch)
     };
 
     // Loaded once: pdnet.ini next to the DLL, else LocalState\pdnet.ini (written with defaults if missing).
     const Config& GetConfig();
 
-    // The same settings, for the in-game Settings menu (gamepatches.cpp): change a field, then SaveSetting writes
-    // key=value into the pdnet.ini that was read (the line is replaced, or added).
+    // The same settings, for the in-game Settings menu (gamepatches.cpp): change fields, then SaveSettings writes
+    // key=value lines to LocalState\pdnet\settings.ini (read after pdnet.ini, so they win; the game can't write the kit
+    // folder). pdlaunch reads splash_volume / splash_seconds from there too.
     Config& EditableConfig();
+    void SaveSettings(const std::vector<std::pair<std::string, std::string>>& values);
     void SaveSetting(const std::string& key, const std::string& value);
 }

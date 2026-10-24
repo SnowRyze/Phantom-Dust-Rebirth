@@ -127,20 +127,28 @@ namespace
 namespace
 {
     // pdnet.ini (next to pdlaunch.exe) value, or `fallback`.
+    // key=value from pdnet.ini next to pdlaunch, then from the game's LocalState\pdnet\settings.ini (what the in-game
+    // Settings menu saved; it wins).
     std::wstring Setting(const wchar_t* key, const wchar_t* fallback)
     {
-        FILE* f = nullptr;
         std::wstring value = fallback;
-        if (_wfopen_s(&f, (g_dir + L"pdnet.ini").c_str(), L"r, ccs=UTF-8") || !f) return value;
-        wchar_t line[512];
+        wchar_t local[MAX_PATH] = {};
+        GetEnvironmentVariableW(L"LOCALAPPDATA", local, MAX_PATH);
+        const std::wstring files[] = { g_dir + L"pdnet.ini", std::wstring(local) + L"\\Packages\\Microsoft.MSEsper_8wekyb3d8bbwe\\LocalState\\pdnet\\settings.ini" };
         size_t keyLength = wcslen(key);
-        while (fgetws(line, 512, f))
+        for (auto& file : files)
         {
-            std::wstring s = line;
-            while (!s.empty() && (s.back() == L'\n' || s.back() == L'\r' || s.back() == L' ')) s.pop_back();
-            if (s.compare(0, keyLength, key) == 0 && s.size() > keyLength && s[keyLength] == L'=') value = s.substr(keyLength + 1);
+            FILE* f = nullptr;
+            if (_wfopen_s(&f, file.c_str(), L"r, ccs=UTF-8") || !f) continue;
+            wchar_t line[512];
+            while (fgetws(line, 512, f))
+            {
+                std::wstring s = line;
+                while (!s.empty() && (s.back() == L'\n' || s.back() == L'\r' || s.back() == L' ')) s.pop_back();
+                if (s.compare(0, keyLength, key) == 0 && s.size() > keyLength && s[keyLength] == L'=') value = s.substr(keyLength + 1);
+            }
+            fclose(f);
         }
-        fclose(f);
         return value;
     }
 
