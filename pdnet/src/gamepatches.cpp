@@ -4,6 +4,7 @@
 #include "lobbies.h"
 #include "scores.h"
 #include "log.h"
+#include "titlesub.h"
 #include <fstream>
 #include <winrt/Windows.ApplicationModel.Core.h>
 #include <winrt/Windows.UI.Core.h>
@@ -2091,11 +2092,95 @@ namespace pdnet::gamepatches
         return true;
     }
 
+    namespace
+    {
+        // "Community Edition" under the title screen logo. The picture is Assets\Data\Menu\Title.alr: a header page, then
+        // three 640x480 8-bit layers of the same picture (the logo glows brightest in the first). When the game opens it
+        // (CreateFile2, imported by PDUWP.exe), it gets a copy with the words drawn into each layer instead:
+        // LocalState\pdnet\Title.alr, made once per start. The words are two masks from tools\subtitle.py (titlesub.h).
+        using CreateFile2Fn = HANDLE(WINAPI*)(LPCWSTR, DWORD, DWORD, DWORD, LPCREATEFILE2_EXTENDED_PARAMETERS);
+        CreateFile2Fn g_createFile2 = nullptr;
+
+        bool MakeTitleCopy(const wchar_t* original, const std::wstring& copy)
+        {
+            constexpr DWORD kLayer = 640 * 480, kSize = 0x1000 + 3 * kLayer;
+            HANDLE file = g_createFile2(original, GENERIC_READ, FILE_SHARE_READ, OPEN_EXISTING, nullptr);
+            if (file == INVALID_HANDLE_VALUE) return false;
+            std::vector<uint8_t> data(kSize + 1);
+            DWORD got = 0;
+            BOOL read = ReadFile(file, data.data(), kSize + 1, &got, nullptr);
+            CloseHandle(file);
+            if (!read || got != kSize || memcmp(data.data() + 0xbc, "Title1301.dds", 13) != 0) return false;
+            const int glow[3] = { 136, 88, 40 }; // % of the mask, per layer, like the logo's own glow
+            for (int layer = 0; layer < 3; ++layer)
+                for (int y = 0; y < kSubH; ++y)
+                    for (int x = 0; x < kSubW; ++x)
+                    {
+                        uint8_t& p = data[0x1000 + layer * kLayer + (kSubY + y) * 640 + kSubX + x];
+                        int i = y * kSubW + x, g = (std::min)(255, kSubGlow[i] * glow[layer] / 100), v = p;
+                        v += (235 - v) * g / 255;
+                        v += (18 - v) * kSubLetters[i] / 255;
+                        p = static_cast<uint8_t>(v);
+                    }
+            CreateDirectoryW((LocalStatePath() + L"\\pdnet").c_str(), nullptr);
+            file = g_createFile2(copy.c_str(), GENERIC_WRITE, 0, CREATE_ALWAYS, nullptr);
+            if (file == INVALID_HANDLE_VALUE) return false;
+            DWORD written = 0;
+            BOOL ok = WriteFile(file, data.data(), kSize, &written, nullptr) && written == kSize;
+            CloseHandle(file);
+            return ok;
+        }
+
+        HANDLE WINAPI HookedCreateFile2(LPCWSTR name, DWORD access, DWORD share, DWORD disposition, LPCREATEFILE2_EXTENDED_PARAMETERS params)
+        {
+            size_t n = name ? wcslen(name) : 0;
+            if (n > 15 && _wcsicmp(name + n - 15, L"\\Menu\\Title.alr") == 0)
+            {
+                static std::once_flag once;
+                static std::wstring copy;
+                std::call_once(once, [name]
+                {
+                    std::wstring path = LocalStatePath() + L"\\pdnet\\Title.alr";
+                    if (MakeTitleCopy(name, path)) copy = path;
+                    Log(L"gamepatch: title screen %s", copy.empty() ? L"left as it is (picture not as expected)" : L"reads \"Community Edition\"");
+                });
+                if (!copy.empty()) return g_createFile2(copy.c_str(), access, share, disposition, params);
+            }
+            return g_createFile2(name, access, share, disposition, params);
+        }
+
+        void TitleSubtitle()
+        {
+            auto base = Image();
+            auto nt = reinterpret_cast<IMAGE_NT_HEADERS*>(base + reinterpret_cast<IMAGE_DOS_HEADER*>(base)->e_lfanew);
+            auto& dir = nt->OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_IMPORT];
+            for (auto desc = reinterpret_cast<IMAGE_IMPORT_DESCRIPTOR*>(base + dir.VirtualAddress); dir.VirtualAddress && desc->Name; ++desc)
+            {
+                auto names = reinterpret_cast<IMAGE_THUNK_DATA*>(base + (desc->OriginalFirstThunk ? desc->OriginalFirstThunk : desc->FirstThunk));
+                auto slots = reinterpret_cast<IMAGE_THUNK_DATA*>(base + desc->FirstThunk);
+                for (; names->u1.AddressOfData; ++names, ++slots)
+                {
+                    if (IMAGE_SNAP_BY_ORDINAL(names->u1.Ordinal) ||
+                        strcmp(reinterpret_cast<IMAGE_IMPORT_BY_NAME*>(base + names->u1.AddressOfData)->Name, "CreateFile2") != 0)
+                        continue;
+                    g_createFile2 = reinterpret_cast<CreateFile2Fn>(slots->u1.Function);
+                    DWORD old;
+                    VirtualProtect(&slots->u1.Function, sizeof(ULONG_PTR), PAGE_READWRITE, &old);
+                    slots->u1.Function = reinterpret_cast<ULONG_PTR>(&HookedCreateFile2);
+                    VirtualProtect(&slots->u1.Function, sizeof(ULONG_PTR), old, &old);
+                    return;
+                }
+            }
+            Log(L"gamepatch: title screen: CreateFile2 import not found");
+        }
+    }
+
     void Apply()
     {
         static std::once_flag once;
         std::call_once(once, []
         {
+            TitleSubtitle();
             g_bodyTags = GetConfig().nametagsOnBodies ? 1 : 0;
             if (NametagsOnBodies())
             {
