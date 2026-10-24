@@ -1,6 +1,7 @@
 // Glue between pdnet and its XSAPI stand-in (pdnet.ini: xbox=off).
 #include "xsapi_pch.h"
 #include "xsapi.h"
+#include "../src/lobbies.h"
 #include <bcrypt.h>
 #include <fstream>
 
@@ -51,6 +52,21 @@ namespace pdnet::xsapi
     {
         std::mutex g_namesLock;
         std::map<std::wstring, std::wstring> g_names;
+        std::map<std::wstring, std::string> g_users;
+    }
+
+    void RememberUser(const std::wstring& xuid, const std::string& eosUserId)
+    {
+        std::lock_guard guard(g_namesLock);
+        g_users[xuid] = eosUserId;
+    }
+
+    std::string EosUserOf(const std::wstring& xuid)
+    {
+        if (xuid == LocalXuid()) return lobbies::LocalUserId();
+        std::lock_guard guard(g_namesLock);
+        auto it = g_users.find(xuid);
+        return it == g_users.end() ? std::string{} : it->second;
     }
 
     void RememberName(const std::wstring& xuid, const std::wstring& name)

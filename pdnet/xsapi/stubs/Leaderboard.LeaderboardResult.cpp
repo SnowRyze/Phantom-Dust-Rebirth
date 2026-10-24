@@ -46,6 +46,7 @@ namespace winrt::Microsoft::Xbox::Services::Leaderboard::implementation
         {
             if (r.me) r.name = winrt::to_string(::pdnet::xsapi::NameOf(::pdnet::xsapi::LocalXuid())); // the current display_name
             ::pdnet::xsapi::RememberName(XuidOf(r), winrt::to_hstring(r.name).c_str()); // for ProfileService
+            ::pdnet::xsapi::RememberUser(XuidOf(r), r.userId);                          // for UserStatisticsService
             all.push_back({ r, {} });
         }
         for (auto& stat : extra)
