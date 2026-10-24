@@ -2094,7 +2094,7 @@ namespace pdnet::gamepatches
 
     namespace
     {
-        // "Community Edition" under the title screen logo. The title screen is Assets\Data\menu\FDLogo.alr: a header page,
+        // "Rebirth" under the title screen logo. The title screen is Assets\Data\menu\FDLogo.alr: a header page,
         // then 13 textures; the "Phantom Dust" logo is the second (logo_02, 560x96 BGRA, rows of 560 pixels, at 0x4000).
         // When the game opens the file (CreateFile2, imported by PDUWP.exe) it gets a copy instead, made once per start
         // in LocalState\pdnet: the logo gets kSubH more rows holding the words, and the header grows with it (the
@@ -2174,7 +2174,7 @@ namespace pdnet::gamepatches
                 {
                     std::wstring path = LocalStatePath() + L"\\pdnet\\FDLogo.alr";
                     if (MakeTitleCopy(name, path)) copy = path;
-                    Log(L"gamepatch: title screen %s", copy.empty() ? L"left as it is (logo file not as expected)" : L"reads \"Community Edition\"");
+                    Log(L"gamepatch: title screen %s", copy.empty() ? L"left as it is (logo file not as expected)" : L"reads \"Rebirth\"");
                 });
                 if (!copy.empty()) return g_createFile2(copy.c_str(), access, share, disposition, params);
             }

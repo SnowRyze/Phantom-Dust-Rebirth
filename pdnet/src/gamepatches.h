@@ -7,7 +7,7 @@ namespace pdnet::gamepatches
 {
     void Apply();
 
-    // "Community Edition" on the title screen: the game's file opens are hooked (CreateFile2). The title picture loads
+    // "Rebirth" on the title screen: the game's file opens are hooked (CreateFile2). The title picture loads
     // seconds before Apply runs, so pdlaunch's watcher calls this until it returns true.
     bool HookFileOpens();
 
