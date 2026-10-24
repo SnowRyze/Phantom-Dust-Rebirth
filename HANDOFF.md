@@ -471,3 +471,7 @@ The scoreboard menu (liveranking, menu 41) shows only the 4 Global boards (Patch
 ## Rated / Unrated lobbies
 
 rated_lobbies=on: the create-session Rating option (session number ratinglimit 0/1, originally ±200 join limit) reads Unrated / Rated; the search option finds one kind; ratingmin/ratingmax are forced to 0/1000000 (no join limit). FUN_1401835c0 (rating += change, match start and end) is hooked: change 0 unless the session pdnet holds has ratinglimit 1 (scores::RatedMatch in xsapi/mpsd.cpp). The game's 'Official Battle rules only' checks (0x1401878c9 jg, 0x1401882c8 ja) are NOPed, so any rule can be Rated. The '[Official Battle] Applies toward Scoreboard Total' line is removed from rule descriptions in every menu script. Wins count in both kinds. Log: 'gamepatch: rating change'.
+
+## In-game Settings
+
+Multiplayer menu > Settings (was Xbox Live Options, liveoption menu 68). Its Options panel's Cross Play row is left out (g10 #3 flag 3 reads 0 while Settings opens or shows) and the Voice Chat row (and hint) is replaced through menu command 40 by pdnet's rows: Name (typed via CoreWindow CharacterReceived), Voice Mode, Body Tags, Tag/Dead/Ally/Foe colours, Logo Volume/Time, Discord Lobby/Join. Each row's text holds its value; left/right reaches pdnet through the script's empty case (0x05814 patched to session cmd 154, wrapped), with sound 37 (g1 #43). Row mapping patched at 0x0564C/0x05670/0x05674; window raised via menu cmd 37. Changes go to pdnet.ini (SaveSetting).
