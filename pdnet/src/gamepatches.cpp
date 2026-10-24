@@ -2099,15 +2099,16 @@ namespace pdnet::gamepatches
         // When the game opens the file (CreateFile2, imported by PDUWP.exe) it gets a copy instead, made once per start
         // in LocalState\pdnet: the logo gets kSubH more rows holding the words, and the header grows with it (the
         // texture's height at 0x60, 0x38a and 0x4b0, later textures' offsets, the data size at 0x14). The words are masks
-        // from tools\subtitle.py (titlesub.h), coloured with the rusty metal inside the logo's "D".
+        // from tools\subtitle.py (titlesub.h), coloured with the rusty metal inside the logo's "D". The glow texture after it grows too.
         using CreateFile2Fn = HANDLE(WINAPI*)(LPCWSTR, DWORD, DWORD, DWORD, LPCREATEFILE2_EXTENDED_PARAMETERS);
         CreateFile2Fn g_createFile2 = nullptr;
 
         bool MakeTitleCopy(const wchar_t* original, const std::wstring& copy)
         {
-            constexpr DWORD kHeader = 0x1000, kDataSize = 0x27bc80, kSize = kHeader + kDataSize, kLogo = 0x4000, kLogoEnd = 0x38800;
-            constexpr int kLogoW = 560, kLogoH = 96;
-            constexpr DWORD kExtra = kLogoW * kSubH * 4;
+            constexpr DWORD kHeader = 0x1000, kDataSize = 0x27bc80, kSize = kHeader + kDataSize, kLogo = 0x4000, kGlow = 0x38800, kGlowEnd = 0x48400;
+            constexpr int kLogoW = 560, kLogoH = 96, kGlowTexW = 576, kGlowTexH = 112;
+            constexpr DWORD kExtra = kLogoW * kSubH * 4, kGlowExtra = kGlowTexW * kSubH;
+            static_assert(kGlowW == kGlowTexW && kGlowH >= kSubH + kGlowTexH - 96, "titlesub.h glow mask size");
             HANDLE file = g_createFile2(original, GENERIC_READ, FILE_SHARE_READ, OPEN_EXISTING, nullptr);
             if (file == INVALID_HANDLE_VALUE) return false;
             std::vector<uint8_t> data(kSize + 1);
@@ -2116,11 +2117,13 @@ namespace pdnet::gamepatches
             CloseHandle(file);
             auto u32 = [&](size_t at) -> uint32_t& { return *reinterpret_cast<uint32_t*>(&data[at]); };
             auto u16 = [&](size_t at) -> uint16_t& { return *reinterpret_cast<uint16_t*>(&data[at]); };
-            if (!read || got != kSize || u32(0x14) != kDataSize || u32(0x60) != 0x2205f22f || u32(0x54) != kLogo || u32(0x70) != kLogoEnd ||
-                u16(0x38a) != kLogoH || u16(0x4b0) != kLogoH || memcmp(&data[0x47c], "logo_02.dds", 11) != 0)
+            if (!read || got != kSize || u32(0x14) != kDataSize || u32(0x54) != kLogo || u32(0x70) != kGlow || u32(0x8c) != kGlowEnd ||
+                u32(0x60) != 0x2205f22f || u32(0x7c) != 0x0806f23f || u16(0x38a) != kLogoH || u16(0x4b0) != kLogoH ||
+                u16(0x39e) != kGlowTexH || u16(0x4ec) != kGlowTexH || memcmp(&data[0x47c], "logo_02.dds", 11) != 0 ||
+                memcmp(&data[0x4b8], "logo_03.dds", 11) != 0)
                 return false;
 
-            // The new rows: a dark outline, the letters in the logo's own metal (brightened), then a bevel.
+            // The logo's new rows: a dark outline, the letters in the logo's own metal (brightened), pits, then a bevel.
             std::vector<uint8_t> rows(kExtra);
             const uint8_t* logo = &data[kHeader + kLogo];
             auto over = [](uint8_t* p, int b, int g, int r, int a) // p: BGRA, straight alpha
@@ -2138,22 +2141,36 @@ namespace pdnet::gamepatches
                     int i = y * kSubW + x;
                     uint8_t* p = &rows[i * 4];
                     const uint8_t* metal = logo + ((15 + y % 73) * kLogoW + 330 + x % 45) * 4;
-                    auto bright = [](int v) { return (std::min)(255, v * 19 / 10); };
+                    auto bright = [](int v) { return (std::min)(255, v * 15 / 10); };
                     over(p, 5, 10, 20, kSubOutline[i]);
                     over(p, bright(metal[0]), bright(metal[1]), bright(metal[2]), kSubLetters[i]);
+                    over(p, 0, 0, 0, kSubPits[i]);
                     over(p, 190, 230, 255, kSubHigh[i]);
                     over(p, 0, 0, 0, kSubLow[i]);
                 }
+            // The glow (logo_03, 8-bit, 8 px wider each side) gets the same number of rows, and the words' glow: both
+            // textures are drawn centred, so they stay lined up and "Rebirth" glows with the logo.
+            std::vector<uint8_t> glow(&data[kHeader + kGlow], &data[kHeader + kGlowEnd]);
+            glow.resize(glow.size() + kGlowExtra, 0);
+            for (int y = 0; y < kGlowH; ++y)
+                for (int x = 0; x < kGlowW; ++x)
+                {
+                    uint8_t& p = glow[(96 + y) * kGlowTexW + x];
+                    p = (std::max)(p, kSubGlow[y * kGlowW + x]);
+                }
 
-            std::vector<uint8_t> out(data.begin(), data.begin() + kHeader + kLogoEnd);
+            std::vector<uint8_t> out(data.begin(), data.begin() + kHeader + kGlow);
             out.insert(out.end(), rows.begin(), rows.end());
-            out.insert(out.end(), data.begin() + kHeader + kLogoEnd, data.begin() + kSize);
+            out.insert(out.end(), glow.begin(), glow.end());
+            out.insert(out.end(), data.begin() + kHeader + kGlowEnd, data.begin() + kSize);
             data.swap(out);
-            u32(0x14) += kExtra;
+            u32(0x14) += kExtra + kGlowExtra;
             u32(0x60) = (u32(0x60) & ~0xfff000u) | ((kLogoH + kSubH - 1) << 12);
-            for (int k = 2; k < 13; ++k) u32(0x38 + k * 0x1c) += kExtra; // where each later texture starts
+            u32(0x7c) = (u32(0x7c) & ~0xfff000u) | ((kGlowTexH + kSubH - 1) << 12);
+            u32(0x70) += kExtra; // where each later texture starts
+            for (int k = 3; k < 13; ++k) u32(0x38 + k * 0x1c) += kExtra + kGlowExtra;
             u16(0x38a) = u16(0x4b0) = kLogoH + kSubH;
-
+            u16(0x39e) = u16(0x4ec) = kGlowTexH + kSubH;
             CreateDirectoryW((LocalStatePath() + L"\\pdnet").c_str(), nullptr);
             file = g_createFile2(copy.c_str(), GENERIC_WRITE, 0, CREATE_ALWAYS, nullptr);
             if (file == INVALID_HANDLE_VALUE) return false;
