@@ -1125,15 +1125,32 @@ namespace pdnet::gamepatches
         using MenuCommandFn = int64_t (*)(int64_t* args);
         MenuCommandFn g_addItem = nullptr;
 
+        // The multiplayer menu's items and their descriptions, renamed as the list is built (a watcher that patches
+        // the script after it loads is too late for the first draw): Quick Join and Lobby Browser.
+        constexpr Relabel kMenuItems[] = {
+            { "Quick Match", "Quick Join" },
+            { "OptiMatch", "Lobby Browser" },
+            { "Search for a game session with the Quick game rule.", "Join the first open game session you can play in." },
+            { "Select game attributes, and then search for a game session.", "Choose search options, then pick a session." },
+        };
+
         int64_t HookedAddItem(int64_t* args)
         {
-            if (args) // only the scoreboard menu adds $LEADERBOARD_ items
+            if (args)
             {
-                char text[32];
-                if (CopyString(reinterpret_cast<const char*>(args[0]), text, sizeof(text)) && strncmp(text, "$LEADERBOARD_", 13) == 0)
+                char text[80];
+                if (CopyString(reinterpret_cast<const char*>(args[0]), text, sizeof(text)))
                 {
-                    int board = atoi(text + 13);
-                    if (board % 3 != 0) return 0; // Friends / Favorites
+                    // Only the scoreboard menu adds $LEADERBOARD_ items.
+                    if (GetConfig().scoreboard && strncmp(text, "$LEADERBOARD_", 13) == 0 && atoi(text + 13) % 3 != 0) return 0; // Friends / Favorites
+                    for (auto& item : kMenuItems)
+                        if (strcmp(text, item.find) == 0)
+                        {
+                            int64_t renamed[8];
+                            memcpy(renamed, args, sizeof(renamed));
+                            renamed[0] = reinterpret_cast<int64_t>(item.replace); // static text: the menu may keep the pointer
+                            return g_addItem(renamed);
+                        }
                 }
             }
             return g_addItem(args);
@@ -1588,8 +1605,8 @@ namespace pdnet::gamepatches
             if (GetConfig().ratedLobbies) RatedLobbies();
             if (GetConfig().ratedLobbies && !g_drawText) WrapCommand<MenuCommandFn>(0x1403eefe0 + 23 * 8, 0x140207840, &HookedDrawText, g_drawText, L"session info rated text");
             if (GetConfig().ratedLobbies || GetConfig().scoreboard) MenuTextPatches(GetConfig().ratedLobbies, GetConfig().scoreboard);
-            if (GetConfig().scoreboard && WrapCommand<MenuCommandFn>(0x1403eefe0 + 40 * 8, 0x140207e20, &HookedAddItem, g_addItem, L"scoreboard list"))
-                Log(L"gamepatch: scoreboard list shows the Global boards only");
+            if (WrapCommand<MenuCommandFn>(0x1403eefe0 + 40 * 8, 0x140207e20, &HookedAddItem, g_addItem, L"menu item names"))
+                Log(L"gamepatch: menu items renamed as they are added (Quick Join, Lobby Browser%s)", GetConfig().scoreboard ? L", Global scoreboards only" : L"");
             bool arsenal = GetConfig().lobbyArsenalEditor; // the Arsenal Lab button for clients too
             if (GetConfig().lobbyGamertagOption || micLabel || arsenal) LobbyScriptPatches(GetConfig().lobbyGamertagOption, micLabel, arsenal);
         });
