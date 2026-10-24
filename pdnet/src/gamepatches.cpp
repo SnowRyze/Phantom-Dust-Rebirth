@@ -2094,39 +2094,71 @@ namespace pdnet::gamepatches
 
     namespace
     {
-        // "Community Edition" under the title screen logo. The picture is Assets\Data\Menu\Title.alr: a header page, then
-        // three 640x480 8-bit layers of the same picture (the logo glows brightest in the first). When the game opens it
-        // (CreateFile2, imported by PDUWP.exe), it gets a copy with the words drawn into each layer instead:
-        // LocalState\pdnet\Title.alr, made once per start. The words are two masks from tools\subtitle.py (titlesub.h).
+        // "Community Edition" under the title screen logo. The title screen is Assets\Data\menu\FDLogo.alr: a header page,
+        // then 13 textures; the "Phantom Dust" logo is the second (logo_02, 560x96 BGRA, rows of 560 pixels, at 0x4000).
+        // When the game opens the file (CreateFile2, imported by PDUWP.exe) it gets a copy instead, made once per start
+        // in LocalState\pdnet: the logo gets kSubH more rows holding the words, and the header grows with it (the
+        // texture's height at 0x60, 0x38a and 0x4b0, later textures' offsets, the data size at 0x14). The words are masks
+        // from tools\subtitle.py (titlesub.h), coloured with the rusty metal inside the logo's "D".
         using CreateFile2Fn = HANDLE(WINAPI*)(LPCWSTR, DWORD, DWORD, DWORD, LPCREATEFILE2_EXTENDED_PARAMETERS);
         CreateFile2Fn g_createFile2 = nullptr;
 
         bool MakeTitleCopy(const wchar_t* original, const std::wstring& copy)
         {
-            constexpr DWORD kLayer = 640 * 480, kSize = 0x1000 + 3 * kLayer;
+            constexpr DWORD kHeader = 0x1000, kDataSize = 0x27bc80, kSize = kHeader + kDataSize, kLogo = 0x4000, kLogoEnd = 0x38800;
+            constexpr int kLogoW = 560, kLogoH = 96;
+            constexpr DWORD kExtra = kLogoW * kSubH * 4;
             HANDLE file = g_createFile2(original, GENERIC_READ, FILE_SHARE_READ, OPEN_EXISTING, nullptr);
             if (file == INVALID_HANDLE_VALUE) return false;
             std::vector<uint8_t> data(kSize + 1);
             DWORD got = 0;
             BOOL read = ReadFile(file, data.data(), kSize + 1, &got, nullptr);
             CloseHandle(file);
-            if (!read || got != kSize || memcmp(data.data() + 0xbc, "Title1301.dds", 13) != 0) return false;
-            const int glow[3] = { 136, 88, 40 }; // % of the mask, per layer, like the logo's own glow
-            for (int layer = 0; layer < 3; ++layer)
-                for (int y = 0; y < kSubH; ++y)
-                    for (int x = 0; x < kSubW; ++x)
-                    {
-                        uint8_t& p = data[0x1000 + layer * kLayer + (kSubY + y) * 640 + kSubX + x];
-                        int i = y * kSubW + x, g = (std::min)(255, kSubGlow[i] * glow[layer] / 100), v = p;
-                        v += (235 - v) * g / 255;
-                        v += (18 - v) * kSubLetters[i] / 255;
-                        p = static_cast<uint8_t>(v);
-                    }
+            auto u32 = [&](size_t at) -> uint32_t& { return *reinterpret_cast<uint32_t*>(&data[at]); };
+            auto u16 = [&](size_t at) -> uint16_t& { return *reinterpret_cast<uint16_t*>(&data[at]); };
+            if (!read || got != kSize || u32(0x14) != kDataSize || u32(0x60) != 0x2205f22f || u32(0x58) != kLogo || u32(0x74) != kLogoEnd ||
+                u16(0x38a) != kLogoH || u16(0x4b0) != kLogoH || memcmp(&data[0x47c], "logo_02.dds", 11) != 0)
+                return false;
+
+            // The new rows: a dark outline, the letters in the logo's own metal (brightened), then a bevel.
+            std::vector<uint8_t> rows(kExtra);
+            const uint8_t* logo = &data[kHeader + kLogo];
+            auto over = [](uint8_t* p, int b, int g, int r, int a) // p: BGRA, straight alpha
+            {
+                if (!a) return;
+                int under = p[3] * (255 - a) / 255, out = a + under;
+                p[0] = static_cast<uint8_t>((b * a + p[0] * under) / out);
+                p[1] = static_cast<uint8_t>((g * a + p[1] * under) / out);
+                p[2] = static_cast<uint8_t>((r * a + p[2] * under) / out);
+                p[3] = static_cast<uint8_t>(out);
+            };
+            for (int y = 0; y < kSubH; ++y)
+                for (int x = 0; x < kLogoW; ++x)
+                {
+                    int i = y * kSubW + x;
+                    uint8_t* p = &rows[i * 4];
+                    const uint8_t* metal = logo + ((15 + y % 73) * kLogoW + 330 + x % 45) * 4;
+                    auto bright = [](int v) { return (std::min)(255, v * 19 / 10); };
+                    over(p, 5, 10, 20, kSubOutline[i]);
+                    over(p, bright(metal[0]), bright(metal[1]), bright(metal[2]), kSubLetters[i]);
+                    over(p, 190, 230, 255, kSubHigh[i]);
+                    over(p, 0, 0, 0, kSubLow[i]);
+                }
+
+            std::vector<uint8_t> out(data.begin(), data.begin() + kHeader + kLogoEnd);
+            out.insert(out.end(), rows.begin(), rows.end());
+            out.insert(out.end(), data.begin() + kHeader + kLogoEnd, data.begin() + kSize);
+            data.swap(out);
+            u32(0x14) += kExtra;
+            u32(0x60) = (u32(0x60) & ~0xfff000u) | ((kLogoH + kSubH - 1) << 12);
+            for (int k = 2; k < 13; ++k) u32(0x3c + k * 0x1c) += kExtra; // where each later texture starts
+            u16(0x38a) = u16(0x4b0) = kLogoH + kSubH;
+
             CreateDirectoryW((LocalStatePath() + L"\\pdnet").c_str(), nullptr);
             file = g_createFile2(copy.c_str(), GENERIC_WRITE, 0, CREATE_ALWAYS, nullptr);
             if (file == INVALID_HANDLE_VALUE) return false;
             DWORD written = 0;
-            BOOL ok = WriteFile(file, data.data(), kSize, &written, nullptr) && written == kSize;
+            BOOL ok = WriteFile(file, data.data(), static_cast<DWORD>(data.size()), &written, nullptr) && written == data.size();
             CloseHandle(file);
             return ok;
         }
@@ -2134,21 +2166,20 @@ namespace pdnet::gamepatches
         HANDLE WINAPI HookedCreateFile2(LPCWSTR name, DWORD access, DWORD share, DWORD disposition, LPCREATEFILE2_EXTENDED_PARAMETERS params)
         {
             size_t n = name ? wcslen(name) : 0;
-            if (n > 15 && _wcsicmp(name + n - 14, L"menu\\Title.alr") == 0 && (name[n - 15] == L'/' || name[n - 15] == L'\\')) // "Assets/Data/menu\Title.alr"
+            if (n > 16 && _wcsicmp(name + n - 15, L"menu\\FDLogo.alr") == 0 && (name[n - 16] == L'/' || name[n - 16] == L'\\')) // "Assets/Data/menu\FDLogo.alr"
             {
                 static std::once_flag once;
                 static std::wstring copy;
                 std::call_once(once, [name]
                 {
-                    std::wstring path = LocalStatePath() + L"\\pdnet\\Title.alr";
+                    std::wstring path = LocalStatePath() + L"\\pdnet\\FDLogo.alr";
                     if (MakeTitleCopy(name, path)) copy = path;
-                    Log(L"gamepatch: title screen %s", copy.empty() ? L"left as it is (picture not as expected)" : L"reads \"Community Edition\"");
+                    Log(L"gamepatch: title screen %s", copy.empty() ? L"left as it is (logo file not as expected)" : L"reads \"Community Edition\"");
                 });
                 if (!copy.empty()) return g_createFile2(copy.c_str(), access, share, disposition, params);
             }
             return g_createFile2(name, access, share, disposition, params);
         }
-
         // Returns false until Windows has filled in PDUWP.exe's imports (pdlaunch injects pdnet before that).
         bool PatchCreateFile2()
         {
