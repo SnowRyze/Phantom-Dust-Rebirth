@@ -42,7 +42,12 @@ namespace winrt::Microsoft::Xbox::Services::Leaderboard::implementation
         if (id == L"CurrentMPRanking" && extra.empty()) extra.emplace_back(L"TotalWin");
 
         std::vector<Row> all;
-        for (auto& r : ::pdnet::scores::Ranks(winrt::to_string(id))) all.push_back({ r, {} });
+        for (auto& r : ::pdnet::scores::Ranks(winrt::to_string(id)))
+        {
+            if (r.me) r.name = winrt::to_string(::pdnet::xsapi::NameOf(::pdnet::xsapi::LocalXuid())); // the current display_name
+            ::pdnet::xsapi::RememberName(XuidOf(r), winrt::to_hstring(r.name).c_str()); // for ProfileService
+            all.push_back({ r, {} });
+        }
         for (auto& stat : extra)
         {
             std::map<std::string, int32_t> scores;

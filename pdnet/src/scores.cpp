@@ -156,6 +156,7 @@ namespace pdnet::scores
                     rec.userId = Narrow(*api, r->UserId);
                     rec.name = r->UserDisplayName ? r->UserDisplayName : "";
                     rec.me = rec.userId == me;
+                    if (rec.me) Log(L"scores: %S: this player is rank %u with %d, EOS name '%S'", board.c_str(), rec.rank, rec.score, rec.name.c_str());
                     if (rec.me && rec.name.empty()) rec.name = winrt::to_string(eos::DisplayName());
                     if (rec.name.empty()) rec.name = "Player " + rec.userId.substr(0, 6);
                     out.push_back(std::move(rec));

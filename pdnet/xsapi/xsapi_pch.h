@@ -1,4 +1,4 @@
-﻿#pragma once
+#pragma once
 // Precompiled-style include for pdnet's XSAPI stand-in (stubs/ and gen/module.g.cpp).
 #include "../src/pch.h"
 #include "../src/log.h"
@@ -33,6 +33,11 @@ namespace pdnet::xsapi
 
     // This PC's player id (decimal, like an XUID): random once, then kept in LocalState\pdnet\identity.txt.
     const std::wstring& LocalXuid();
+
+    // Player names by player id, for ProfileService (the scoreboard asks it for the names of its rows). This PC's
+    // own id always gives the current display_name.
+    void RememberName(const std::wstring& xuid, const std::wstring& name);
+    std::wstring NameOf(const std::wstring& xuid);
 }
 #define PDNET_XSAPI_STUB(fn) do { ::pdnet::xsapi::ReportStub(fn); throw ::winrt::hresult_not_implemented(); } while (0)
 #define PDNET_XSAPI_STUB_NOEXCEPT(fn) ::pdnet::xsapi::ReportStub(fn)

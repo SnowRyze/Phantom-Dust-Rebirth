@@ -47,6 +47,26 @@ namespace pdnet::xsapi
         return xuid;
     }
 
+    namespace
+    {
+        std::mutex g_namesLock;
+        std::map<std::wstring, std::wstring> g_names;
+    }
+
+    void RememberName(const std::wstring& xuid, const std::wstring& name)
+    {
+        std::lock_guard guard(g_namesLock);
+        g_names[xuid] = name;
+    }
+
+    std::wstring NameOf(const std::wstring& xuid)
+    {
+        if (xuid == LocalXuid()) return GetConfig().displayName;
+        std::lock_guard guard(g_namesLock);
+        auto it = g_names.find(xuid);
+        return it == g_names.end() ? std::wstring{} : it->second;
+    }
+
     HRESULT GetActivationFactory(HSTRING classId, IActivationFactory** factory)
     {
         *factory = nullptr;
