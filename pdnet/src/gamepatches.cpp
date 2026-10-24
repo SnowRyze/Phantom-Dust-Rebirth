@@ -2134,7 +2134,7 @@ namespace pdnet::gamepatches
         HANDLE WINAPI HookedCreateFile2(LPCWSTR name, DWORD access, DWORD share, DWORD disposition, LPCREATEFILE2_EXTENDED_PARAMETERS params)
         {
             size_t n = name ? wcslen(name) : 0;
-            if (n > 15 && _wcsicmp(name + n - 15, L"\\Menu\\Title.alr") == 0)
+            if (n > 15 && _wcsicmp(name + n - 14, L"menu\\Title.alr") == 0 && (name[n - 15] == L'/' || name[n - 15] == L'\\')) // "Assets/Data/menu\Title.alr"
             {
                 static std::once_flag once;
                 static std::wstring copy;
