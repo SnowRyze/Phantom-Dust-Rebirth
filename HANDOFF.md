@@ -459,3 +459,9 @@ EOS Developer Portal, same deployment as eos.ini:
   TagTeamWin, OneOnOneWin each on the stat of the same name (Sum).
 - Client policy (the tester client's): allow stats ingest for the local user and leaderboard queries.
 Log lines start with 'scores:' and 'xsapi-pdnet: scoreboard'.
+
+The scoreboard menu (liveranking, menu 41) shows only the 4 Global boards (PatchScoreboardMenu: items show $LEADERBOARD_3/6/9/12, their handlers store board 3/6/9/12); Friends/Favorites are gone.
+
+## Rated / Unrated lobbies
+
+rated_lobbies=on: the create-session Rating option (session number ratinglimit 0/1, originally ±200 join limit) reads Unrated / Rated; the search option finds one kind; ratingmin/ratingmax are forced to 0/1000000 (no join limit). FUN_1401835c0 (rating += change, match start and end) is hooked: change 0 unless the session pdnet holds has ratinglimit 1 (scores::RatedMatch in xsapi/mpsd.cpp). The game's 'Official Battle rules only' checks (0x1401878c9 jg, 0x1401882c8 ja) are NOPed, so any rule can be Rated. The '[Official Battle] Applies toward Scoreboard Total' line is removed from rule descriptions in every menu script. Wins count in both kinds. Log: 'gamepatch: rating change'.

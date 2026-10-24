@@ -185,6 +185,10 @@ namespace winrt::Microsoft::Xbox::Services::Multiplayer::implementation
         if (auto tags = searchHandleRequest.Tags()) for (auto const& t : tags) handle.tags.emplace_back(t);
         if (auto numbers = searchHandleRequest.NumbersMetadata()) for (auto const& kv : numbers) handle.numbers[std::wstring{ kv.Key() }] = kv.Value();
         if (auto strings = searchHandleRequest.StringsMetadata()) for (auto const& kv : strings) handle.strings[std::wstring{ kv.Key() }] = std::wstring{ kv.Value() };
+        // The lobby's Rating option is Unrated / Rated (ratinglimit 0 / 1, see src/scores.h), not the original
+        // "only players within 200 of the host's rating": everyone may join either kind.
+        if (handle.numbers.count(L"ratingmin")) handle.numbers[L"ratingmin"] = 0;
+        if (handle.numbers.count(L"ratingmax")) handle.numbers[L"ratingmax"] = 1000000;
         std::wstring summary;
         for (auto& [k, v] : handle.numbers) summary += L" " + k + L"=" + std::to_wstring(v);
         for (auto& [k, v] : handle.strings) summary += L" " + k + L"='" + v + L"'";

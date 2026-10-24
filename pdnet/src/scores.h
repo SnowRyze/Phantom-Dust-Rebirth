@@ -34,6 +34,10 @@ namespace pdnet::scores
     // (up to ~12 s). Empty if EOS is signed out or the leaderboard is missing.
     std::vector<Record> Ranks(const std::string& leaderboard);
 
+    // The game session this PC is in: 1 = Rated, 0 = Unrated (its Rating option: search handle ratinglimit),
+    // -1 = no session with that setting found. Implemented in xsapi/mpsd.cpp.
+    int RatedMatch();
+
     // Each player's total of a Sum stat (for extra columns such as TotalWin); missing players are left out.
     std::map<std::string, int32_t> UserScores(const std::string& stat, const std::vector<std::string>& userIds);
 }

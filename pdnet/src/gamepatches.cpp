@@ -2,6 +2,7 @@
 #include "gamepatches.h"
 #include "config.h"
 #include "lobbies.h"
+#include "scores.h"
 #include "log.h"
 #include <set>
 #include <tuple>
@@ -626,6 +627,11 @@ namespace pdnet::gamepatches
             { "help_hint", "Go to the Phantom Dust page on Xbox.com.", "Copy your Xbox Live save (progress, arsenals, play time) into this game. Restart the game afterwards." },
             // Quick Join finds nothing: no lobby this player can play (QuickJoinLabels).
             { "quick_match_hint", "No Quick Matches found", "No game sessions you can join right now" },
+            // The scoreboard shows only the Global boards (PatchScoreboardMenu): their names lose " - Global".
+            { "leaderboard_3", "Ratings - Global", "Ratings" },
+            { "leaderboard_6", "Battle Royale Win Count - Global", "Battle Royale Wins" },
+            { "leaderboard_9", "Tag Team Win Count - Global", "Tag Team Wins" },
+            { "leaderboard_12", "One-on-One Win Count - Global", "One-on-One Wins" },
         };
 
         void RenameStrings()
@@ -721,9 +727,12 @@ namespace pdnet::gamepatches
         // Replaces the 10-byte prologue `mov [rsp+8],rbx / push rdi / sub rsp,0x20` at `ghidra` with a jump to `hook`
         // (through a 14-byte absolute jump in the code cave) and returns a trampoline that runs the prologue and
         // continues in the original function.
-        void* InlineHook(uint64_t ghidra, void* hook, const wchar_t* name)
+        // The first 10 bytes of the hooked function must be `prologue` (position-independent: they run again in the
+        // trampoline). Default: mov [rsp+8],rbx; push rdi; sub rsp,20h.
+        constexpr uint8_t kPrologue[10] = { 0x48, 0x89, 0x5c, 0x24, 0x08, 0x57, 0x48, 0x83, 0xec, 0x20 };
+
+        void* InlineHook(uint64_t ghidra, void* hook, const wchar_t* name, const uint8_t (&prologue)[10] = kPrologue)
         {
-            const uint8_t prologue[10] = { 0x48, 0x89, 0x5c, 0x24, 0x08, 0x57, 0x48, 0x83, 0xec, 0x20 };
             uint8_t* site = At(ghidra);
             if (memcmp(site, prologue, sizeof(prologue)) != 0)
             {
@@ -999,6 +1008,152 @@ namespace pdnet::gamepatches
                         "Select game attributes, and then search for a game session.", "Choose search options, then pick a session."));
                 }
             }).detach();
+        }
+
+        // Rated / Unrated lobbies (rated_lobbies=on). The create-session menu's Rating option (No Restrictions /
+        // With Restrictions: session number ratinglimit 0 / 1, originally "only players within 200 of the host")
+        // becomes Unrated / Rated; the lobby search's Rating option then finds one kind or the other, and the ±200
+        // limit is gone (xsapi/stubs/Multiplayer.MultiplayerService.cpp). A match changes ratings only when Rated:
+        // FUN_1401835c0 (rating += change, at match start and end) is hooked and gets a change of 0 otherwise. The
+        // game rated only the three "Official Battle" rules (rule < 3, checks at 0x1401878c6 and 0x1401882c1); those
+        // checks are removed, so any rule can be Rated.
+        constexpr Relabel kRatedTexts[] = {
+            { "No Restrictions", "Unrated" },
+            { "With Restrictions", "Rated" },
+            { "With Restrictions (%d\xEF\xBD\x9E%d)(You %d)", "Rated" },
+            { "Change the settings for the game session.\nSelect rating restrictions.",
+              "Change the settings for the game session.\nRated: matches change ratings." },
+            { "Your Rating: %d\n\nIf a rating limit is selected, only those 200 above or\nbelow your rating will be allowed to join.",
+              "Your Rating: %d\n\nRated: each match changes your rating.\nUnrated: your rating stays as it is." },
+            { "Create conditions for game session search.\nSelect whether or not to look for games with rating restrictions.",
+              "Create conditions for game session search.\nLook for rated or unrated games." },
+        };
+        constexpr char kOfficialBattle[] = "[Official Battle] Applies toward Scoreboard Total\n";
+
+        // Removes the "[Official Battle]" line from the rule descriptions (any rule can be Rated now).
+        int TrimOfficialBattle(uint8_t* script)
+        {
+            __try
+            {
+                auto code = reinterpret_cast<uint32_t*>(script);
+                uint32_t labelsAt = code[1], strings = code[3];
+                if (code[0] != 0x20) labelsAt += 4, strings += 12;
+                if (labelsAt <= 0x20 || labelsAt > 0x40000 || strings < labelsAt || strings > 0x80000) return -1;
+                char* pool = reinterpret_cast<char*>(script + strings);
+                int done = 0;
+                for (uint32_t* w = code + 0x20 / 4; w < code + labelsAt / 4; ++w)
+                {
+                    if ((*w & 0xffff) != 0x0011) continue;
+                    char* text = pool + (*w >> 16);
+                    if (strncmp(text, kOfficialBattle, sizeof(kOfficialBattle) - 1) != 0) continue;
+                    memmove(text, text + sizeof(kOfficialBattle) - 1, strlen(text + sizeof(kOfficialBattle) - 1) + 1);
+                    ++done;
+                }
+                return done;
+            }
+            __except (EXCEPTION_EXECUTE_HANDLER)
+            {
+                return -1;
+            }
+        }
+
+        // The scoreboard menu (liveranking) lists 12 boards, Friends / Favorites / Global of Ratings, Battle Royale,
+        // Tag Team and One-on-One ($LEADERBOARD_1..12). Only the Global ones are left (scoreboard=on): the first four
+        // items show $LEADERBOARD_3/6/9/12, the other eight are dropped, and the first four items' handlers store
+        // board 3/6/9/12 instead of 1-4, so the rest of the menu works on the Global board as before.
+        constexpr int kRankingMenu = 41;
+
+        int PatchScoreboardMenu(uint8_t* script)
+        {
+            __try
+            {
+                auto code = reinterpret_cast<uint32_t*>(script);
+                constexpr uint32_t kItems = 0x25D4 / 4, kHandlers[4] = { 0x30F8 / 4, 0x3124 / 4, 0x3150 / 4, 0x317C / 4 };
+                constexpr uint32_t kGlobal[4] = { 1232, 1277, 1322, 1369 }; // pool offsets of $LEADERBOARD_3/6/9/12
+                if (code[kItems] == (0x0011u | kGlobal[0] << 16) && code[kItems + 8] == 0x0000000E) return 1; // done before
+                if (code[kItems] != (0x0011u | 1202u << 16) || code[kItems + 22] != (0x0011u | 1369u << 16) || code[kItems + 23] != 0x20680101) return 0;
+                for (int b = 0; b < 4; ++b)
+                    if (code[kHandlers[b]] != (0x000Eu | static_cast<uint32_t>(b + 1) << 16) || (code[kHandlers[b] + 1] & 0xffff) != 0x0103) return 0; // push N ; call-label (store the board)
+                for (int i = 0; i < 12; ++i)
+                {
+                    uint32_t* push = code + kItems + i * 2;
+                    if (i < 4) *push = 0x0011u | kGlobal[i] << 16;
+                    else { push[0] = 0x0000000E; push[1] = 0x0001000D; } // push 0; pop 1
+                }
+                for (int b = 0; b < 4; ++b) code[kHandlers[b]] = 0x000Eu | static_cast<uint32_t>(b * 3 + 3) << 16;
+                return 1;
+            }
+            __except (EXCEPTION_EXECUTE_HANDLER)
+            {
+                return 0;
+            }
+        }
+
+        // Every menu script as it loads (menu table, 87 entries): the Rated texts, and the scoreboard list.
+        void MenuTextPatches(bool rated, bool scoreboard)
+        {
+            std::thread([rated, scoreboard]
+            {
+                constexpr int kMenus = 87;
+                uint8_t* done[kMenus] = {};
+                for (;;)
+                {
+                    Sleep(50);
+                    for (int m = 2; m < kMenus; ++m)
+                    {
+                        uint8_t* script = *reinterpret_cast<uint8_t* volatile*>(At(0x1403fa3d0) + m * 0x18 + 0x10);
+                        if (script == done[m]) continue;
+                        done[m] = script;
+                        if (!script) continue;
+                        if (rated)
+                        {
+                            int texts = RelabelScript(script, kRatedTexts, std::size(kRatedTexts)), official = TrimOfficialBattle(script);
+                            if (texts > 0 || official > 0) Log(L"gamepatch: menu %d: %d Rated text(s), %d Official Battle line(s) removed", m, texts, official);
+                        }
+                        if (scoreboard && m == kRankingMenu)
+                            Log(L"gamepatch: scoreboard menu %s", PatchScoreboardMenu(script) ? L"shows the 4 Global boards only" : L"left as it is (script not as expected)");
+                    }
+                }
+            }).detach();
+        }
+
+        using ApplyRatingFn = int64_t (*)(int64_t, int64_t, int64_t, int64_t, int64_t, int64_t);
+        ApplyRatingFn g_applyRating = nullptr;
+
+        int64_t HookedApplyRating(int64_t a, int64_t change, int64_t c, int64_t d, int64_t e, int64_t f)
+        {
+            static int last = -1;
+            int rated = scores::RatedMatch();
+            if (rated < 0) rated = last; // the session can be gone by the end of the match
+            else last = rated;
+            if (rated != 1)
+            {
+                Log(L"gamepatch: rating change %lld not applied (%s match)", change, rated == 0 ? L"Unrated" : L"unknown -> Unrated");
+                change = 0;
+            }
+            else Log(L"gamepatch: rating change %lld (Rated match)", change);
+            return g_applyRating(a, change, c, d, e, f);
+        }
+
+        void RatedLobbies()
+        {
+            uint8_t* start = At(0x1401878c6); // cmp edi,2 ; jg  (match start: rule > 2 -> no rating)
+            uint8_t* end = At(0x1401882c1);   // cmp dword [rule],2 ; ja  (match end)
+            if (memcmp(start, "\x83\xff\x02\x7f", 4) != 0 || memcmp(end, "\x83\x3d\x34\xf5\x39\x00\x02\x0f\x87", 9) != 0)
+            {
+                Log(L"gamepatch: Rated lobbies skipped - the game code is not what this pdnet expects");
+                return;
+            }
+            constexpr uint8_t kRatingPrologue[10] = { 0x48, 0x89, 0x5c, 0x24, 0x08, 0x48, 0x89, 0x6c, 0x24, 0x10 }; // mov [rsp+8],rbx ; mov [rsp+10h],rbp
+            auto original = reinterpret_cast<ApplyRatingFn>(InlineHook(0x1401835c0, reinterpret_cast<void*>(&HookedApplyRating), L"rating change", kRatingPrologue));
+            if (!original) return;
+            g_applyRating = original;
+            if (!Write(start + 3, { 0x90, 0x90 }) || !Write(end + 7, { 0x90, 0x90, 0x90, 0x90, 0x90, 0x90 }))
+            {
+                Log(L"gamepatch: Rated lobbies: rule checks not removed (VirtualProtect error %lu)", GetLastError());
+                return;
+            }
+            Log(L"gamepatch: Rated lobbies ready (the lobby's Rating option: Unrated / Rated, any rule)");
         }
 
         // The shop's Online Store item (multiplayer only; Xbox store, dead without Xbox Live) becomes Max Credits &
@@ -1327,6 +1482,8 @@ namespace pdnet::gamepatches
             bool micLabel = GetConfig().voiceChat && !GetConfig().voiceClassic; // classic: the option keeps its "Voice Chat" name
             QuickJoinLabels();
             if (GetConfig().shopMaxOut) ShopMaxOut();
+            if (GetConfig().ratedLobbies) RatedLobbies();
+            if (GetConfig().ratedLobbies || GetConfig().scoreboard) MenuTextPatches(GetConfig().ratedLobbies, GetConfig().scoreboard);
             bool arsenal = GetConfig().lobbyArsenalEditor; // the Arsenal Lab button for clients too
             if (GetConfig().lobbyGamertagOption || micLabel || arsenal) LobbyScriptPatches(GetConfig().lobbyGamertagOption, micLabel, arsenal);
         });

@@ -4,6 +4,7 @@
 #include "../src/discord.h"
 #include "../src/config.h"
 #include "../src/gamepatches.h"
+#include "../src/scores.h"
 #include "nametrace.h"
 #include <winrt/Windows.Data.Json.h>
 #include <bcrypt.h>
@@ -983,5 +984,19 @@ namespace pdnet::mpsd
         }
         Log(L"xsapi-pdnet: EOS sign-in lost; %zu shared session(s) are now local only", count);
         if (count && lost) lost();
+    }
+}
+
+namespace pdnet::scores
+{
+    int RatedMatch()
+    {
+        for (auto& s : mpsd::SessionStore::Instance().All())
+        {
+            if (!s || !s->search || !s->FindMember(xsapi::LocalXuid())) continue;
+            auto it = s->search->numbers.find(L"ratinglimit");
+            if (it != s->search->numbers.end()) return it->second != 0 ? 1 : 0;
+        }
+        return -1;
     }
 }
