@@ -28,4 +28,7 @@ namespace pdnet::gamepatches
     // Tag Team voice channels: true while a Tag Team match is being played (not in its lobby). Then `teamOf` maps
     // each player's name (as shown in the lobby) to their team, and `myTeam` is this PC's team.
     bool TagTeamMatch(std::map<std::string, int>& teamOf, int& myTeam);
+
+    // The multiplayer rating as kept in the save (progress.dat; 0x1405b1370), or -1 before the save is loaded.
+    int SavedRating();
 }

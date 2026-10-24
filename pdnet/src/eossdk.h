@@ -8,6 +8,8 @@
 #include <eos_lobby.h>
 #include <eos_rtc.h>
 #include <eos_rtc_audio.h>
+#include <eos_stats.h>
+#include <eos_leaderboards.h>
 #include <Windows/eos_Windows.h>
 #include <map>
 #include <string>
@@ -26,7 +28,13 @@ namespace pdnet::eossdk
         X(EOS_Connect_AddNotifyLoginStatusChanged) X(EOS_Connect_RemoveNotifyLoginStatusChanged)                  \
         X(EOS_ProductUserId_ToString) X(EOS_ProductUserId_FromString) X(EOS_P2P_QueryNATType)                     \
         X(EOS_EResult_ToString)                                                                                   \
-        PDNET_EOS_LOBBY_FUNCTIONS(X) PDNET_EOS_P2P_FUNCTIONS(X) PDNET_EOS_VOICE_FUNCTIONS(X)
+        PDNET_EOS_LOBBY_FUNCTIONS(X) PDNET_EOS_P2P_FUNCTIONS(X) PDNET_EOS_VOICE_FUNCTIONS(X) PDNET_EOS_SCORE_FUNCTIONS(X)
+// Scoreboard: the rating stat and the global leaderboard (see scores.h).
+#define PDNET_EOS_SCORE_FUNCTIONS(X)                                                                              \
+        X(EOS_Platform_GetStatsInterface) X(EOS_Stats_IngestStat)                                                 \
+        X(EOS_Platform_GetLeaderboardsInterface) X(EOS_Leaderboards_QueryLeaderboardRanks)                       \
+        X(EOS_Leaderboards_GetLeaderboardRecordCount) X(EOS_Leaderboards_CopyLeaderboardRecordByIndex)           \
+        X(EOS_Leaderboards_LeaderboardRecord_Release)
 // Voice: each lobby's EOS voice room (see lobbies.h, voice_chat).
 #define PDNET_EOS_VOICE_FUNCTIONS(X)                                                                              \
         X(EOS_Platform_GetRTCInterface) X(EOS_RTC_GetAudioInterface)                                              \

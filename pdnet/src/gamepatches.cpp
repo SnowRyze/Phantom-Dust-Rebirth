@@ -1332,6 +1332,15 @@ namespace pdnet::gamepatches
         });
     }
 
+    // FUN_1400bd7f0 loads it from progress.dat (above 999999: not loaded yet, the game then uses its default);
+    // after a match FUN_1401835c0 adds the change to the current rating (0x14051c0b0, kept within 0-999999) and
+    // FUN_1400bf1f0 copies it here and reports it as the Hero_MP_Ranking event.
+    int SavedRating()
+    {
+        int64_t rating = *reinterpret_cast<int64_t*>(At(0x1405b1370));
+        return rating >= 0 && rating <= 999999 ? static_cast<int>(rating) : -1;
+    }
+
     // In a match or in the lobby: the game's state 0x1404bc950 is 0 or 13 in the lobby / menus (session command 23
     // then reads names from the lobby table), anything else in a match. Each change is logged once, to verify.
     bool TagTeamMatch(std::map<std::string, int>& teamOf, int& myTeam)

@@ -16,6 +16,9 @@ namespace pdnet
         bool testPeer = false;              // test_peer=on: in-process fake second player (debug, see testpeer.h)
         bool menuDebug = false;             // menu_debug=on: log the lobby script's commands (debug, see gamepatches.cpp)
         bool lobbyArsenalEditor = true;     // lobby_arsenal_editor=on: the lobby's invite button opens the Arsenal editor (see gamepatches.h)
+        bool scoreboard = true;             // scoreboard=on: the Scoreboard shows one global EOS leaderboard of the multiplayer rating (see scores.h)
+        std::string scoreboardStat = "RATING";          // scoreboard_stat=: EOS stat that holds each player's rating (aggregation Latest)
+        std::string scoreboardLeaderboard = "GLOBAL_RATING"; // scoreboard_leaderboard=: EOS leaderboard id built on that stat
         bool shopMaxOut = true;             // shop_max_out=on: the shop's Online Store item gives max credits and skills (see gamepatches.cpp)
         bool lobbyGamertagOption = true;    // lobby_gamertag_option=on: the lobby's Gamertag option works even when alone (see gamepatches.cpp)
         bool voiceChat = true;              // voice_chat=on: lobbies get an EOS voice room; the lobby's Mic option mutes only your mic (see lobbies.h)
