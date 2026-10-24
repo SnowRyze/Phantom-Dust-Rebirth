@@ -56,7 +56,7 @@ Edit with Notepad, then restart the game.
                          (also shown on a player lying in Play Dead, until they move or are hit)
   lobby_arsenal_editor=  on/off: the lobby's Arsenal Lab button (was Invite) opens the Arsenal editor
   shop_max_out=          on/off: the shop's Online Store item becomes Max Credits & Skills
-                         (999,999,999 credits and 99 of every skill, DLC skills too)
+                         (up to 5,000,000 credits, 80 of every skill incl. DLC, one 2-School Arsenal Case)
   rated_lobbies=         on/off: the lobby's Rating option is Unrated / Rated (only Rated matches change ratings)
   scoreboard=            on/off: global scoreboards (rating, Battle Royale / Tag Team / One-on-One wins)
   voice_chat=            on/off: voice chat in lobbies (through Epic, no account needed)

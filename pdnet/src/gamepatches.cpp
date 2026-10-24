@@ -1035,13 +1035,16 @@ namespace pdnet::gamepatches
                 for (;;)
                 {
                     Sleep(50);
+                    // Every pass, not only when the pointer changes: the game can load the script again into the
+                    // same buffer (back from the Lobby Browser), which brings the old texts back. Both are no-ops once done.
                     uint8_t* script = *entry;
-                    if (script == done) continue;
+                    bool fresh = script != done;
                     done = script;
                     if (!script) continue;
-                    Log(L"gamepatch: multiplayer menu: Quick Match renamed Quick Join (%d of 2 texts)", RelabelScript(script, kLiveMainTexts, std::size(kLiveMainTexts)));
-                    Log(L"gamepatch: multiplayer menu: OptiMatch renamed Lobby Browser (%d of 1)", RelabelLonger(script, "OptiMatch", "Lobby Browser",
-                        "Select game attributes, and then search for a game session.", "Choose search options, then pick a session."));
+                    int quick = RelabelScript(script, kLiveMainTexts, std::size(kLiveMainTexts));
+                    int browser = RelabelLonger(script, "OptiMatch", "Lobby Browser",
+                        "Select game attributes, and then search for a game session.", "Choose search options, then pick a session.");
+                    if (fresh) Log(L"gamepatch: multiplayer menu: Quick Match renamed Quick Join (%d of 2 texts), OptiMatch renamed Lobby Browser (%d of 1)", quick, browser);
                 }
             }).detach();
         }
@@ -1147,16 +1150,20 @@ namespace pdnet::gamepatches
                     for (int m = 2; m < kMenus; ++m)
                     {
                         uint8_t* script = *reinterpret_cast<uint8_t* volatile*>(At(0x1403fa3d0) + m * 0x18 + 0x10);
-                        if (script == done[m]) continue;
+                        bool fresh = script != done[m];
                         done[m] = script;
                         if (!script) continue;
+                        // Every pass (all no-ops once done): a script loaded again into the same buffer has its old texts.
                         if (rated)
                         {
                             int texts = RelabelScript(script, kRatedTexts, std::size(kRatedTexts)), official = TrimOfficialBattle(script);
-                            if (texts > 0 || official > 0) Log(L"gamepatch: menu %d: %d Rated text(s), %d Official Battle line(s) removed", m, texts, official);
+                            if (fresh && (texts > 0 || official > 0)) Log(L"gamepatch: menu %d: %d Rated text(s), %d Official Battle line(s) removed", m, texts, official);
                         }
                         if (scoreboard && m == kRankingMenu)
-                            Log(L"gamepatch: scoreboard menu %s", PatchScoreboardMenu(script) ? L"items open the Global boards" : L"left as it is (script not as expected)");
+                        {
+                            int patched = PatchScoreboardMenu(script);
+                            if (fresh) Log(L"gamepatch: scoreboard menu %s", patched ? L"items open the Global boards" : L"left as it is (script not as expected)");
+                        }
                     }
                 }
             }).detach();
@@ -1204,7 +1211,7 @@ namespace pdnet::gamepatches
         // The shop's Online Store item (multiplayer only; Xbox store, dead without Xbox Live) becomes Max Credits &
         // Skills. Its handler calls the store routine at 0x1F04 (header, then g9 #3 with 1 starts fetching offers).
         // That routine is rewritten to push kMaxOutCode and call g9 #3, whose table entry is wrapped (HookedStoreStart)
-        // to give the active profile max credits and 99 of every skill instead. The store's own texts (pool 1643-1736,
+        // to top the active profile up instead (MaxOut). The store's own texts (pool 1643-1736,
         // used only by the store's states) hold the item's new label and hint.
         constexpr int kShopMenu = 6;
         constexpr int64_t kMaxOutCode = 2001;
@@ -1212,28 +1219,46 @@ namespace pdnet::gamepatches
         NativeFn g_storeStart = nullptr;
 
         // The game's own reward routines (daily rewards, FUN_1400bb6c0). mode 1: story profile, 2: multiplayer profile.
-        // Skills by catalog number from-to, each + count, capped at 99 (FUN_14015aae0); credits capped at 999,999,999.
+        // Skills by catalog number from-to, each + count, capped at 99 (FUN_14015aae0); credits capped at 999,999,999;
+        // an arsenal case with a given school restriction (FUN_14015c0e0; the case's +0x50, as the arsenal shop sells).
         using GiveSkillsFn = void (*)(uint32_t mode, int from, int to, int count);
         using GiveCreditsFn = void (*)(uint32_t mode, int amount);
+        using GiveCaseFn = void (*)(uint32_t mode, int schools);
+        constexpr int kSkillTarget = 80, kCreditTarget = 5000000, kCaseSchools = 2;
 
+        // Tops the active profile up, so pressing it again gives nothing more: every skill to 80 (catalog numbers 1-999,
+        // the internal id at 0x1404bcca0 + n*4, its count at *(save + 0x3a38) + id), credits to 5,000,000, and one
+        // 2-School Arsenal Case unless the profile already has one (cases: *(save + 0x10a*0x38), 100 bytes each,
+        // count at save + 0x3a48, at most 16).
         void MaxOut()
         {
             uint8_t* save = *reinterpret_cast<uint8_t**>(At(0x1404bec10));
             if (!save) return;
             uint32_t mode = *reinterpret_cast<uint8_t**>(save + 0x33a0) == save + 0x3fb8 ? 2 : 1;
+            auto give = reinterpret_cast<GiveSkillsFn>(At(0x14015bdd0));
+            auto ids = reinterpret_cast<const int32_t*>(At(0x1404bcca0));
+            int skills = 0;
+            for (int n = 1; n < 1000; ++n)
+            {
+                int id = ids[n];
+                if (id < 1 || id > 999) continue;
+                int have = (*reinterpret_cast<int8_t**>(save + 0x3a38))[id]; // re-read: the routine re-points it
+                if (have >= kSkillTarget) continue;
+                give(mode, n, n, kSkillTarget - have);
+                ++skills;
+            }
             auto& credits = *reinterpret_cast<int32_t*>(At(0x14059a9d8));
             int before = credits;
-            reinterpret_cast<GiveSkillsFn>(At(0x14015bdd0))(mode, 1, 999, 99);
-            reinterpret_cast<GiveCreditsFn>(At(0x14015bf90))(mode, 999999999);
-            // Skill counts of the active profile: one byte per skill (internal id) at *(save + 0x3a38).
-            auto counts = *reinterpret_cast<int8_t**>(save + 0x3a38);
-            uint8_t* skills = *reinterpret_cast<uint8_t**>(At(0x1404c5228));
-            int total = skills ? *reinterpret_cast<int32_t*>(skills + 8) - 1 : 0, full = 0;
-            for (int i = 1; counts && i < total && i < 1000; ++i) full += counts[i] == 99;
-            Log(L"gamepatch: shop Max Credits & Skills (%s profile): credits %d -> %d, %d of %d skills at 99",
-                mode == 2 ? L"multiplayer" : L"story", before, credits, full, total - 1);
+            if (credits < kCreditTarget) reinterpret_cast<GiveCreditsFn>(At(0x14015bf90))(mode, kCreditTarget - credits);
+            int cases = *reinterpret_cast<int32_t*>(save + 0x3a48);
+            uint8_t* list = *reinterpret_cast<uint8_t**>(save + 0x10a * 0x38);
+            bool hasCase = false;
+            for (int i = 0; list && i < cases && i < 16; ++i) hasCase |= *reinterpret_cast<int16_t*>(list + i * 100 + 0x50) == kCaseSchools;
+            bool gaveCase = !hasCase && cases < 16;
+            if (gaveCase) reinterpret_cast<GiveCaseFn>(At(0x14015c0e0))(mode, kCaseSchools);
+            Log(L"gamepatch: shop Max Credits & Skills (%s profile): %d skill(s) topped up to %d, credits %d -> %d, 2-School Arsenal Case %s",
+                mode == 2 ? L"multiplayer" : L"story", skills, kSkillTarget, before, credits, gaveCase ? L"given" : hasCase ? L"already owned" : L"not given (16 cases)");
         }
-
         int64_t HookedStoreStart(int64_t* args)
         {
             if (!args || args[0] != kMaxOutCode) return g_storeStart(args);
@@ -1259,7 +1284,7 @@ namespace pdnet::gamepatches
                     strcmp(pool + 1643, "$STORE_TITLE") != 0 || strcmp(pool + 1725, "$STORE_WAIT") != 0)
                     return 0;
                 const char label[] = "Max Credits & Skills";
-                const char hint[] = "Credits to 999,999,999 and every skill (DLC included) to 99.";
+                const char hint[] = "Up to 5,000,000 credits, 80 of each skill, one 2-School Arsenal Case.";
                 static_assert(sizeof(label) + sizeof(hint) <= 1737 - 1643, "store texts too short");
                 memcpy(pool + 1643, label, sizeof(label));
                 memcpy(pool + 1643 + sizeof(label), hint, sizeof(hint));
@@ -1279,7 +1304,7 @@ namespace pdnet::gamepatches
             auto entry = reinterpret_cast<NativeFn*>(At(0x1403dd3e0) + 3 * 8);
             DWORD old = 0;
             if (*entry != reinterpret_cast<NativeFn>(At(0x1400bc710)) || memcmp(At(0x14015bdd0), "\x4c\x8b\xdc\x53", 4) != 0 ||
-                memcmp(At(0x14015bf90), "\x48\x89\x5c\x24\x08", 5) != 0)
+                memcmp(At(0x14015bf90), "\x48\x89\x5c\x24\x08", 5) != 0 || memcmp(At(0x14015c0e0), "\x48\x89\x5c\x24\x08\x48\x89\x6c\x24\x18", 10) != 0)
             {
                 Log(L"gamepatch: shop Max Credits & Skills skipped - the game code is not what this pdnet expects");
                 return;
@@ -1296,9 +1321,11 @@ namespace pdnet::gamepatches
                 {
                     Sleep(50);
                     uint8_t* now = *script;
-                    if (now == done) continue;
+                    bool fresh = now != done;
                     done = now;
-                    if (now) Log(L"gamepatch: shop: Online Store %s", PatchShopScript(now) ? L"is now Max Credits & Skills" : L"left as it is (script not as expected)");
+                    if (!now) continue;
+                    int patched = PatchShopScript(now); // every pass: a reload into the same buffer brings the old script back
+                    if (fresh) Log(L"gamepatch: shop: Online Store %s", patched ? L"is now Max Credits & Skills" : L"left as it is (script not as expected)");
                 }
             }).detach();
         }
