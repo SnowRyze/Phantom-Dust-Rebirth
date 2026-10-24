@@ -1790,7 +1790,7 @@ namespace pdnet::gamepatches
             }
         }
 
-        // A asks to save: "Save all settings? A: Save, B: Cancel" in the hint line and the button bar; while it shows,
+        // A asks to save: "Save all settings?" in a pop-up window (OpenSavePopup) and the button bar; while it shows,
         // A saves everything (a name being typed counts as entered), B cancels, and no other button reaches the screen.
         // The buttons come from g1 #37 (0x1402168a0, wrapped: the script reads them there; A is 0x1010, B 0x2020).
         NativeFn g_buttons = nullptr;
@@ -1809,13 +1809,52 @@ namespace pdnet::gamepatches
         void RefreshHints()
         {
             for (int r = 0; r < kSettingRows; ++r)
-                strcpy_s(g_hintText[r], g_confirmingSave ? "Save all settings? A: Save   B: Cancel" : SettingHelp(r));
+                strcpy_s(g_hintText[r], SettingHelp(r));
+        }
+
+        // The question is a pop-up window of its own: window 8 (the Cross Play detail box, unused now), set up the way the
+        // script sets that box up (menu commands 33 init, 36 size, 37 position, 38 title, 40 lines) and drawn after the
+        // Settings list (menu command 42 draws a window), its text with menu command 24 (absolute x, y).
+        constexpr int kPopupWindow = 8, kPopupX = 150, kPopupY = 160, kPopupW = 340, kPopupH = 104;
+        MenuCommandFn g_drawWindow = nullptr;
+
+        int16_t* WindowAt(int64_t manager, int index) { return reinterpret_cast<int16_t*>(manager + 0x40 + index * 0x103c); }
+
+        void OpenSavePopup()
+        {
+            int64_t manager = MenuManager();
+            if (!manager) return;
+            int16_t current = *reinterpret_cast<int16_t*>(manager + 0x10402); // the script's own window stays current
+            auto cmd = [](uint64_t fn, int64_t a0, int64_t a1) { int64_t args[8] = { a0, a1 }; reinterpret_cast<MenuCommandFn>(At(fn))(args); };
+            cmd(0x140207cd0, kPopupWindow, 2);
+            cmd(0x140207d20, kPopupW, kPopupH);
+            cmd(0x140207d50, kPopupX, kPopupY);
+            cmd(0x140207d80, reinterpret_cast<int64_t>("SAVE SETTINGS"), 0);
+            for (int i = 0; i < 3; ++i) cmd(0x140207e20, reinterpret_cast<int64_t>(""), 0);
+            *reinterpret_cast<int16_t*>(manager + 0x10402) = current;
+        }
+
+        int64_t HookedDrawWindow(int64_t* args)
+        {
+            int64_t result = g_drawWindow(args);
+            int64_t manager = MenuManager();
+            if (!args || !g_confirmingSave || !InSettings() || !manager) return result;
+            int16_t* list = WindowAt(manager, static_cast<int>(args[0]));
+            if (args[0] == kPopupWindow || list[0] != 56 || list[2] != 470) return result; // after the Settings list only
+            int64_t popup[8] = { kPopupWindow };
+            g_drawWindow(popup);
+            *reinterpret_cast<int64_t*>(manager + 0x10408) = reinterpret_cast<int64_t>(WindowAt(manager, kPopupWindow));
+            auto text = [](int x, int y, const char* s) { int64_t a[8] = { x, y, reinterpret_cast<int64_t>(s) }; reinterpret_cast<MenuCommandFn>(At(0x140207870))(a); };
+            text(kPopupX, kPopupY + 34, "\a340cSave all settings?");
+            text(kPopupX, kPopupY + 64, "\a340c\a2#Save      \a3#Cancel");
+            *reinterpret_cast<int64_t*>(manager + 0x10408) = 0;
+            return result;
         }
 
         void SetConfirming(bool on)
         {
             g_confirmingSave = on;
-            RefreshHints();
+            if (on) OpenSavePopup();
             ShowButtonBar(on ? kConfirmBar : kNormalBar);
         }
 
@@ -2077,6 +2116,7 @@ namespace pdnet::gamepatches
             WrapCommand<NativeFn>(0x1403ddde0 + 3 * 8, 0x1400bde50, &HookedSettingFlag, g_settingFlag, L"no Cross Play option");
             WrapCommand<MenuCommandFn>(0x1403eefe0 + 37 * 8, 0x140207d50, &HookedPlaceWindow, g_placeWindow, L"settings window position");
             WrapCommand<MenuCommandFn>(0x1403eefe0 + 88 * 8, 0x140207650, &HookedButtonBar, g_buttonBar, L"settings save button");
+            WrapCommand<MenuCommandFn>(0x1403eefe0 + 42 * 8, 0x140207f00, &HookedDrawWindow, g_drawWindow, L"settings save pop-up");
             WrapCommand<NativeFn>(0x1403fb108, 0x1402168a0, &HookedButtons, g_buttons, L"settings save confirmation");
             if (WrapCommand<SessionCommandFn>(0x1403f1150 + 154 * 8, 0x140214d60, &HookedOptionChanged, g_optionChanged, L"settings rows"))
                 Log(L"gamepatch: in-game Settings ready (multiplayer menu > Settings)");
