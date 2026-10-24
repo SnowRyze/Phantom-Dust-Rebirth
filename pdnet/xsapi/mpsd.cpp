@@ -1008,4 +1008,22 @@ namespace pdnet::scores
         }
         return -1;
     }
+
+    namespace
+    {
+        std::mutex g_resultsLock;
+        std::vector<int> g_resultsRated;
+    }
+
+    void SetSearchResultsRated(std::vector<int> rated)
+    {
+        std::lock_guard guard(g_resultsLock);
+        g_resultsRated = std::move(rated);
+    }
+
+    int SearchResultRated(size_t index)
+    {
+        std::lock_guard guard(g_resultsLock);
+        return index < g_resultsRated.size() ? g_resultsRated[index] : -1;
+    }
 }

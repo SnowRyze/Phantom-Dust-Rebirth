@@ -1401,8 +1401,38 @@ namespace pdnet::gamepatches
             return -1;
         }
 
+        // SESSION INFO (lobby browser, menu 43) draws "Game Rule: %s" with menu command 23 for the session under the
+        // cursor (menu command 55 with 1, 9 gives its row; rows are the last search's results, in order): the rule
+        // gets " (Rated)" or " (Unrated)" after it.
+        constexpr int kSessionListMenu = 43;
+
+        bool RatedRuleText(int64_t* args, char* out, size_t size)
+        {
+            char format[64], rule[48];
+            if (!CopyString(reinterpret_cast<const char*>(args[2]), format, sizeof(format)) || !strstr(format, "Game Rule")) return false;
+            if (!CopyString(reinterpret_cast<const char*>(args[3]), rule, sizeof(rule)) || !rule[0]) return false;
+            int64_t cursor[2] = { 1, 9 }; // the script pushes 9 then 1: the last push is the first argument
+            int64_t row = reinterpret_cast<MenuCommandFn>(*reinterpret_cast<void**>(At(0x1403eefe0) + 55 * 8))(cursor);
+            int rated = row >= 0 ? scores::SearchResultRated(static_cast<size_t>(row)) : -1;
+            if (rated < 0) return false;
+            sprintf_s(out, size, "%s (%s)", rule, rated ? "Rated" : "Unrated");
+            return true;
+        }
+
         int64_t HookedDrawText(int64_t* args)
         {
+            if (args && GetConfig().ratedLobbies && CurrentMenu(MenuManager()) == kSessionListMenu)
+            {
+                static char text[96];
+                if (RatedRuleText(args, text, sizeof(text)))
+                {
+                    int64_t changed[8];
+                    memcpy(changed, args, sizeof(changed));
+                    changed[3] = reinterpret_cast<int64_t>(text);
+                    return g_drawText(changed);
+                }
+                return g_drawText(args);
+            }
             int64_t result = g_drawText(args);
             int icon = GetConfig().voiceTalkIcon;
             if (!args || icon < 0 || icon >= kMnetSprites || !g_drawSprite || CurrentMenu(MenuManager()) != kLobbyMenu) return result;
@@ -1556,6 +1586,7 @@ namespace pdnet::gamepatches
             QuickJoinLabels();
             if (GetConfig().shopMaxOut) ShopMaxOut();
             if (GetConfig().ratedLobbies) RatedLobbies();
+            if (GetConfig().ratedLobbies && !g_drawText) WrapCommand<MenuCommandFn>(0x1403eefe0 + 23 * 8, 0x140207840, &HookedDrawText, g_drawText, L"session info rated text");
             if (GetConfig().ratedLobbies || GetConfig().scoreboard) MenuTextPatches(GetConfig().ratedLobbies, GetConfig().scoreboard);
             if (GetConfig().scoreboard && WrapCommand<MenuCommandFn>(0x1403eefe0 + 40 * 8, 0x140207e20, &HookedAddItem, g_addItem, L"scoreboard list"))
                 Log(L"gamepatch: scoreboard list shows the Global boards only");

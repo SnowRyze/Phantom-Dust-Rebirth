@@ -40,6 +40,11 @@ namespace pdnet::scores
     // -1 = no session with that setting found. Implemented in xsapi/mpsd.cpp.
     int RatedMatch();
 
+    // The Rated setting of the sessions the last search returned, in the order the game lists them (1 / 0 / -1).
+    // Implemented in xsapi/mpsd.cpp; set by the search (Multiplayer.MultiplayerService.cpp).
+    void SetSearchResultsRated(std::vector<int> rated);
+    int SearchResultRated(size_t index);
+
     // Players' names (UTF-8) by EOS user id, from the PlayerName0-8 stats (each player's display_name, sent once per
     // session when the scoreboard opens; aggregation Latest).
     std::map<std::string, std::string> DisplayNames(const std::vector<std::string>& userIds);
