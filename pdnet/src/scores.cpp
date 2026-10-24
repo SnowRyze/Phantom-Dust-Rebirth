@@ -13,6 +13,7 @@ namespace pdnet::scores
 {
     void SubmitRating(int) {}
     void AddWin(const std::string&) {}
+    void MatchPlayed(const std::string&, int) {}
     std::vector<Record> Ranks(const std::string&) { return {}; }
     std::map<std::string, std::string> DisplayNames(const std::vector<std::string>&) { return {}; }
     std::map<std::string, int32_t> UserScores(const std::string&, const std::vector<std::string>&) { return {}; }
@@ -166,6 +167,15 @@ namespace pdnet::scores
         g_ranks.erase(mode); // show it next time the board opens
     }
 
+    void MatchPlayed(const std::string& mode, int rating)
+    {
+        if (!GetConfig().scoreboard || !eos::SignedIn()) return;
+        SubmitRating(rating);
+        SubmitName();
+        if (!mode.empty()) Ingest({ { mode, 0 } }); // lists the player on that mode's board (0 wins added)
+        std::lock_guard guard(g_lock);
+        g_ranks.clear(); // show it next time the scoreboard opens
+    }
     std::vector<Record> Ranks(const std::string& board)
     {
         if (!GetConfig().scoreboard || !eos::SignedIn()) return {};

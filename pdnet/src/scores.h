@@ -32,6 +32,10 @@ namespace pdnet::scores
     // A multiplayer win: `mode` is BattleRoyaleWin, TagTeamWin or OneOnOneWin. Adds 1 to it.
     void AddWin(const std::string& mode);
 
+    // A finished online match: the player shows on the scoreboard from now on - rating, name, and 0 added to that
+    // mode's win stat (so they appear on its board too). `mode` may be empty.
+    void MatchPlayed(const std::string& mode, int rating);
+
     // A leaderboard's ranks (EOS keeps the top 1000), refreshed at most every 20 s. Waits on the calling thread
     // (up to ~12 s). Empty if EOS is signed out or the leaderboard is missing.
     std::vector<Record> Ranks(const std::string& leaderboard);

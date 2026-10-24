@@ -1191,13 +1191,17 @@ namespace pdnet::gamepatches
         using ApplyRatingFn = int64_t (*)(int64_t, int64_t, int64_t, int64_t, int64_t, int64_t);
         ApplyRatingFn g_applyRating = nullptr;
 
-        // Wins for the scoreboard come from the same two calls: at match start the game takes a 100-point deposit
-        // (FUN_140187710 calls with a negative change), at the end it gives back 100 plus the result
-        // (FUN_140188290, result from FUN_1401881d0), so start + end > 0 is a win. Counted in Rated and Unrated
-        // matches alike, by game type (0x1405277b4: 0 Battle Royale, 1 Tag Team, 2 One-on-One). The game's own
-        // win events (achievement progress) never arrive, so they are not used.
+        // A finished online match (the end call, from FUN_140188290) puts the player on the scoreboard right away,
+        // Rated or Unrated: rating, name and 0 wins on that mode's board (scores::MatchPlayed). Wins themselves come
+        // from the game's win events (Events.EventsService.cpp): the rating change is no guide, a Battle Royale win
+        // can lose rating points.
+        // A match's rating: at the start the game takes a deposit (FUN_140187710 calls with a negative change), at
+        // the end it gives back the deposit plus the result (FUN_140188290). The result is evened out so a win always
+        // nets at least +1 and a loss (no win event this match, see NoteMatchWin) at least -1: the game's own maths
+        // can make a Battle Royale win cost points. Only the end change is adjusted.
         int64_t g_matchStartChange = 0;
         bool g_matchStarted = false;
+        std::atomic<bool> g_matchWon{ false };
 
         int64_t HookedApplyRating(int64_t a, int64_t change, int64_t c, int64_t d, int64_t e, int64_t f)
         {
@@ -1207,17 +1211,20 @@ namespace pdnet::gamepatches
             {
                 g_matchStartChange = change;
                 g_matchStarted = true;
+                g_matchWon = false;
             }
             else if (atEnd && g_matchStarted)
             {
                 g_matchStarted = false;
-                int64_t net = g_matchStartChange + change;
-                int type = *reinterpret_cast<int32_t*>(At(0x1405277b4));
-                static const char* kWins[] = { "BattleRoyaleWin", "TagTeamWin", "OneOnOneWin" };
-                Log(L"gamepatch: match result %+lld (%s)", net, net > 0 ? L"win" : L"no win");
-                if (net > 0 && type >= 0 && type < 3 && gamepatches::MultiplayerProfile()) scores::AddWin(kWins[type]);
+                int64_t net = g_matchStartChange + change, wanted = net;
+                if (g_matchWon && net < 1) wanted = 1;
+                if (!g_matchWon && net > -1) wanted = -1;
+                if (wanted != net)
+                {
+                    Log(L"gamepatch: %s would net %+lld, made %+lld", g_matchWon ? L"win" : L"loss", net, wanted);
+                    change += wanted - net;
+                }
             }
-
             static int last = -1;
             int rated = scores::RatedMatch();
             if (rated < 0) rated = last; // the session can be gone by the end of the match
@@ -1228,7 +1235,14 @@ namespace pdnet::gamepatches
                 change = 0;
             }
             else Log(L"gamepatch: rating change %lld (Rated match)", change);
-            return g_applyRating(a, change, c, d, e, f);
+            int64_t result = g_applyRating(a, change, c, d, e, f);
+            if (atEnd && gamepatches::MultiplayerProfile())
+            {
+                static const char* kModes[] = { "BattleRoyaleWin", "TagTeamWin", "OneOnOneWin" };
+                int type = *reinterpret_cast<int32_t*>(At(0x1405277b4));
+                scores::MatchPlayed(type >= 0 && type < 3 ? kModes[type] : "", gamepatches::SavedRating());
+            }
+            return result;
         }
         void RatedLobbies()
         {
@@ -1640,6 +1654,8 @@ namespace pdnet::gamepatches
     // FUN_1400bd7f0 loads it from progress.dat (above 999999: not loaded yet, the game then uses its default);
     // after a match FUN_1401835c0 adds the change to the current rating (0x14051c0b0, kept within 0-999999) and
     // FUN_1400bf1f0 copies it here and reports it as the Hero_MP_Ranking event.
+    void NoteMatchWin() { g_matchWon = true; }
+
     int SavedRating()
     {
         int64_t rating = *reinterpret_cast<int64_t*>(At(0x1405b1370));

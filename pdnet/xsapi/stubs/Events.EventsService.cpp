@@ -1,5 +1,6 @@
 // pdnet-hand: the game's Hero_MP_Ranking event (its multiplayer rating, measurement "Count") goes to the EOS
-// scoreboard (src/scores.h); every other event is dropped, as before (wins come from the match result).
+// scoreboard (src/scores.h), and so do its win events (BattleRoyaleWin / TagTeamWin / OneOnOneWin, +1 to that mode);
+// every other event is dropped, as before.
 #include "xsapi_pch.h"
 #include "Events.EventsService.h"
 #include "../../src/scores.h"
@@ -21,9 +22,13 @@ namespace winrt::Microsoft::Xbox::Services::Events::implementation
                 if (seen.insert(std::wstring{ eventName }).second) ::pdnet::Log(L"xsapi-pdnet: game event %s (first time)", eventName.c_str());
             }
             if (eventName != L"BattleRoyaleWin" && eventName != L"TagTeamWin" && eventName != L"OneOnOneWin") return false;
-            // Wins are counted from the match result instead (gamepatches.cpp, HookedApplyRating): these are
-            // achievement progress and were never seen in a match.
-            ::pdnet::Log(L"xsapi-pdnet: win event %s (not counted: wins come from the match result)", eventName.c_str());
+            bool online = ::pdnet::gamepatches::MultiplayerProfile();
+            ::pdnet::Log(L"xsapi-pdnet: win event %s%s", eventName.c_str(), online ? L"" : L" (story profile: not counted)");
+            if (online)
+            {
+                ::pdnet::scores::AddWin(winrt::to_string(eventName));
+                ::pdnet::gamepatches::NoteMatchWin(); // the match's rating result is then at least +1
+            }
             return true;
         }
     }
