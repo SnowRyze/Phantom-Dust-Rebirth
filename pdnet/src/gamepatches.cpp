@@ -2149,30 +2149,43 @@ namespace pdnet::gamepatches
             return g_createFile2(name, access, share, disposition, params);
         }
 
-        void TitleSubtitle()
+        // Returns false until Windows has filled in PDUWP.exe's imports (pdlaunch injects pdnet before that).
+        bool PatchCreateFile2()
         {
             auto base = Image();
             auto nt = reinterpret_cast<IMAGE_NT_HEADERS*>(base + reinterpret_cast<IMAGE_DOS_HEADER*>(base)->e_lfanew);
             auto& dir = nt->OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_IMPORT];
             for (auto desc = reinterpret_cast<IMAGE_IMPORT_DESCRIPTOR*>(base + dir.VirtualAddress); dir.VirtualAddress && desc->Name; ++desc)
             {
-                auto names = reinterpret_cast<IMAGE_THUNK_DATA*>(base + (desc->OriginalFirstThunk ? desc->OriginalFirstThunk : desc->FirstThunk));
+                if (!desc->OriginalFirstThunk) continue;
+                auto names = reinterpret_cast<IMAGE_THUNK_DATA*>(base + desc->OriginalFirstThunk);
                 auto slots = reinterpret_cast<IMAGE_THUNK_DATA*>(base + desc->FirstThunk);
                 for (; names->u1.AddressOfData; ++names, ++slots)
                 {
                     if (IMAGE_SNAP_BY_ORDINAL(names->u1.Ordinal) ||
                         strcmp(reinterpret_cast<IMAGE_IMPORT_BY_NAME*>(base + names->u1.AddressOfData)->Name, "CreateFile2") != 0)
                         continue;
+                    if (slots->u1.Function == names->u1.AddressOfData) return false; // not filled in yet
                     g_createFile2 = reinterpret_cast<CreateFile2Fn>(slots->u1.Function);
                     DWORD old;
                     VirtualProtect(&slots->u1.Function, sizeof(ULONG_PTR), PAGE_READWRITE, &old);
                     slots->u1.Function = reinterpret_cast<ULONG_PTR>(&HookedCreateFile2);
                     VirtualProtect(&slots->u1.Function, sizeof(ULONG_PTR), old, &old);
-                    return;
+                    return true;
                 }
             }
-            Log(L"gamepatch: title screen: CreateFile2 import not found");
+            return false;
         }
+    }
+
+    bool HookFileOpens()
+    {
+        static std::atomic<bool> done{ false };
+        static std::mutex lock;
+        if (done) return true;
+        std::lock_guard guard(lock);
+        if (!done && PatchCreateFile2()) done = true;
+        return done;
     }
 
     void Apply()
@@ -2180,7 +2193,7 @@ namespace pdnet::gamepatches
         static std::once_flag once;
         std::call_once(once, []
         {
-            TitleSubtitle();
+            if (!HookFileOpens()) Log(L"gamepatch: title screen: CreateFile2 import not found");
             g_bodyTags = GetConfig().nametagsOnBodies ? 1 : 0;
             if (NametagsOnBodies())
             {

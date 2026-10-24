@@ -7,6 +7,10 @@ namespace pdnet::gamepatches
 {
     void Apply();
 
+    // "Community Edition" on the title screen: the game's file opens are hooked (CreateFile2). The title picture loads
+    // seconds before Apply runs, so pdlaunch's watcher calls this until it returns true.
+    bool HookFileOpens();
+
     // Nametags on dead bodies can be switched at any time: in a lobby the game host's setting applies to everyone
     // (xsapi/mpsd.cpp reads it from the host's lobby member attributes), otherwise this PC's nametags_on_bodies.
     void SetNametagsOnBodies(bool on, const wchar_t* why);

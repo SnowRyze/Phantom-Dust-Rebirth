@@ -69,6 +69,7 @@ extern "C" DWORD WINAPI PdInjectedInit(LPVOID)
         for (int ms = 0; ms < 60000 && !pdnet::FirstXboxActivationSeen(); ++ms)
         {
             pdnet::InstallActivationHooks(g_self, true);
+            pdnet::gamepatches::HookFileOpens(); // before the title screen loads its picture
             Sleep(1);
         }
     }).detach();
