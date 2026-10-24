@@ -5,6 +5,8 @@
 //   CurrentMPRanking  the multiplayer rating (stat aggregation Latest); its rows also show TotalWin
 //   BattleRoyaleWin, TagTeamWin, OneOnOneWin   wins per mode (aggregation Sum)
 //   TotalWin          all three added up (stat only, aggregation Sum)
+//   PlayerName0-8     the player's display_name, packed 31 bits per stat (aggregation Latest; EOS keeps no names
+//                     for device-id accounts)
 // The rating comes from the game's Hero_MP_Ranking event (and once per session from the save); a win event adds 1
 // to its mode and to TotalWin. All of it is set up in the EOS Developer Portal (HANDOFF, "Scoreboard").
 // Plain C++ for the XSAPI stand-in.
@@ -38,7 +40,8 @@ namespace pdnet::scores
     // -1 = no session with that setting found. Implemented in xsapi/mpsd.cpp.
     int RatedMatch();
 
-    // Players' names (UTF-8) by EOS user id: the name each last signed in with (EOS Connect).
+    // Players' names (UTF-8) by EOS user id, from the PlayerName0-8 stats (each player's display_name, sent once per
+    // session when the scoreboard opens; aggregation Latest).
     std::map<std::string, std::string> DisplayNames(const std::vector<std::string>& userIds);
 
     // Each player's total of a Sum stat (for extra columns such as TotalWin); missing players are left out.

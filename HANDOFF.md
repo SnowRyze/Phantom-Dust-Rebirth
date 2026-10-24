@@ -454,7 +454,10 @@ game's name; friends views get the global board too.
   only while the save's multiplayer profile is active.
 
 EOS Developer Portal, same deployment as eos.ini:
-- Stats: CurrentMPRanking (Latest), TotalWin (Sum), BattleRoyaleWin (Sum), TagTeamWin (Sum), OneOnOneWin (Sum).
+- Stats: CurrentMPRanking (Latest), TotalWin (Sum), BattleRoyaleWin (Sum), TagTeamWin (Sum), OneOnOneWin (Sum),
+  PlayerName0 ... PlayerName8 (Latest): each player's display_name, 31 bits per stat (EOS leaderboards and EOS
+  Connect keep no names for device-id accounts). The game asks for boards as Rating/BattleRoyal/TagTeam/OneOnOne
+  and for row names through ProfileService.
 - Leaderboards (descending, no end date): CurrentMPRanking on stat CurrentMPRanking (Latest); BattleRoyaleWin,
   TagTeamWin, OneOnOneWin each on the stat of the same name (Sum).
 - Client policy (the tester client's): allow stats ingest for the local user and leaderboard queries.

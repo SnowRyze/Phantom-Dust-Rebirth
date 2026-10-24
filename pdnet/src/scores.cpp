@@ -77,26 +77,74 @@ namespace pdnet::scores
             return future.get();
         }
 
-        // Adds `amount` to one stat for this PC's player (asynchronous). On failure `failed` runs (EOS thread).
-        void Ingest(const std::string& stat, int amount, std::function<void()> failed = nullptr)
+        // Sends stat amounts for this PC's player in one call (asynchronous). On failure `failed` runs (EOS thread).
+        void Ingest(std::vector<std::pair<std::string, int>> amounts, std::function<void()> failed = nullptr)
         {
             std::string me = winrt::to_string(eos::LocalUserId());
-            eos::Post([me, stat, amount, failed](void* platform)
+            eos::Post([me, amounts, failed](void* platform)
             {
                 const Api* api = eossdk::Load(ModuleDir());
                 if (!api || !platform) return;
                 EOS_HStats stats = api->EOS_Platform_GetStatsInterface(static_cast<EOS_HPlatform>(platform));
                 EOS_ProductUserId user = api->EOS_ProductUserId_FromString(me.c_str());
-                EOS_Stats_IngestData data{ EOS_STATS_INGESTDATA_API_LATEST, stat.c_str(), amount };
-                EOS_Stats_IngestStatOptions o{ EOS_STATS_INGESTSTAT_API_LATEST, user, &data, 1, user };
-                auto done = new Pending<EOS_Stats_IngestStatCompleteCallbackInfo>{ [stat, amount, failed](const EOS_Stats_IngestStatCompleteCallbackInfo* info)
+                std::vector<EOS_Stats_IngestData> data;
+                for (auto& [stat, amount] : amounts) data.push_back({ EOS_STATS_INGESTDATA_API_LATEST, stat.c_str(), amount });
+                EOS_Stats_IngestStatOptions o{ EOS_STATS_INGESTSTAT_API_LATEST, user, data.data(), static_cast<uint32_t>(data.size()), user };
+                std::wstring what = amounts.size() == 1 ? std::to_wstring(amounts[0].second) + L" sent to stat " + Wide(amounts[0].first.c_str())
+                                                        : std::to_wstring(amounts.size()) + L" stats sent (" + Wide(amounts[0].first.c_str()) + L"...)";
+                auto done = new Pending<EOS_Stats_IngestStatCompleteCallbackInfo>{ [what, failed](const EOS_Stats_IngestStatCompleteCallbackInfo* info)
                 {
                     const Api* api = eossdk::Load(ModuleDir());
-                    Log(L"scores: %d sent to stat %S - %s", amount, stat.c_str(), api ? Result(*api, info->ResultCode).c_str() : L"?");
+                    Log(L"scores: %s - %s", what.c_str(), api ? Result(*api, info->ResultCode).c_str() : L"?");
                     if (info->ResultCode != EOS_EResult::EOS_Success && failed) failed();
                 } };
                 api->EOS_Stats_IngestStat(stats, &o, done, &Pending<EOS_Stats_IngestStatCompleteCallbackInfo>::Thunk);
             });
+        }
+
+        // Player names on EOS: leaderboards and EOS Connect keep none for device-id accounts, so each player's name
+        // (UTF-8, up to 32 bytes) is kept in kNameStats stats PlayerName0.. (aggregation Latest), 31 bits each
+        // (always positive), low bits first.
+        constexpr int kNameStats = 9;
+        constexpr size_t kNameBytes = 32;
+        bool g_nameSent = false;
+
+        std::string NameStat(int i) { return "PlayerName" + std::to_string(i); }
+
+        std::vector<int32_t> PackName(std::string name)
+        {
+            if (name.size() > kNameBytes)
+            {
+                size_t n = kNameBytes;
+                while (n > 0 && (static_cast<unsigned char>(name[n]) & 0xC0) == 0x80) --n; // keep UTF-8 sequences whole
+                name.resize(n);
+            }
+            std::vector<int32_t> out(kNameStats, 0);
+            for (size_t bit = 0; bit < name.size() * 8; ++bit)
+                if (static_cast<unsigned char>(name[bit / 8]) >> (bit % 8) & 1) out[bit / 31] |= 1 << (bit % 31);
+            return out;
+        }
+
+        std::string UnpackName(const std::vector<int32_t>& values)
+        {
+            std::string name(kNameBytes, '\0');
+            for (size_t bit = 0; bit < kNameBytes * 8; ++bit)
+                if (values[bit / 31] >> (bit % 31) & 1) name[bit / 8] |= static_cast<char>(1 << (bit % 8));
+            name.resize(strnlen(name.c_str(), kNameBytes));
+            return name;
+        }
+
+        void SubmitName()
+        {
+            {
+                std::lock_guard guard(g_lock);
+                if (g_nameSent) return;
+                g_nameSent = true;
+            }
+            std::vector<std::pair<std::string, int>> amounts;
+            auto packed = PackName(winrt::to_string(eos::DisplayName()));
+            for (int i = 0; i < kNameStats; ++i) amounts.emplace_back(NameStat(i), packed[i]);
+            Ingest(amounts, [] { std::lock_guard guard(g_lock); g_nameSent = false; });
         }
     }
 
@@ -108,14 +156,13 @@ namespace pdnet::scores
             if (rating == g_lastRating) return;
             g_lastRating = rating;
         }
-        Ingest(kRating, rating, [] { std::lock_guard guard(g_lock); g_lastRating = -1; }); // failed: try again next time
+        Ingest({ { kRating, rating } }, [] { std::lock_guard guard(g_lock); g_lastRating = -1; }); // failed: try again next time
     }
 
     void AddWin(const std::string& mode)
     {
         if (!GetConfig().scoreboard || !eos::SignedIn()) return;
-        Ingest(mode, 1);
-        Ingest(kTotalWins, 1);
+        Ingest({ { mode, 1 }, { kTotalWins, 1 } });
         std::lock_guard guard(g_lock);
         g_ranks.erase(mode); // show it next time the board opens
     }
@@ -124,6 +171,7 @@ namespace pdnet::scores
     {
         if (!GetConfig().scoreboard || !eos::SignedIn()) return {};
         SubmitRating(gamepatches::SavedRating()); // once per session (and after any change): players show up before their next match
+        SubmitName();
         {
             std::lock_guard guard(g_lock);
             auto it = g_ranks.find(board);
@@ -166,8 +214,8 @@ namespace pdnet::scores
             } };
             api.EOS_Leaderboards_QueryLeaderboardRanks(boards, &o, done, &Pending<EOS_Leaderboards_OnQueryLeaderboardRanksCompleteCallbackInfo>::Thunk);
         });
-        // Leaderboard records carry no names for device-id accounts: EOS Connect keeps the name each player last
-        // signed in with (their display_name), so a renamed player shows their new name on the same entry.
+        // Leaderboard records carry no names for device-id accounts: each player's display_name is kept in the
+        // PlayerName stats (sent every session), so a renamed player shows their new name on the same entry.
         std::vector<std::string> unnamed;
         for (auto& r : ranks) if (r.name.empty()) unnamed.push_back(r.userId);
         if (!unnamed.empty())
@@ -189,39 +237,52 @@ namespace pdnet::scores
     std::map<std::string, std::string> DisplayNames(const std::vector<std::string>& userIds)
     {
         std::map<std::string, std::string> out;
-        for (size_t at = 0; at < userIds.size(); at += 128) // EOS takes up to 128 ids per query
+        for (size_t at = 0; at < userIds.size(); at += 100)
         {
-            std::vector<std::string> batch(userIds.begin() + at, userIds.begin() + (std::min)(userIds.size(), at + 128));
+            std::vector<std::string> batch(userIds.begin() + at, userIds.begin() + (std::min)(userIds.size(), at + 100));
             out.merge(Run<std::map<std::string, std::string>>(L"player names query", [batch](const Api& api, EOS_HPlatform platform, EOS_ProductUserId user, std::function<void(std::map<std::string, std::string>)> finish)
             {
-                EOS_HConnect connect = api.EOS_Platform_GetConnectInterface(platform);
-                auto ids = std::make_shared<std::vector<EOS_ProductUserId>>();
-                for (auto& id : batch) ids->push_back(api.EOS_ProductUserId_FromString(id.c_str()));
-                EOS_Connect_QueryProductUserIdMappingsOptions o{ EOS_CONNECT_QUERYPRODUCTUSERIDMAPPINGS_API_LATEST, user, EOS_EExternalAccountType::EOS_EAT_EPIC,
-                                                                 ids->data(), static_cast<uint32_t>(ids->size()) };
-                auto done = new Pending<EOS_Connect_QueryProductUserIdMappingsCallbackInfo>{ [connect, ids, batch, finish](const EOS_Connect_QueryProductUserIdMappingsCallbackInfo* info)
+                EOS_HLeaderboards boards = api.EOS_Platform_GetLeaderboardsInterface(platform);
+                std::vector<EOS_ProductUserId> ids;
+                for (auto& id : batch) ids.push_back(api.EOS_ProductUserId_FromString(id.c_str()));
+                auto statNames = std::make_shared<std::vector<std::string>>();
+                for (int i = 0; i < kNameStats; ++i) statNames->push_back(NameStat(i));
+                std::vector<EOS_Leaderboards_UserScoresQueryStatInfo> info;
+                for (auto& n : *statNames) info.push_back({ EOS_LEADERBOARDS_USERSCORESQUERYSTATINFO_API_LATEST, n.c_str(), EOS_ELeaderboardAggregation::EOS_LA_Latest });
+                EOS_Leaderboards_QueryLeaderboardUserScoresOptions o{ EOS_LEADERBOARDS_QUERYLEADERBOARDUSERSCORES_API_LATEST, ids.data(), static_cast<uint32_t>(ids.size()),
+                                                                      info.data(), static_cast<uint32_t>(info.size()), EOS_LEADERBOARDS_TIME_UNDEFINED, EOS_LEADERBOARDS_TIME_UNDEFINED, user };
+                auto done = new Pending<EOS_Leaderboards_OnQueryLeaderboardUserScoresCompleteCallbackInfo>{ [boards, statNames, finish](const EOS_Leaderboards_OnQueryLeaderboardUserScoresCompleteCallbackInfo* info)
                 {
                     const Api* api = eossdk::Load(ModuleDir());
-                    std::map<std::string, std::string> names;
+                    std::map<std::string, std::vector<int32_t>> values;
                     if (info->ResultCode != EOS_EResult::EOS_Success)
                         Log(L"scores: player names query failed - %s", Result(*api, info->ResultCode).c_str());
                     else
-                        for (size_t i = 0; i < ids->size(); ++i)
+                        for (int s = 0; s < kNameStats; ++s)
                         {
-                            EOS_Connect_CopyProductUserInfoOptions co{ EOS_CONNECT_COPYPRODUCTUSERINFO_API_LATEST, (*ids)[i] };
-                            EOS_Connect_ExternalAccountInfo* account = nullptr;
-                            if (api->EOS_Connect_CopyProductUserInfo(connect, &co, &account) != EOS_EResult::EOS_Success || !account) continue;
-                            if (account->DisplayName) names[batch[i]] = account->DisplayName;
-                            api->EOS_Connect_ExternalAccountInfo_Release(account);
+                            const char* stat = (*statNames)[s].c_str();
+                            EOS_Leaderboards_GetLeaderboardUserScoreCountOptions co{ EOS_LEADERBOARDS_GETLEADERBOARDUSERSCORECOUNT_API_LATEST, stat };
+                            uint32_t n = api->EOS_Leaderboards_GetLeaderboardUserScoreCount(boards, &co);
+                            for (uint32_t i = 0; i < n; ++i)
+                            {
+                                EOS_Leaderboards_CopyLeaderboardUserScoreByIndexOptions so{ EOS_LEADERBOARDS_COPYLEADERBOARDUSERSCOREBYINDEX_API_LATEST, i, stat };
+                                EOS_Leaderboards_LeaderboardUserScore* score = nullptr;
+                                if (api->EOS_Leaderboards_CopyLeaderboardUserScoreByIndex(boards, &so, &score) != EOS_EResult::EOS_Success || !score) continue;
+                                auto& v = values[Narrow(*api, score->UserId)];
+                                v.resize(kNameStats, 0);
+                                v[s] = score->Score;
+                                api->EOS_Leaderboards_LeaderboardUserScore_Release(score);
+                            }
                         }
+                    std::map<std::string, std::string> names;
+                    for (auto& [id, v] : values) names[id] = UnpackName(v);
                     finish(std::move(names));
                 } };
-                api.EOS_Connect_QueryProductUserIdMappings(connect, &o, done, &Pending<EOS_Connect_QueryProductUserIdMappingsCallbackInfo>::Thunk);
+                api.EOS_Leaderboards_QueryLeaderboardUserScores(boards, &o, done, &Pending<EOS_Leaderboards_OnQueryLeaderboardUserScoresCompleteCallbackInfo>::Thunk);
             }));
         }
         return out;
     }
-
     std::map<std::string, int32_t> UserScores(const std::string& stat, const std::vector<std::string>& userIds)
     {
         if (!GetConfig().scoreboard || !eos::SignedIn() || userIds.empty()) return {};

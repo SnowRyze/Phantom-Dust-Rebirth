@@ -692,25 +692,36 @@ namespace pdnet::gamepatches
                 {
                     if (!CopyString(t.values[i], value, sizeof(value))) return;
                     std::string text = value;
-                    size_t at = text.find("390wArsenal");
-                    if (at != std::string::npos)
+                    size_t at = text.find("Arsenal");
+                    static bool shownOnce = false;
+                    if (at == std::string::npos && !renamed.count(key) && !shownOnce)
                     {
-                        size_t from = at >= 2 && text.compare(at - 2, 2, "\\a") == 0 ? at - 2 : at >= 1 && text[at - 1] == '\a' ? at - 1 : std::string::npos;
-                        size_t end = at + strlen("390wArsenal");
-                        if (text.compare(end, 2, "\\f") == 0) end += 2;
-                        else if (end < text.size() && text[end] == '\f') end += 1;
-                        if (from != std::string::npos)
-                        {
-                            text.erase(from, end - from);
-                            std::string& stored = renamed[key];
-                            stored = text;
-                            t.values[i] = stored.data();
-                            Log(L"gamepatch: Ratings scoreboard header without the Arsenal column");
-                        }
+                        shownOnce = true;
+                        std::wstring shown;
+                        for (unsigned char ch : text) shown += ch < 32 ? L"<" + std::to_wstring(ch) + L">" : std::wstring(1, ch);
+                        Log(L"gamepatch: Ratings scoreboard header has no Arsenal column: %s", shown.c_str());
                     }
+                    if (at == std::string::npos) continue;
+                    // The column starts at the text code before its position ("\a390w" or 0x07 "390w") and ends where
+                    // the next column's code begins (after a "\f" / 0x0C separator, if any).
+                    size_t from = text.find_last_of("\a\\", at);
+                    size_t end = text.find_first_of("\a\\\f", at);
+                    if (end != std::string::npos && text.compare(end, 2, "\\f") == 0) end += 2;
+                    else if (end != std::string::npos && text[end] == '\f') end += 1;
+                    if (from == std::string::npos || end == std::string::npos)
+                    {
+                        std::wstring shown;
+                        for (unsigned char ch : text) shown += ch < 32 ? L"<" + std::to_wstring(ch) + L">" : std::wstring(1, ch);
+                        Log(L"gamepatch: Ratings scoreboard header not understood: %s", shown.c_str());
+                        continue;
+                    }
+                    text.erase(from, end - from);
+                    std::string& stored = renamed[key];
+                    stored = text;
+                    t.values[i] = stored.data();
+                    Log(L"gamepatch: Ratings scoreboard header without the Arsenal column");
                     continue;
-                }
-                for (auto& r : kRenames)
+                }                for (auto& r : kRenames)
                 {
                     if (strcmp(key, r.key) != 0) continue;
                     if (!CopyString(t.values[i], value, sizeof(value))) return;
