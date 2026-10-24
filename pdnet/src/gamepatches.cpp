@@ -1058,9 +1058,10 @@ namespace pdnet::gamepatches
         }
 
         // The scoreboard menu (liveranking) lists 12 boards, Friends / Favorites / Global of Ratings, Battle Royale,
-        // Tag Team and One-on-One ($LEADERBOARD_1..12). Only the Global ones are left (scoreboard=on): the first four
-        // items show $LEADERBOARD_3/6/9/12, the other eight are dropped, and the first four items' handlers store
-        // board 3/6/9/12 instead of 1-4, so the rest of the menu works on the Global board as before.
+        // Tag Team and One-on-One ($LEADERBOARD_1..12). Only the Global ones are left (scoreboard=on): menu command 40
+        // (add item, 0x140207e20) skips the other eight as the list is built (HookedAddItem; the script runs before a
+        // watcher could change it), and the first four items' handlers store board 3/6/9/12 instead of 1-4, so the rest
+        // of the menu works on the Global board as before.
         constexpr int kRankingMenu = 41;
 
         int PatchScoreboardMenu(uint8_t* script)
@@ -1068,18 +1069,10 @@ namespace pdnet::gamepatches
             __try
             {
                 auto code = reinterpret_cast<uint32_t*>(script);
-                constexpr uint32_t kItems = 0x25D4 / 4, kHandlers[4] = { 0x30F8 / 4, 0x3124 / 4, 0x3150 / 4, 0x317C / 4 };
-                constexpr uint32_t kGlobal[4] = { 1232, 1277, 1322, 1369 }; // pool offsets of $LEADERBOARD_3/6/9/12
-                if (code[kItems] == (0x0011u | kGlobal[0] << 16) && code[kItems + 8] == 0x0000000E) return 1; // done before
-                if (code[kItems] != (0x0011u | 1202u << 16) || code[kItems + 22] != (0x0011u | 1369u << 16) || code[kItems + 23] != 0x20680101) return 0;
+                constexpr uint32_t kHandlers[4] = { 0x30F8 / 4, 0x3124 / 4, 0x3150 / 4, 0x317C / 4 };
+                if (code[kHandlers[0]] == (0x000Eu | 3u << 16) && code[kHandlers[3]] == (0x000Eu | 12u << 16)) return 1; // done before
                 for (int b = 0; b < 4; ++b)
                     if (code[kHandlers[b]] != (0x000Eu | static_cast<uint32_t>(b + 1) << 16) || (code[kHandlers[b] + 1] & 0xffff) != 0x0103) return 0; // push N ; call-label (store the board)
-                for (int i = 0; i < 12; ++i)
-                {
-                    uint32_t* push = code + kItems + i * 2;
-                    if (i < 4) *push = 0x0011u | kGlobal[i] << 16;
-                    else { push[0] = 0x0000000E; push[1] = 0x0001000D; } // push 0; pop 1
-                }
                 for (int b = 0; b < 4; ++b) code[kHandlers[b]] = 0x000Eu | static_cast<uint32_t>(b * 3 + 3) << 16;
                 return 1;
             }
@@ -1089,6 +1082,22 @@ namespace pdnet::gamepatches
             }
         }
 
+        using MenuCommandFn = int64_t (*)(int64_t* args);
+        MenuCommandFn g_addItem = nullptr;
+
+        int64_t HookedAddItem(int64_t* args)
+        {
+            if (args) // only the scoreboard menu adds $LEADERBOARD_ items
+            {
+                char text[32];
+                if (CopyString(reinterpret_cast<const char*>(args[0]), text, sizeof(text)) && strncmp(text, "$LEADERBOARD_", 13) == 0)
+                {
+                    int board = atoi(text + 13);
+                    if (board % 3 != 0) return 0; // Friends / Favorites
+                }
+            }
+            return g_addItem(args);
+        }
         // Every menu script as it loads (menu table, 87 entries): the Rated texts, and the scoreboard list.
         void MenuTextPatches(bool rated, bool scoreboard)
         {
@@ -1111,7 +1120,7 @@ namespace pdnet::gamepatches
                             if (texts > 0 || official > 0) Log(L"gamepatch: menu %d: %d Rated text(s), %d Official Battle line(s) removed", m, texts, official);
                         }
                         if (scoreboard && m == kRankingMenu)
-                            Log(L"gamepatch: scoreboard menu %s", PatchScoreboardMenu(script) ? L"shows the 4 Global boards only" : L"left as it is (script not as expected)");
+                            Log(L"gamepatch: scoreboard menu %s", PatchScoreboardMenu(script) ? L"items open the Global boards" : L"left as it is (script not as expected)");
                     }
                 }
             }).detach();
@@ -1484,6 +1493,8 @@ namespace pdnet::gamepatches
             if (GetConfig().shopMaxOut) ShopMaxOut();
             if (GetConfig().ratedLobbies) RatedLobbies();
             if (GetConfig().ratedLobbies || GetConfig().scoreboard) MenuTextPatches(GetConfig().ratedLobbies, GetConfig().scoreboard);
+            if (GetConfig().scoreboard && WrapCommand<MenuCommandFn>(0x1403eefe0 + 40 * 8, 0x140207e20, &HookedAddItem, g_addItem, L"scoreboard list"))
+                Log(L"gamepatch: scoreboard list shows the Global boards only");
             bool arsenal = GetConfig().lobbyArsenalEditor; // the Arsenal Lab button for clients too
             if (GetConfig().lobbyGamertagOption || micLabel || arsenal) LobbyScriptPatches(GetConfig().lobbyGamertagOption, micLabel, arsenal);
         });

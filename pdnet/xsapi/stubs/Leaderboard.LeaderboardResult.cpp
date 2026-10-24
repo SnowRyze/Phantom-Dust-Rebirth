@@ -28,13 +28,21 @@ namespace winrt::Microsoft::Xbox::Services::Leaderboard::implementation
     Microsoft::Xbox::Services::Leaderboard::LeaderboardResult LeaderboardResult::Page(const wchar_t* why, hstring const& board, hstring const& skipToXuid, uint32_t skipToRank, uint32_t maxItems,
                                                                                      Windows::Foundation::Collections::IVectorView<hstring> const& columns)
     {
+        // The scoreboard asks for its boards by short names (table at 0x1403fb910); the EOS leaderboard ids are the
+        // names of the stats they rank.
+        hstring id = board;
+        if (board == L"Rating") id = L"CurrentMPRanking";
+        else if (board == L"BattleRoyal") id = L"BattleRoyaleWin";
+        else if (board == L"TagTeam") id = L"TagTeamWin";
+        else if (board == L"OneOnOne") id = L"OneOnOneWin";
+
         std::vector<std::wstring> extra;
         if (columns)
             for (auto const& c : columns) extra.emplace_back(c);
-        if (board == L"CurrentMPRanking" && extra.empty()) extra.emplace_back(L"TotalWin");
+        if (id == L"CurrentMPRanking" && extra.empty()) extra.emplace_back(L"TotalWin");
 
         std::vector<Row> all;
-        for (auto& r : ::pdnet::scores::Ranks(winrt::to_string(board))) all.push_back({ r, {} });
+        for (auto& r : ::pdnet::scores::Ranks(winrt::to_string(id))) all.push_back({ r, {} });
         for (auto& stat : extra)
         {
             std::map<std::string, int32_t> scores;
@@ -60,7 +68,7 @@ namespace winrt::Microsoft::Xbox::Services::Leaderboard::implementation
                 if (XuidOf(all[i].record) == std::wstring_view(skipToXuid)) { start = i - i % max; break; }
         }
         ::pdnet::Log(L"xsapi-pdnet: scoreboard %s '%s': %zu players, rows from rank %zu (%u per page), %zu extra column(s)",
-            why, board.c_str(), all.size(), start + 1, max, extra.size());
+            why, id.c_str(), all.size(), start + 1, max, extra.size());
         return winrt::make<LeaderboardResult>(std::wstring(board), std::move(all), std::move(extra), start, max);
     }
 
