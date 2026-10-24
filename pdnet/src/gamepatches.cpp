@@ -2116,7 +2116,7 @@ namespace pdnet::gamepatches
             CloseHandle(file);
             auto u32 = [&](size_t at) -> uint32_t& { return *reinterpret_cast<uint32_t*>(&data[at]); };
             auto u16 = [&](size_t at) -> uint16_t& { return *reinterpret_cast<uint16_t*>(&data[at]); };
-            if (!read || got != kSize || u32(0x14) != kDataSize || u32(0x60) != 0x2205f22f || u32(0x58) != kLogo || u32(0x74) != kLogoEnd ||
+            if (!read || got != kSize || u32(0x14) != kDataSize || u32(0x60) != 0x2205f22f || u32(0x54) != kLogo || u32(0x70) != kLogoEnd ||
                 u16(0x38a) != kLogoH || u16(0x4b0) != kLogoH || memcmp(&data[0x47c], "logo_02.dds", 11) != 0)
                 return false;
 
@@ -2151,7 +2151,7 @@ namespace pdnet::gamepatches
             data.swap(out);
             u32(0x14) += kExtra;
             u32(0x60) = (u32(0x60) & ~0xfff000u) | ((kLogoH + kSubH - 1) << 12);
-            for (int k = 2; k < 13; ++k) u32(0x3c + k * 0x1c) += kExtra; // where each later texture starts
+            for (int k = 2; k < 13; ++k) u32(0x38 + k * 0x1c) += kExtra; // where each later texture starts
             u16(0x38a) = u16(0x4b0) = kLogoH + kSubH;
 
             CreateDirectoryW((LocalStatePath() + L"\\pdnet").c_str(), nullptr);
