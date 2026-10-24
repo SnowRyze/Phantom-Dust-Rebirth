@@ -36,7 +36,9 @@ namespace pdnet::eossdk
         X(EOS_Leaderboards_GetLeaderboardRecordCount) X(EOS_Leaderboards_CopyLeaderboardRecordByIndex)           \
         X(EOS_Leaderboards_LeaderboardRecord_Release) X(EOS_Leaderboards_QueryLeaderboardUserScores)             \
         X(EOS_Leaderboards_GetLeaderboardUserScoreCount) X(EOS_Leaderboards_CopyLeaderboardUserScoreByIndex)     \
-        X(EOS_Leaderboards_LeaderboardUserScore_Release)
+        X(EOS_Leaderboards_LeaderboardUserScore_Release)                                                          \
+        X(EOS_Connect_QueryProductUserIdMappings) X(EOS_Connect_CopyProductUserInfo)                              \
+        X(EOS_Connect_ExternalAccountInfo_Release)
 // Voice: each lobby's EOS voice room (see lobbies.h, voice_chat).
 #define PDNET_EOS_VOICE_FUNCTIONS(X)                                                                              \
         X(EOS_Platform_GetRTCInterface) X(EOS_RTC_GetAudioInterface)                                              \

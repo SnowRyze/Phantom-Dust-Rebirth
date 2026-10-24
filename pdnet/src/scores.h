@@ -38,6 +38,9 @@ namespace pdnet::scores
     // -1 = no session with that setting found. Implemented in xsapi/mpsd.cpp.
     int RatedMatch();
 
+    // Players' names (UTF-8) by EOS user id: the name each last signed in with (EOS Connect).
+    std::map<std::string, std::string> DisplayNames(const std::vector<std::string>& userIds);
+
     // Each player's total of a Sum stat (for extra columns such as TotalWin); missing players are left out.
     std::map<std::string, int32_t> UserScores(const std::string& stat, const std::vector<std::string>& userIds);
 }
