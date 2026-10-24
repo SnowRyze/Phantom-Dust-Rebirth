@@ -380,6 +380,9 @@ Stable 2 = build-icons7 (F2117D66, was Experimental 7): megaphone mic indicator,
 lobbytool left out of sessions, Setup name prompt fix (promoted 2026-10-22). kit-counter.txt keeps the last Experimental number.
 Stable 3 = build-vmode1 (92539ABD, was Experimental 10): Stable 2 plus voice_mode (mic/classic) and the cleaned-up
 pdnet.ini text (promoted 2026-10-22). Built from commit 443e445. To go back to the most stable version, use the highest Stable number.
+Stable 4 = build-wins3 (375800B9, was Experimental 25, tag stable-4 -> 1ba798b, promoted 2026-10-24): EOS scoreboard
+(4 global boards, names, Total Wins), Rated / Unrated lobbies (+1 / -1 minimum per match), shop top-up, Lobby Browser
+name, ghost lobbies hidden, shorter join wait, Discord Rated/Unrated.
 Experimental 1 = build-resend1 (70A91FE2): join requests re-sent every 2 s until answered (an intermittent "hung on
 joining": the single request sent while EOS set up the P2P link was lost); voice + Gamertag on, p2p_debug=on.
 
