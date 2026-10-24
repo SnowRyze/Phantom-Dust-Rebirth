@@ -1559,7 +1559,7 @@ namespace pdnet::gamepatches
             for (int r = 0; r < kSettingRows; ++r)
             {
                 const char* value = strchr(g_rowText[r], ':');
-                sprintf_s(g_optionText[r], "\a160w%s\a1#\a230c%s\a0#", kOptionLabels[r], value ? value + 2 : "");
+                sprintf_s(g_optionText[r], "\a160w%s\f\a1#\a230c%s\f\a0#", kOptionLabels[r], value ? value + 2 : "");
             }
         }
 
@@ -1700,9 +1700,15 @@ namespace pdnet::gamepatches
             {
                 auto code = reinterpret_cast<uint32_t*>(script);
                 if (code[0x05810 / 4] != 0x00010007) return 0;              // jump over the "pop 1"
-                if (code[0x05814 / 4] == 0x42B20101) return 1;
-                if (code[0x05814 / 4] != 0x0001000D) return 0;
+                bool done = code[0x05814 / 4] == 0x42B20101;
+                if (!done && (code[0x05814 / 4] != 0x0001000D || code[0x0564C / 4] != 0x0001000E || code[0x05670 / 4] != 0x0002000E ||
+                              code[0x05674 / 4] != 0xFFFF000A)) return 0;
                 code[0x05814 / 4] = 0x42B20101;                              // call session command 154 argc 1 (consumes the row)
+                // With Cross Play hidden the script maps cursor row 0 to Voice Chat (row 2) by "if row == 1: row = 2", which
+                // also sent the next row to Voice Chat: now every row moves up one ("row == row", "row += 1").
+                code[0x0564C / 4] = 0xFFFF0009;                              // push var[-1] (was push 1)
+                code[0x05670 / 4] = 0x0001000E;                              // push 1 (was push 2)
+                code[0x05674 / 4] = 0xFFFF010A;                              // var[-1] += (was store)
                 return 1;
             }
             __except (EXCEPTION_EXECUTE_HANDLER)
@@ -1714,7 +1720,7 @@ namespace pdnet::gamepatches
         void SettingsExtraItems(const char* added)
         {
             // No menu check: the screen adds its rows before the game makes it the current menu; the texts are its own.
-            bool rows = strcmp(added, "\a160wVoice Chat\a1#\a230c%s\a0#") == 0, hints = strcmp(added, "Set your voice chat status.") == 0;
+            bool rows = strcmp(added, "\a160wVoice Chat\f\a1#\a230c%s\f\a0#") == 0, hints = strcmp(added, "Set your voice chat status.") == 0;
             if (!rows && !hints) return;
             RefreshSettingRows();
             for (int r = 0; r < kSettingRows; ++r)

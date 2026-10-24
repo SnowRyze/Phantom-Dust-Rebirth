@@ -1,5 +1,6 @@
 #include "pch.h"
 #include "discord.h"
+#include <set>
 #include "config.h"
 #include "log.h"
 #include <condition_variable>
@@ -205,6 +206,7 @@ namespace pdnet::discord
         };
         std::mutex g_lock;
         std::map<std::string, Announced> g_lobbies; // lobbies this PC owns and announces
+        std::set<std::string> g_gone;               // lobbies whose game host left: their message says closed (LobbyGone)
 
         bool Public(const lobbies::Lobby& l)
         {
@@ -382,6 +384,7 @@ namespace pdnet::discord
         bool alone = false;
         {
             std::lock_guard guard(g_lock);
+            if (g_gone.count(l.id)) return; // already shown as closed (LobbyGone)
             auto it = g_lobbies.find(l.id);
             if (!mine)
             {
@@ -461,4 +464,27 @@ namespace pdnet::discord
     }
 
     void LobbyLost(const std::string& id) { LobbyLeft(id, true); }
+
+    void LobbyGone(const lobbies::Lobby& l)
+    {
+        if (GetConfig().discordWebhook.empty() || !Public(l)) return;
+        std::string text;
+        {
+            std::lock_guard guard(g_lock);
+            if (!g_gone.insert(l.id).second) return;
+            auto it = g_lobbies.find(l.id);
+            Announced a = it != g_lobbies.end() ? it->second : Announced{ HostName(l), Members(l), true, Roster(l), MatchDescription(l), l.maxMembers };
+            if (it != g_lobbies.end()) g_lobbies.erase(it);
+            if (!a.opened || !GetConfig().discordLobbyMessages) return;
+            text = Card(a, true);
+        }
+        // The message may have been posted by the old host: its id is in the lobby (PD_DISCORD).
+        auto posted = l.attributes.find("PD_DISCORD");
+        if (posted != l.attributes.end() && !posted->second.empty())
+        {
+            std::lock_guard queue(g_queueLock);
+            if (!g_messages.count(l.id)) g_messages[l.id] = posted->second;
+        }
+        Show(l.id, text, true);
+    }
 }

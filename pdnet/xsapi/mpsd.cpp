@@ -659,6 +659,7 @@ namespace pdnet::mpsd
             for (auto& k : lobbies::SplitKeys(a, "PD_SEARCH")) changes.remove.push_back(k);
             changes.set.erase("PD_SEARCH");
             Log(L"xsapi-pdnet: the game host left lobby %S - no longer listed in searches", lobbyId.c_str());
+            discord::LobbyGone(*lobby); // and its Discord message says closed
         }
 
         bool changed = false;

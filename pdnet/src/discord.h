@@ -25,4 +25,5 @@ namespace pdnet::discord
     void LobbyChanged(const lobbies::Lobby& l);  // live copy after any lobby event or search handle change
     void LobbyLeft(const std::string& id, bool lastMember); // this PC left (lastMember: the lobby was destroyed)
     void LobbyLost(const std::string& id);       // EOS closed the lobby or removed this PC
+    void LobbyGone(const lobbies::Lobby& l);       // the game host left a lobby others stayed in: its message says closed
 }
