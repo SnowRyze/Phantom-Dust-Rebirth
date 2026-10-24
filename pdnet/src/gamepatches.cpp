@@ -1506,6 +1506,7 @@ namespace pdnet::gamepatches
                                                     "Logo Volume", "Logo Time", "Discord Lobby", "Discord Join" };
         std::atomic<bool> g_typingName{ false };
         std::atomic<bool> g_settingsDirty{ false }; // changed in the Settings screen since it opened or was last saved
+        std::atomic<bool> g_confirmingSave{ false }; // "Save all settings?" is showing (HookedButtons)
         Config g_settingsSaved;                     // the settings as they were then (restored when leaving unsaved)
         std::wstring g_typedName;
         std::mutex g_typedLock;
@@ -1751,6 +1752,7 @@ namespace pdnet::gamepatches
         // reads "A Save"); leaving the screen unsaved puts the settings back as they were.
         void SaveAllSettings()
         {
+            if (g_typingName) FinishTyping(true); // a name being typed counts as entered
             const Config& c = EditableConfig();
             auto onOff = [](bool on) { return std::string(on ? "on" : "off"); };
             auto hex = [](uint32_t argb) { char s[8]; sprintf_s(s, "%06X", argb & 0xFFFFFF); return std::string(s); };
@@ -1780,6 +1782,7 @@ namespace pdnet::gamepatches
         // Every 50 ms (MenuTextPatches): leaving the Settings screen with unsaved changes drops them.
         void SettingsTick()
         {
+            if (!InSettings()) g_confirmingSave = false;
             if (!InSettings() && GetTickCount64() - g_settingsOpenedAt > 1000 && (g_settingsDirty || g_typingName))
             {
                 g_typingName = false;
@@ -1787,26 +1790,68 @@ namespace pdnet::gamepatches
             }
         }
 
-        // Each frame the Settings screen draws (HookedDrawText): A (button bits 0x1010, as the scripts test it) saves.
-        void SettingsPollSave()
+        // A asks to save: "Save all settings? A: Save, B: Cancel" in the hint line and the button bar; while it shows,
+        // A saves everything (a name being typed counts as entered), B cancels, and no other button reaches the screen.
+        // The buttons come from g1 #37 (0x1402168a0, wrapped: the script reads them there; A is 0x1010, B 0x2020).
+        NativeFn g_buttons = nullptr;
+        char g_hintText[kSettingRows][128];
+        const char* kConfirmBar = "\a2#Save \a580r\a3#Cancel";
+        const char* kNormalBar = "\a8#Select \a7#Change \a580r\a2#Save \a3#Back";
+        MenuCommandFn g_buttonBar = nullptr;
+
+        void ShowButtonBar(const char* text)
         {
-            static bool held = false;
-            int64_t input[2] = { 0, 0 };
-            bool a = (reinterpret_cast<InputFn>(At(0x1402168a0))(input) & 0x1010) != 0;
-            if (a && !held && !g_typingName)
-            {
-                int64_t sound[2] = { 37, 0 };
-                reinterpret_cast<InputFn>(At(0x140261750))(sound);
-                SaveAllSettings();
-            }
-            held = a;
+            if (!g_buttonBar) return;
+            int64_t args[8] = { 2, reinterpret_cast<int64_t>(text), 0 };
+            g_buttonBar(args);
         }
 
+        void RefreshHints()
+        {
+            for (int r = 0; r < kSettingRows; ++r)
+                strcpy_s(g_hintText[r], g_confirmingSave ? "Save all settings? A: Save   B: Cancel" : SettingHelp(r));
+        }
+
+        void SetConfirming(bool on)
+        {
+            g_confirmingSave = on;
+            RefreshHints();
+            ShowButtonBar(on ? kConfirmBar : kNormalBar);
+        }
+
+        int64_t HookedButtons(int64_t* args)
+        {
+            int64_t buttons = g_buttons(args);
+            if (!InSettings() || (args && args[0] != 0)) return buttons;
+            static uint64_t last = 0; // the script reads the buttons several times a frame: act once per press
+            bool a = (buttons & 0x1010) != 0, b = (buttons & 0x2020) != 0;
+            bool fresh = GetTickCount64() - last > 150;
+            if (!g_confirmingSave)
+            {
+                if (a && fresh) // also while a name is being typed: saving counts it as entered
+                {
+                    last = GetTickCount64();
+                    int64_t sound[2] = { 37, 0 };
+                    reinterpret_cast<InputFn>(At(0x140261750))(sound);
+                    SetConfirming(true);
+                }
+                return a ? buttons & ~0x1010ll : buttons;
+            }
+            if ((a || b) && fresh)
+            {
+                last = GetTickCount64();
+                int64_t sound[2] = { 37, 0 };
+                reinterpret_cast<InputFn>(At(0x140261750))(sound);
+                if (a) SaveAllSettings();
+                SetConfirming(false);
+                Log(L"gamepatch: settings: %s", a ? L"saved" : L"save cancelled");
+            }
+            return 0; // nothing else while asking
+        }
         // The button bar (menu command 88 with 2, text): the Options screen's "Change / Back" gets "A Save".
-        MenuCommandFn g_buttonBar = nullptr;
         int64_t HookedButtonBar(int64_t* args)
         {
-            static const char kSave[] = "\a8#Select \a7#Change \a580r\a2#Save \a3#Back";
+            const char* kSave = g_confirmingSave ? kConfirmBar : kNormalBar;
             char text[64];
             if (args && (InSettings() || GetTickCount64() - g_settingsOpenedAt < 500) && CopyString(reinterpret_cast<const char*>(args[1]), text, sizeof(text)) &&
                 (strcmp(text, "\a7#Change \a580r\a3#Back") == 0 || strcmp(text, "\a8#Select \a7#Change \a580r\a3#Back") == 0))
@@ -1827,11 +1872,13 @@ namespace pdnet::gamepatches
             {
                 g_settingsSaved = EditableConfig(); // what leaving unsaved goes back to
                 g_settingsDirty = false;
+                g_confirmingSave = false;
             }
+            RefreshHints();
             RefreshSettingRows();
             for (int r = 0; r < kSettingRows; ++r)
             {
-                int64_t item[8] = { reinterpret_cast<int64_t>(rows ? g_optionText[r] : SettingHelp(r)) };
+                int64_t item[8] = { reinterpret_cast<int64_t>(rows ? g_optionText[r] : g_hintText[r]) };
                 g_addItem(item);
             }
             if (rows) Log(L"gamepatch: Settings: %d rows", static_cast<int>(kSettingRows));
@@ -1859,7 +1906,6 @@ namespace pdnet::gamepatches
 
         int64_t HookedDrawText(int64_t* args)
         {
-            if (InSettings()) SettingsPollSave();
             if (args && GetConfig().ratedLobbies && CurrentMenu(MenuManager()) == kSessionListMenu)
             {
                 static char text[96];
@@ -2031,6 +2077,7 @@ namespace pdnet::gamepatches
             WrapCommand<NativeFn>(0x1403ddde0 + 3 * 8, 0x1400bde50, &HookedSettingFlag, g_settingFlag, L"no Cross Play option");
             WrapCommand<MenuCommandFn>(0x1403eefe0 + 37 * 8, 0x140207d50, &HookedPlaceWindow, g_placeWindow, L"settings window position");
             WrapCommand<MenuCommandFn>(0x1403eefe0 + 88 * 8, 0x140207650, &HookedButtonBar, g_buttonBar, L"settings save button");
+            WrapCommand<NativeFn>(0x1403fb108, 0x1402168a0, &HookedButtons, g_buttons, L"settings save confirmation");
             if (WrapCommand<SessionCommandFn>(0x1403f1150 + 154 * 8, 0x140214d60, &HookedOptionChanged, g_optionChanged, L"settings rows"))
                 Log(L"gamepatch: in-game Settings ready (multiplayer menu > Settings)");
             if (WrapCommand<MenuCommandFn>(0x1403eefe0 + 40 * 8, 0x140207e20, &HookedAddItem, g_addItem, L"menu item names"))
