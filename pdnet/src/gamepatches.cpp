@@ -1341,6 +1341,13 @@ namespace pdnet::gamepatches
         return rating >= 0 && rating <= 999999 ? static_cast<int>(rating) : -1;
     }
 
+    // The save (0x1404bec10) holds two profiles; +0x33a0 points to the active one, +0x3fb8 is the multiplayer one.
+    bool MultiplayerProfile()
+    {
+        uint8_t* save = *reinterpret_cast<uint8_t**>(At(0x1404bec10));
+        return save && *reinterpret_cast<uint8_t**>(save + 0x33a0) == save + 0x3fb8;
+    }
+
     // In a match or in the lobby: the game's state 0x1404bc950 is 0 or 13 in the lobby / menus (session command 23
     // then reads names from the lobby table), anything else in a match. Each change is logged once, to verify.
     bool TagTeamMatch(std::map<std::string, int>& teamOf, int& myTeam)

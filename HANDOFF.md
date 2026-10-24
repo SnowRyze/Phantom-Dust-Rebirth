@@ -444,5 +444,18 @@ Lobby Gamertag option (backlog 4): greyed (with Kick Player) when nobody else is
 
 ## Scoreboard
 
-The game keeps its multiplayer rating in progress.dat (0x1405b1370) and reports it as the Hero_MP_Ranking event (measurement Count) after each match. pdnet (scoreboard=on) sends it to the EOS stat RATING and fills every scoreboard query from the EOS leaderboard GLOBAL_RATING (src/scores.cpp, xsapi/stubs/Leaderboard.*). Needed in the EOS Developer Portal (same deployment as eos.ini): stat RATING (aggregation Latest), leaderboard GLOBAL_RATING on it (descending, no end date), and the client policy allowing stats ingest for the local user and leaderboard queries. Log lines start with 'scores:'.
+The original Xbox scoreboard had four global boards (table at 0x1403fb910, each with views 0-2): Rating
+(leaderboard CurrentMPRanking, extra column TotalWin), BattleRoyaleWin, TagTeamWin and OneOnOneWin. pdnet
+(scoreboard=on, src/scores.cpp, xsapi/stubs/Leaderboard.*) answers every query from the EOS leaderboard with the
+game's name; friends views get the global board too.
+- Rating: kept in progress.dat (0x1405b1370), reported as the Hero_MP_Ranking event (measurement Count) after each
+  match; pdnet also sends it once per session when the scoreboard opens.
+- Wins: the BattleRoyaleWin / TagTeamWin / OneOnOneWin events (no measurements) add 1 to that stat and to TotalWin,
+  only while the save's multiplayer profile is active.
 
+EOS Developer Portal, same deployment as eos.ini:
+- Stats: CurrentMPRanking (Latest), TotalWin (Sum), BattleRoyaleWin (Sum), TagTeamWin (Sum), OneOnOneWin (Sum).
+- Leaderboards (descending, no end date): CurrentMPRanking on stat CurrentMPRanking (Latest); BattleRoyaleWin,
+  TagTeamWin, OneOnOneWin each on the stat of the same name (Sum).
+- Client policy (the tester client's): allow stats ingest for the local user and leaderboard queries.
+Log lines start with 'scores:' and 'xsapi-pdnet: scoreboard'.

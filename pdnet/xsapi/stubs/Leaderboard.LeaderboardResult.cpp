@@ -1,4 +1,4 @@
-// pdnet-hand: pages of the EOS leaderboard (src/scores.cpp).
+// pdnet-hand: pages of the EOS leaderboards (src/scores.cpp).
 #include "xsapi_pch.h"
 #include "Leaderboard.LeaderboardResult.h"
 #include "Leaderboard.LeaderboardRow.h"
@@ -19,30 +19,57 @@ namespace winrt::Microsoft::Xbox::Services::Leaderboard::implementation
         }
     }
 
-    LeaderboardResult::LeaderboardResult(std::vector<::pdnet::scores::Record> all, size_t start, uint32_t maxItems)
-        : m_all(std::move(all)), m_start(start), m_max(maxItems ? maxItems : 10)
+    LeaderboardResult::LeaderboardResult(std::wstring board, std::vector<Row> all, std::vector<std::wstring> columns, size_t start, uint32_t maxItems)
+        : m_board(std::move(board)), m_all(std::move(all)), m_columns(std::move(columns)), m_start(start), m_max(maxItems ? maxItems : 10)
     {
         if (m_start > m_all.size()) m_start = m_all.size();
     }
 
-    Microsoft::Xbox::Services::Leaderboard::LeaderboardResult LeaderboardResult::Page(const wchar_t* why, hstring const& skipToXuid, uint32_t skipToRank, uint32_t maxItems)
+    Microsoft::Xbox::Services::Leaderboard::LeaderboardResult LeaderboardResult::Page(const wchar_t* why, hstring const& board, hstring const& skipToXuid, uint32_t skipToRank, uint32_t maxItems,
+                                                                                     Windows::Foundation::Collections::IVectorView<hstring> const& columns)
     {
-        auto all = ::pdnet::scores::Ranks();
+        std::vector<std::wstring> extra;
+        if (columns)
+            for (auto const& c : columns) extra.emplace_back(c);
+        if (board == L"CurrentMPRanking" && extra.empty()) extra.emplace_back(L"TotalWin");
+
+        std::vector<Row> all;
+        for (auto& r : ::pdnet::scores::Ranks(winrt::to_string(board))) all.push_back({ r, {} });
+        for (auto& stat : extra)
+        {
+            std::map<std::string, int32_t> scores;
+            for (size_t i = 0; i < all.size(); i += 100)
+            {
+                std::vector<std::string> ids;
+                for (size_t j = i; j < all.size() && j < i + 100; ++j) ids.push_back(all[j].record.userId);
+                scores.merge(::pdnet::scores::UserScores(winrt::to_string(stat), ids));
+            }
+            for (auto& row : all)
+            {
+                auto it = scores.find(row.record.userId);
+                row.extra.push_back(it == scores.end() ? 0 : it->second);
+            }
+        }
+
         uint32_t max = maxItems ? maxItems : 10;
         size_t start = skipToRank > 1 ? skipToRank - 1 : 0;
         if (!skipToXuid.empty())
         {
             start = 0;
             for (size_t i = 0; i < all.size(); ++i)
-                if (XuidOf(all[i]) == std::wstring_view(skipToXuid)) { start = i - i % max; break; }
+                if (XuidOf(all[i].record) == std::wstring_view(skipToXuid)) { start = i - i % max; break; }
         }
-        ::pdnet::Log(L"xsapi-pdnet: scoreboard %s: %zu players, rows from rank %zu (%u per page)", why, all.size(), start + 1, max);
-        return winrt::make<LeaderboardResult>(std::move(all), start, max);
+        ::pdnet::Log(L"xsapi-pdnet: scoreboard %s '%s': %zu players, rows from rank %zu (%u per page), %zu extra column(s)",
+            why, board.c_str(), all.size(), start + 1, max, extra.size());
+        return winrt::make<LeaderboardResult>(std::wstring(board), std::move(all), std::move(extra), start, max);
     }
 
     Windows::Foundation::Collections::IVectorView<Microsoft::Xbox::Services::Leaderboard::LeaderboardColumn> LeaderboardResult::Columns()
     {
-        return winrt::single_threaded_vector<Microsoft::Xbox::Services::Leaderboard::LeaderboardColumn>({ winrt::make<LeaderboardColumn>() }).GetView();
+        auto columns = winrt::single_threaded_vector<Microsoft::Xbox::Services::Leaderboard::LeaderboardColumn>();
+        columns.Append(winrt::make<LeaderboardColumn>(hstring{ m_board }));
+        for (auto& c : m_columns) columns.Append(winrt::make<LeaderboardColumn>(hstring{ c }));
+        return columns.GetView();
     }
 
     Windows::Foundation::Collections::IVectorView<Microsoft::Xbox::Services::Leaderboard::LeaderboardRow> LeaderboardResult::Rows()
@@ -50,16 +77,18 @@ namespace winrt::Microsoft::Xbox::Services::Leaderboard::implementation
         auto rows = winrt::single_threaded_vector<Microsoft::Xbox::Services::Leaderboard::LeaderboardRow>();
         for (size_t i = m_start; i < m_all.size() && i < m_start + m_max; ++i)
         {
-            const auto& r = m_all[i];
-            double percentile = m_all.empty() ? 0 : static_cast<double>(r.rank) / m_all.size();
-            rows.Append(winrt::make<LeaderboardRow>(winrt::to_hstring(r.name), hstring{ XuidOf(r) }, r.rank, percentile, winrt::to_hstring(r.score)));
+            const auto& r = m_all[i].record;
+            std::vector<hstring> values{ winrt::to_hstring(r.score) };
+            for (int32_t v : m_all[i].extra) values.push_back(winrt::to_hstring(v));
+            double percentile = static_cast<double>(r.rank) / m_all.size();
+            rows.Append(winrt::make<LeaderboardRow>(winrt::to_hstring(r.name), hstring{ XuidOf(r) }, r.rank, percentile, std::move(values)));
         }
         return rows.GetView();
     }
 
     Windows::Foundation::IAsyncOperation<Microsoft::Xbox::Services::Leaderboard::LeaderboardResult> LeaderboardResult::GetNextAsync(uint32_t maxItems)
     {
-        co_return winrt::make<LeaderboardResult>(m_all, m_start + m_max, maxItems ? maxItems : static_cast<uint32_t>(m_max));
+        co_return winrt::make<LeaderboardResult>(m_board, m_all, m_columns, m_start + m_max, maxItems ? maxItems : static_cast<uint32_t>(m_max));
     }
 
     Microsoft::Xbox::Services::Leaderboard::LeaderboardQuery LeaderboardResult::GetNextQuery()

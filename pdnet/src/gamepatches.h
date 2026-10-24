@@ -31,4 +31,7 @@ namespace pdnet::gamepatches
 
     // The multiplayer rating as kept in the save (progress.dat; 0x1405b1370), or -1 before the save is loaded.
     int SavedRating();
+
+    // True while the save's multiplayer profile is the active one (online play; the story uses the other).
+    bool MultiplayerProfile();
 }
