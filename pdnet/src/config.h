@@ -51,4 +51,9 @@ namespace pdnet
 
     // Loaded once: pdnet.ini next to the DLL, else LocalState\pdnet.ini (written with defaults if missing).
     const Config& GetConfig();
+
+    // The same settings, for the in-game Settings menu (gamepatches.cpp): change a field, then SaveSetting writes
+    // key=value into the pdnet.ini that was read (the line is replaced, or added).
+    Config& EditableConfig();
+    void SaveSetting(const std::string& key, const std::string& value);
 }

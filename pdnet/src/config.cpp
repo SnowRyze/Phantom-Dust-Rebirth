@@ -2,6 +2,8 @@
 #include "config.h"
 #include "log.h"
 #include <fstream>
+#include <mutex>
+#include <vector>
 
 namespace pdnet
 {
@@ -33,6 +35,8 @@ namespace pdnet
             return dir.substr(0, dir.find_last_of(L'\\') + 1) + L"pdnet.ini";
         }
 
+        std::wstring g_iniPath; // the pdnet.ini Load read (SaveSetting writes back to it)
+
         Config Load()
         {
             Config c;
@@ -45,11 +49,13 @@ namespace pdnet
             }
             if (!in)
             {
+                g_iniPath = path;
                 std::ofstream(path, std::ios::binary) << kDefaultIni;
                 Log(L"config: wrote defaults to %s", path.c_str());
                 return c;
             }
             Log(L"config: reading %s", path.c_str());
+            g_iniPath = path;
             std::string line;
             while (std::getline(in, line))
             {
@@ -99,9 +105,40 @@ namespace pdnet
         }
     }
 
-    const Config& GetConfig()
+    Config& EditableConfig()
     {
         static Config config = Load();
         return config;
+    }
+
+    const Config& GetConfig() { return EditableConfig(); }
+
+    void SaveSetting(const std::string& key, const std::string& value)
+    {
+        static std::mutex lock;
+        std::lock_guard guard(lock);
+        if (g_iniPath.empty()) EditableConfig(); // loads it
+        std::vector<std::string> lines;
+        {
+            std::ifstream in(g_iniPath, std::ios::binary);
+            std::string line;
+            while (std::getline(in, line))
+            {
+                if (!line.empty() && line.back() == '\r') line.pop_back();
+                lines.push_back(line);
+            }
+        }
+        bool found = false;
+        for (auto& line : lines)
+            if (Trim(line).rfind(key + "=", 0) == 0)
+            {
+                line = key + "=" + value;
+                found = true;
+                break;
+            }
+        if (!found) lines.push_back(key + "=" + value);
+        std::ofstream out(g_iniPath, std::ios::binary | std::ios::trunc);
+        for (auto& line : lines) out << line << "\r\n";
+        Log(L"config: %S=%S saved (in-game Settings)", key.c_str(), value.c_str());
     }
 }

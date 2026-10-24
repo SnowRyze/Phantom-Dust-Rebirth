@@ -4,6 +4,8 @@
 #include "lobbies.h"
 #include "scores.h"
 #include "log.h"
+#include <fstream>
+#pragma comment(lib, "user32.lib") // GetAsyncKeyState (Settings: typing a name)
 #include <intrin.h>
 #include <set>
 #include <tuple>
@@ -20,6 +22,7 @@ namespace pdnet::gamepatches
         std::atomic<uint8_t> g_bodyTagsNow{ 0 };
         std::atomic<uint8_t> g_slotGone[4]{}; // per match slot: that player left (no nametag), set by NametagColours
         std::atomic<uint64_t> g_tagColour[8]{ ~0ull, ~0ull, ~0ull, ~0ull, ~0ull, ~0ull, ~0ull, ~0ull };
+        std::atomic<uint64_t> g_deadColour{ ~0ull }; // a dead player's nametag colour, twice (read by the colour routine)
         std::atomic<uint8_t> g_playDead[4]{}; // per player slot: lying in Play Dead (TrackPlayDead), read by the colour routine
 
         uint8_t* Image() { return reinterpret_cast<uint8_t*>(GetModuleHandleW(nullptr)); }
@@ -88,6 +91,7 @@ namespace pdnet::gamepatches
                 return;
             }
 
+            g_deadColour = (static_cast<uint64_t>(argb) << 32) | argb;
             std::vector<uint8_t> code;
             auto rip = [&](size_t instructionLength) { return cave + code.size() + instructionLength; };
             // Jumps are emitted with 32-bit offsets (patched once the labels are known): jcc = 0F 8x, jmp = E9.
@@ -134,8 +138,9 @@ namespace pdnet::gamepatches
             jump(kJne, toDead);
             jump(kJmp, toNormal);
             label(toDead);
-            code.insert(code.end(), { 0x48, 0xb8 });                 // dead: mov rax, colour
-            Put64(code, (static_cast<uint64_t>(argb) << 32) | argb);
+            code.insert(code.end(), { 0x48, 0xb8 });                 // dead: mov rax, &g_deadColour
+            Put64(code, reinterpret_cast<uint64_t>(&g_deadColour));
+            code.insert(code.end(), { 0x48, 0x8b, 0x00 });           // mov rax, [rax]
             std::vector<size_t> toStore;
             jump(kJmp, toStore);
             label(toNormal);                                         // alive: the slot's ally / enemy colour
@@ -350,14 +355,16 @@ namespace pdnet::gamepatches
         void NametagColours()
         {
             auto twice = [](uint32_t argb) { return static_cast<uint64_t>(argb) << 32 | argb; };
-            bool colours = GetConfig().nametagColors; // nametag_colors=off: the game's white for everyone
-            uint64_t ally = twice(colours ? GetConfig().allyNametagColor : 0xffffffff), enemy = twice(colours ? GetConfig().enemyNametagColor : 0xffffffff);
-            std::thread([ally, enemy, twice]
+            std::thread([twice]
             {
                 std::wstring last;
                 for (;;)
                 {
                     Sleep(100);
+                    // Read every pass: the in-game Settings menu can change them (nametag_colors=off: white for everyone).
+                    bool colours = GetConfig().nametagColors;
+                    uint64_t ally = twice(colours ? GetConfig().allyNametagColor : 0xffffffff), enemy = twice(colours ? GetConfig().enemyNametagColor : 0xffffffff);
+                    g_deadColour = twice(colours ? GetConfig().deadNametagColor : 0xffffffff);
                     TeamView v{};
                     if (!ReadTeamView(v)) continue;
                     UpdateLeftPlayers(v);
@@ -1133,6 +1140,8 @@ namespace pdnet::gamepatches
             { "OptiMatch", "Lobby Browser" },
             { "Search for a game session with the Quick game rule.", "Join the first open game session you can play in." },
             { "Select game attributes, and then search for a game session.", "Choose search options, then pick a session." },
+            { "Xbox Live Options", "Settings" },
+            { "Display the Options menu.", "Your name, nametags, start-up volume and Discord posts." },
         };
 
         int64_t HookedAddItem(int64_t* args)
@@ -1156,6 +1165,8 @@ namespace pdnet::gamepatches
             }
             return g_addItem(args);
         }
+        void SettingsScriptPatch(int menu, uint8_t* script, bool fresh); // the in-game Settings menu (below)
+
         // Every menu script as it loads (menu table, 87 entries): the Rated texts, and the scoreboard list.
         void MenuTextPatches(bool rated, bool scoreboard)
         {
@@ -1178,6 +1189,7 @@ namespace pdnet::gamepatches
                             int texts = RelabelScript(script, kRatedTexts, std::size(kRatedTexts)), official = TrimOfficialBattle(script);
                             if (fresh && (texts > 0 || official > 0)) Log(L"gamepatch: menu %d: %d Rated text(s), %d Official Battle line(s) removed", m, texts, official);
                         }
+                        SettingsScriptPatch(m, script, fresh);
                         if (scoreboard && m == kRankingMenu)
                         {
                             int patched = PatchScoreboardMenu(script);
@@ -1462,6 +1474,258 @@ namespace pdnet::gamepatches
         // gets " (Rated)" or " (Unrated)" after it.
         constexpr int kSessionListMenu = 43;
 
+        // In-game Settings: the multiplayer menu's Xbox Live Options (liveoption, menu 68; its Friends List is dead
+        // without Xbox Live) becomes Settings. The Friends List shows one row per setting: session command 85 (friend
+        // count) and 86 (row text, a pointer the list keeps, so a row's buffer can change while it shows) answer for
+        // the settings; 87-90, 159, 160 (friend status icons) answer 0; 154 (A on a row) changes that setting, and the
+        // script's next step (open the friend's command menu, call-label at 0x35BC) is patched out. The info panel's
+        // "Offline" / "Voice: Off" lines show the selected setting's description (menu command 23; session command 104
+        // tells which row the panel is for). Changes go to pdnet.ini (SaveSetting) and apply at once where they can.
+        constexpr int kSettingsMenu = 68;
+        struct Colour { const char* name; uint32_t rgb; };
+        constexpr Colour kColours[] = { { "Yellow", 0xFFE600 }, { "Red", 0xFF5A5A }, { "Blue", 0x4FB4FF }, { "Green", 0x5AFF6E },
+                                        { "Purple", 0xB46EFF }, { "Orange", 0xFFA03C }, { "Cyan", 0x3CF0FF }, { "Pink", 0xFF78C8 },
+                                        { "White", 0xFFFFFF } };
+        enum SettingRow { kName, kBodyTags, kTagColours, kDeadColour, kAllyColour, kEnemyColour, kSplashVolume, kSplashSeconds,
+                          kDiscordLobby, kDiscordPlayers, kSettingRows };
+        char g_rowText[kSettingRows][80];
+        std::atomic<int> g_infoRow{ 0 };
+        std::atomic<bool> g_typingName{ false };
+        std::wstring g_typedName;
+        std::mutex g_typedLock;
+
+        // splash_volume / splash_seconds belong to pdlaunch (it reads pdnet.ini itself); read here for the menu only.
+        int IniNumber(const char* key, int fallback)
+        {
+            wchar_t path[MAX_PATH] = {};
+            HMODULE self = nullptr;
+            GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT, reinterpret_cast<LPCWSTR>(&IniNumber), &self);
+            GetModuleFileNameW(self, path, MAX_PATH);
+            std::wstring ini = path;
+            std::ifstream in(ini.substr(0, ini.find_last_of(L'\\') + 1) + L"pdnet.ini");
+            std::string line, prefix = std::string(key) + "=";
+            while (std::getline(in, line))
+                if (line.rfind(prefix, 0) == 0) return atoi(line.c_str() + prefix.size());
+            return fallback;
+        }
+        int g_splashVolume = -1, g_splashSeconds = -1;
+
+        std::string ColourName(uint32_t argb)
+        {
+            for (auto& c : kColours)
+                if ((argb & 0xFFFFFF) == c.rgb) return c.name;
+            char hex[16];
+            sprintf_s(hex, "#%06X", argb & 0xFFFFFF);
+            return hex;
+        }
+
+        uint32_t NextColour(uint32_t argb)
+        {
+            for (size_t i = 0; i < std::size(kColours); ++i)
+                if ((argb & 0xFFFFFF) == kColours[i].rgb) return 0xFF000000u | kColours[(i + 1) % std::size(kColours)].rgb;
+            return 0xFF000000u | kColours[0].rgb;
+        }
+
+        void RefreshSettingRows()
+        {
+            const Config& c = GetConfig();
+            if (g_splashVolume < 0) g_splashVolume = IniNumber("splash_volume", 40);
+            if (g_splashSeconds < 0) g_splashSeconds = IniNumber("splash_seconds", 12);
+            auto onOff = [](bool on) { return on ? "On" : "Off"; };
+            std::string name;
+            {
+                std::lock_guard guard(g_typedLock);
+                name = winrt::to_string(g_typingName ? g_typedName + L"_" : c.displayName);
+            }
+            sprintf_s(g_rowText[kName], "Name: %s", name.c_str());
+            sprintf_s(g_rowText[kBodyTags], "Nametags on bodies: %s", onOff(c.nametagsOnBodies));
+            sprintf_s(g_rowText[kTagColours], "Nametag colours: %s", onOff(c.nametagColors));
+            sprintf_s(g_rowText[kDeadColour], "Dead colour: %s", ColourName(c.deadNametagColor).c_str());
+            sprintf_s(g_rowText[kAllyColour], "Teammate colour: %s", ColourName(c.allyNametagColor).c_str());
+            sprintf_s(g_rowText[kEnemyColour], "Opponent colour: %s", ColourName(c.enemyNametagColor).c_str());
+            sprintf_s(g_rowText[kSplashVolume], "Logo volume: %d%%", g_splashVolume);
+            sprintf_s(g_rowText[kSplashSeconds], "Logo length: %d s", g_splashSeconds);
+            sprintf_s(g_rowText[kDiscordLobby], "Discord lobby posts: %s", onOff(c.discordLobbyMessages));
+            sprintf_s(g_rowText[kDiscordPlayers], "Discord player posts: %s", onOff(c.discordPlayerMessages));
+        }
+
+        const char* SettingHelp(int row)
+        {
+            switch (row)
+            {
+            case kName: return "A: type a new name on the keyboard, Enter to keep it.";
+            case kBodyTags: return "Defeated players keep their nametag (Tag Team; the host's applies).";
+            case kTagColours: return "Off: every nametag in the game's white.";
+            case kDeadColour: return "Nametag colour of a defeated player.";
+            case kAllyColour: return "Nametag colour of your teammates (Tag Team).";
+            case kEnemyColour: return "Nametag colour of your opponents.";
+            case kSplashVolume: return "Volume during the start-up logos (next start).";
+            case kSplashSeconds: return "How long the start-up logos stay quieter (next start).";
+            case kDiscordLobby: return "Post 'lobby opened / closed' when you host.";
+            case kDiscordPlayers: return "Post '<player> joined / left' when you host.";
+            }
+            return "";
+        }
+
+        // Name typing: A on the Name row starts it; letters, digits, space, - and _ are added, Backspace removes,
+        // Enter (or A) keeps the name, Esc drops it. Polled from the keyboard while the Settings menu shows.
+        void FinishTyping(bool keep)
+        {
+            std::wstring name;
+            {
+                std::lock_guard guard(g_typedLock);
+                name = g_typedName;
+            }
+            g_typingName = false;
+            if (keep && !name.empty())
+            {
+                EditableConfig().displayName = name.substr(0, 32);
+                SaveSetting("display_name", winrt::to_string(EditableConfig().displayName));
+                Log(L"gamepatch: settings: name is now '%s' (other players see it from the next lobby)", EditableConfig().displayName.c_str());
+            }
+            RefreshSettingRows();
+        }
+
+        void TypingThread()
+        {
+            static std::once_flag once;
+            std::call_once(once, []
+            {
+                std::thread([]
+                {
+                    bool down[256] = {};
+                    for (;;)
+                    {
+                        Sleep(15);
+                        if (!g_typingName) { memset(down, 0, sizeof(down)); continue; }
+                        if (CurrentMenu(MenuManager()) != kSettingsMenu) { FinishTyping(false); continue; }
+                        for (int vk = 8; vk < 256; ++vk)
+                        {
+                            bool now = (GetAsyncKeyState(vk) & 0x8000) != 0;
+                            bool pressed = now && !down[vk];
+                            down[vk] = now;
+                            if (!pressed) continue;
+                            bool shift = (GetAsyncKeyState(VK_SHIFT) & 0x8000) != 0;
+                            wchar_t ch = 0;
+                            if (vk >= 'A' && vk <= 'Z') ch = static_cast<wchar_t>(shift ? vk : vk + 32);
+                            else if (vk >= '0' && vk <= '9' && !shift) ch = static_cast<wchar_t>(vk);
+                            else if (vk == VK_SPACE) ch = L' ';
+                            else if (vk == VK_OEM_MINUS) ch = shift ? L'_' : L'-';
+                            if (vk == VK_RETURN) { FinishTyping(true); break; }
+                            if (vk == VK_ESCAPE) { FinishTyping(false); break; }
+                            {
+                                std::lock_guard guard(g_typedLock);
+                                if (vk == VK_BACK && !g_typedName.empty()) g_typedName.pop_back();
+                                else if (ch && g_typedName.size() < 32) g_typedName += ch;
+                            }
+                            RefreshSettingRows();
+                        }
+                    }
+                }).detach();
+            });
+        }
+
+        void ChangeSetting(int row)
+        {
+            Config& c = EditableConfig();
+            auto onOff = [](bool on) { return std::string(on ? "on" : "off"); };
+            auto hex = [](uint32_t argb) { char s[8]; sprintf_s(s, "%06X", argb & 0xFFFFFF); return std::string(s); };
+            switch (row)
+            {
+            case kName:
+                if (g_typingName) { FinishTyping(true); return; }
+                {
+                    std::lock_guard guard(g_typedLock);
+                    g_typedName.clear();
+                }
+                g_typingName = true;
+                TypingThread();
+                Log(L"gamepatch: settings: typing a new name");
+                break;
+            case kBodyTags: c.nametagsOnBodies = !c.nametagsOnBodies; SaveSetting("nametags_on_bodies", onOff(c.nametagsOnBodies)); UseOwnSettings(); break;
+            case kTagColours: c.nametagColors = !c.nametagColors; SaveSetting("nametag_colors", onOff(c.nametagColors)); break;
+            case kDeadColour: c.deadNametagColor = NextColour(c.deadNametagColor); SaveSetting("dead_nametag_color", hex(c.deadNametagColor)); break;
+            case kAllyColour: c.allyNametagColor = NextColour(c.allyNametagColor); SaveSetting("ally_nametag_color", hex(c.allyNametagColor)); break;
+            case kEnemyColour: c.enemyNametagColor = NextColour(c.enemyNametagColor); SaveSetting("enemy_nametag_color", hex(c.enemyNametagColor)); break;
+            case kSplashVolume: g_splashVolume = g_splashVolume >= 100 ? 0 : (g_splashVolume / 10 + 1) * 10; SaveSetting("splash_volume", std::to_string(g_splashVolume)); break;
+            case kSplashSeconds: g_splashSeconds = g_splashSeconds >= 30 ? 0 : (g_splashSeconds / 2 + 1) * 2; SaveSetting("splash_seconds", std::to_string(g_splashSeconds)); break;
+            case kDiscordLobby: c.discordLobbyMessages = !c.discordLobbyMessages; SaveSetting("discord_lobby_messages", onOff(c.discordLobbyMessages)); break;
+            case kDiscordPlayers: c.discordPlayerMessages = !c.discordPlayerMessages; SaveSetting("discord_player_messages", onOff(c.discordPlayerMessages)); break;
+            }
+            RefreshSettingRows();
+        }
+
+        bool InSettings() { return CurrentMenu(MenuManager()) == kSettingsMenu; }
+        SessionCommandFn g_friendCount = nullptr, g_friendName = nullptr, g_friendSelect = nullptr, g_friendInfo = nullptr;
+        SessionCommandFn g_friendFlag[6] = {};
+
+        int64_t HookedFriendCount(int32_t* args) { return InSettings() ? kSettingRows : g_friendCount(args); }
+        int64_t HookedFriendName(int32_t* args)
+        {
+            if (!InSettings() || !args) return g_friendName(args);
+            RefreshSettingRows();
+            int row = args[0];
+            return row >= 0 && row < kSettingRows ? reinterpret_cast<int64_t>(g_rowText[row]) : reinterpret_cast<int64_t>("");
+        }
+        int64_t HookedFriendSelect(int32_t* args)
+        {
+            if (!InSettings() || !args) return g_friendSelect(args);
+            int row = args[0];
+            if (row >= 0 && row < kSettingRows) ChangeSetting(row);
+            return 0;
+        }
+        int64_t HookedFriendInfo(int32_t* args)
+        {
+            if (InSettings() && args)
+            {
+                g_infoRow = args[0];
+                return 0;
+            }
+            return g_friendInfo(args);
+        }
+        template <int N> int64_t HookedFriendFlag(int32_t* args) { return InSettings() ? 0 : g_friendFlag[N](args); }
+
+        // The info panel's lines for the selected setting (HookedDrawText).
+        const char* SettingsInfoText(int64_t* args)
+        {
+            char format[24];
+            if (!CopyString(reinterpret_cast<const char*>(args[2]), format, sizeof(format))) return nullptr;
+            if (strcmp(format, "Offline") == 0) return SettingHelp(g_infoRow);
+            if (strcmp(format, "Voice: Off") == 0) return g_typingName && g_infoRow == kName ? "Typing: Enter keeps it, Esc drops it." : "Press A to change it.";
+            return nullptr;
+        }
+
+        constexpr Relabel kSettingsTexts[] = {
+            { "FRIENDS LIST", "SETTINGS" },
+            { "Display players on your Friends List.", "Press A to change a setting." },
+        };
+
+        // The A button on a row (0x35B8: session command 154 with the row) is followed by a call-label that opens the
+        // friend's command menu: that word becomes a jump to the next word.
+        int PatchSettingsScript(uint8_t* script)
+        {
+            __try
+            {
+                auto code = reinterpret_cast<uint32_t*>(script);
+                if (code[0x35B8 / 4] != 0x42B20101) return 0;
+                if (code[0x35BC / 4] == 0x00000007) return 1;
+                if (code[0x35BC / 4] != 0xFECB0003) return 0;
+                code[0x35BC / 4] = 0x00000007;
+                return 1;
+            }
+            __except (EXCEPTION_EXECUTE_HANDLER)
+            {
+                return 0;
+            }
+        }
+
+        void SettingsScriptPatch(int menu, uint8_t* script, bool fresh)
+        {
+            if (menu != kSettingsMenu) return;
+            int texts = RelabelScript(script, kSettingsTexts, std::size(kSettingsTexts)), patched = PatchSettingsScript(script);
+            if (fresh) Log(L"gamepatch: Settings menu (was Xbox Live Options): %d text(s), A button %s", texts, patched ? L"changes settings" : L"left as it is (script not as expected)");
+        }
+
         bool RatedRuleText(int64_t* args, char* out, size_t size)
         {
             char format[64], rule[48];
@@ -1477,6 +1741,17 @@ namespace pdnet::gamepatches
 
         int64_t HookedDrawText(int64_t* args)
         {
+            if (args && InSettings())
+            {
+                if (const char* text = SettingsInfoText(args))
+                {
+                    int64_t changed[8];
+                    memcpy(changed, args, sizeof(changed));
+                    changed[2] = reinterpret_cast<int64_t>(text);
+                    return g_drawText(changed);
+                }
+                return g_drawText(args);
+            }
             if (args && GetConfig().ratedLobbies && CurrentMenu(MenuManager()) == kSessionListMenu)
             {
                 static char text[96];
@@ -1644,6 +1919,19 @@ namespace pdnet::gamepatches
             if (GetConfig().ratedLobbies) RatedLobbies();
             if (GetConfig().ratedLobbies && !g_drawText) WrapCommand<MenuCommandFn>(0x1403eefe0 + 23 * 8, 0x140207840, &HookedDrawText, g_drawText, L"session info rated text");
             if (GetConfig().ratedLobbies || GetConfig().scoreboard) MenuTextPatches(GetConfig().ratedLobbies, GetConfig().scoreboard);
+            // The in-game Settings menu (the Friends List of what was Xbox Live Options).
+            auto session = [](int n) { return 0x1403f1150 + n * 8ull; };
+            bool settings = WrapCommand<SessionCommandFn>(session(85), 0x140213ff0, &HookedFriendCount, g_friendCount, L"settings rows") &&
+                            WrapCommand<SessionCommandFn>(session(86), 0x140214000, &HookedFriendName, g_friendName, L"settings row text") &&
+                            WrapCommand<SessionCommandFn>(session(154), 0x140214d60, &HookedFriendSelect, g_friendSelect, L"settings change") &&
+                            WrapCommand<SessionCommandFn>(session(104), 0x1402141e0, &HookedFriendInfo, g_friendInfo, L"settings info") &&
+                            WrapCommand<SessionCommandFn>(session(87), 0x140214050, &HookedFriendFlag<0>, g_friendFlag[0], L"settings icons") &&
+                            WrapCommand<SessionCommandFn>(session(88), 0x1402140a0, &HookedFriendFlag<1>, g_friendFlag[1], L"settings icons") &&
+                            WrapCommand<SessionCommandFn>(session(89), 0x1402140f0, &HookedFriendFlag<2>, g_friendFlag[2], L"settings icons") &&
+                            WrapCommand<SessionCommandFn>(session(90), 0x140214150, &HookedFriendFlag<3>, g_friendFlag[3], L"settings icons") &&
+                            WrapCommand<SessionCommandFn>(session(159), 0x140214e50, &HookedFriendFlag<4>, g_friendFlag[4], L"settings icons") &&
+                            WrapCommand<SessionCommandFn>(session(160), 0x140214e70, &HookedFriendFlag<5>, g_friendFlag[5], L"settings icons");
+            if (settings) Log(L"gamepatch: in-game Settings ready (multiplayer menu > Settings)");
             if (WrapCommand<MenuCommandFn>(0x1403eefe0 + 40 * 8, 0x140207e20, &HookedAddItem, g_addItem, L"menu item names"))
                 Log(L"gamepatch: menu items renamed as they are added (Quick Join, Lobby Browser%s)", GetConfig().scoreboard ? L", Global scoreboards only" : L"");
             bool arsenal = GetConfig().lobbyArsenalEditor; // the Arsenal Lab button for clients too
