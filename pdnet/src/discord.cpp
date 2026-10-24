@@ -343,6 +343,14 @@ namespace pdnet::discord
         std::string text;
         if (type >= 0 && type < static_cast<int>(std::size(kTypes))) text = kTypes[type];
         if (rule >= 0 && rule < static_cast<int>(std::size(kRules))) text += (text.empty() ? "" : " \xC2\xB7 ") + std::string(kRules[rule]);
+        // The lobby's Rating option (rated_lobbies): PD_RATED (kept through matches, see xsapi/mpsd.h), else the
+        // search handle's ratinglimit.
+        if (GetConfig().ratedLobbies)
+        {
+            auto stored = l.attributes.find("PD_RATED");
+            int rated = stored != l.attributes.end() && !stored->second.empty() ? atoi(stored->second.c_str()) : SearchNumber(l, L"ratinglimit");
+            if (rated >= 0) text += (text.empty() ? "" : " \xC2\xB7 ") + std::string(rated ? "Rated" : "Unrated");
+        }
         return text;
     }
 
