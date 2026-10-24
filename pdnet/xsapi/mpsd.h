@@ -110,6 +110,8 @@ namespace pdnet::mpsd
         mp::MultiplayerSessionChangeTypes subscribedChanges = mp::MultiplayerSessionChangeTypes::None;
         mp::WriteSessionStatus writeStatus = mp::WriteSessionStatus::Unknown;
         std::optional<SearchHandle> search;
+        int rated = -1;         // the lobby's Rating option (1 Rated, 0 Unrated, -1 unknown): from the search handle's
+                                // ratinglimit, kept (PD_RATED) after the game clears the handle when a match starts
         std::wstring ownerXuid; // xuid of the lobby owner (empty for a local-only session)
         bool shared = false;    // backed by an EOS lobby
         uint32_t lobbyMemberCount = 0; // member count EOS reports (a search result has the count but not the members)

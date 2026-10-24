@@ -135,6 +135,7 @@ namespace pdnet::mpsd
             a["PD_CLOSED"] = d.closed ? "1" : "0";
             if (!d.hostDeviceToken.empty()) a["PD_HOST"] = U8(d.hostDeviceToken);
             if (d.search) lobbies::Split(a, "PD_SEARCH", SearchJson(*d.search));
+            if (d.rated >= 0) a["PD_RATED"] = std::to_string(d.rated);
             json::JsonObject mids;
             for (auto& m : d.members)
                 if (!m.reservation && m.memberId) mids.Insert(m.xuid, json::JsonValue::CreateNumberValue(m.memberId));
@@ -219,6 +220,7 @@ namespace pdnet::mpsd
             d.closed = Attr(a, "PD_CLOSED") == "1";
             d.hostDeviceToken = U16(Attr(a, "PD_HOST"));
             d.search = ParseSearch(lobbies::Joined(a, "PD_SEARCH"));
+            if (auto v = Attr(a, "PD_RATED"); !v.empty()) d.rated = atoi(v.c_str());
             d.shared = lobby.joined;
             d.lobbyMemberCount = lobby.memberCount;
 
@@ -863,6 +865,7 @@ namespace pdnet::mpsd
         handle.id = LobbyIdFor(key);
         if (doc.search) handle.created = doc.search->created;
         if (!Ticks(handle.created)) handle.created = winrt::clock::now();
+        if (auto limit = handle.numbers.find(L"ratinglimit"); limit != handle.numbers.end()) doc.rated = limit->second != 0 ? 1 : 0;
         doc.search = std::move(handle);
         if (doc.shared && lobbies::Available())
         {
@@ -993,7 +996,9 @@ namespace pdnet::scores
     {
         for (auto& s : mpsd::SessionStore::Instance().All())
         {
-            if (!s || !s->search || !s->FindMember(xsapi::LocalXuid())) continue;
+            if (!s || !s->FindMember(xsapi::LocalXuid())) continue;
+            if (s->rated >= 0) return s->rated; // also while a match runs (the game clears the search handle then)
+            if (!s->search) continue;
             auto it = s->search->numbers.find(L"ratinglimit");
             if (it != s->search->numbers.end()) return it->second != 0 ? 1 : 0;
         }
