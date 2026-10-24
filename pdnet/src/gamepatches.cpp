@@ -1713,7 +1713,7 @@ namespace pdnet::gamepatches
         // After the Options screen adds its Voice Chat row (or that row's hint), pdnet's rows (or hints) follow.
         void SettingsExtraItems(const char* added)
         {
-            if (!InSettings()) return;
+            // No menu check: the screen adds its rows before the game makes it the current menu; the texts are its own.
             bool rows = strcmp(added, "\a160wVoice Chat\a1#\a230c%s\a0#") == 0, hints = strcmp(added, "Set your voice chat status.") == 0;
             if (!rows && !hints) return;
             RefreshSettingRows();
