@@ -685,6 +685,31 @@ namespace pdnet::gamepatches
                     }
                     continue;
                 }
+                // The Ratings scoreboard's header "Rank | Player | Arsenal | Rating / Wins": the Arsenal column (each
+                // player's arsenal on Xbox Live, a download) has nothing behind it now, so its heading goes. Columns are
+                // "<code>NNNw<title>" pieces ended by a separator, written as the escapes \a / \f or as the characters.
+                if (GetConfig().scoreboard && _stricmp(key, "msg_live_rank_list0_tag") == 0)
+                {
+                    if (!CopyString(t.values[i], value, sizeof(value))) return;
+                    std::string text = value;
+                    size_t at = text.find("390wArsenal");
+                    if (at != std::string::npos)
+                    {
+                        size_t from = at >= 2 && text.compare(at - 2, 2, "\\a") == 0 ? at - 2 : at >= 1 && text[at - 1] == '\a' ? at - 1 : std::string::npos;
+                        size_t end = at + strlen("390wArsenal");
+                        if (text.compare(end, 2, "\\f") == 0) end += 2;
+                        else if (end < text.size() && text[end] == '\f') end += 1;
+                        if (from != std::string::npos)
+                        {
+                            text.erase(from, end - from);
+                            std::string& stored = renamed[key];
+                            stored = text;
+                            t.values[i] = stored.data();
+                            Log(L"gamepatch: Ratings scoreboard header without the Arsenal column");
+                        }
+                    }
+                    continue;
+                }
                 for (auto& r : kRenames)
                 {
                     if (strcmp(key, r.key) != 0) continue;
