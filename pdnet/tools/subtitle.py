@@ -19,7 +19,7 @@ for c, w in zip(text, widths):
 m = m.crop(m.getbbox())
 
 clean = Image.new('L', (W, H), 0)
-clean.paste(m, ((W - m.size[0]) // 2 + 40, (H - m.size[1]) // 2 - 2))
+clean.paste(m, ((W - m.size[0]) // 2, (H - m.size[1]) // 2 - 2))
 
 def noise(size, scale, seed):
     random.seed(seed)

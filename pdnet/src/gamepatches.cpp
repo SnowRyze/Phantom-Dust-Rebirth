@@ -2107,6 +2107,7 @@ namespace pdnet::gamepatches
         {
             constexpr DWORD kHeader = 0x1000, kDataSize = 0x27bc80, kSize = kHeader + kDataSize, kLogo = 0x4000, kGlow = 0x38800, kGlowEnd = 0x48400;
             constexpr int kLogoW = 560, kLogoH = 96, kGlowTexW = 576, kGlowTexH = 112;
+            // As many empty rows go on top as words below: the textures are drawn centred, so the logo stays put.
             constexpr DWORD kExtra = kLogoW * kSubH * 4, kGlowExtra = kGlowTexW * kSubH;
             static_assert(kGlowW == kGlowTexW && kGlowH >= kSubH + kGlowTexH - 96, "titlesub.h glow mask size");
             HANDLE file = g_createFile2(original, GENERIC_READ, FILE_SHARE_READ, OPEN_EXISTING, nullptr);
@@ -2150,27 +2151,30 @@ namespace pdnet::gamepatches
                 }
             // The glow (logo_03, 8-bit, 8 px wider each side) gets the same number of rows, and the words' glow: both
             // textures are drawn centred, so they stay lined up and "Rebirth" glows with the logo.
-            std::vector<uint8_t> glow(&data[kHeader + kGlow], &data[kHeader + kGlowEnd]);
+            std::vector<uint8_t> glow(kGlowExtra, 0);
+            glow.insert(glow.end(), &data[kHeader + kGlow], &data[kHeader + kGlowEnd]);
             glow.resize(glow.size() + kGlowExtra, 0);
             for (int y = 0; y < kGlowH; ++y)
                 for (int x = 0; x < kGlowW; ++x)
                 {
-                    uint8_t& p = glow[(96 + y) * kGlowTexW + x];
+                    uint8_t& p = glow[(kSubH + 96 + y) * kGlowTexW + x];
                     p = (std::max)(p, kSubGlow[y * kGlowW + x]);
                 }
 
-            std::vector<uint8_t> out(data.begin(), data.begin() + kHeader + kGlow);
+            std::vector<uint8_t> out(data.begin(), data.begin() + kHeader + kLogo);
+            out.resize(out.size() + kExtra, 0);
+            out.insert(out.end(), data.begin() + kHeader + kLogo, data.begin() + kHeader + kGlow);
             out.insert(out.end(), rows.begin(), rows.end());
             out.insert(out.end(), glow.begin(), glow.end());
             out.insert(out.end(), data.begin() + kHeader + kGlowEnd, data.begin() + kSize);
             data.swap(out);
-            u32(0x14) += kExtra + kGlowExtra;
-            u32(0x60) = (u32(0x60) & ~0xfff000u) | ((kLogoH + kSubH - 1) << 12);
-            u32(0x7c) = (u32(0x7c) & ~0xfff000u) | ((kGlowTexH + kSubH - 1) << 12);
-            u32(0x70) += kExtra; // where each later texture starts
-            for (int k = 3; k < 13; ++k) u32(0x38 + k * 0x1c) += kExtra + kGlowExtra;
-            u16(0x38a) = u16(0x4b0) = kLogoH + kSubH;
-            u16(0x39e) = u16(0x4ec) = kGlowTexH + kSubH;
+            u32(0x14) += 2 * (kExtra + kGlowExtra);
+            u32(0x60) = (u32(0x60) & ~0xfff000u) | ((kLogoH + 2 * kSubH - 1) << 12);
+            u32(0x7c) = (u32(0x7c) & ~0xfff000u) | ((kGlowTexH + 2 * kSubH - 1) << 12);
+            u32(0x70) += 2 * kExtra; // where each later texture starts
+            for (int k = 3; k < 13; ++k) u32(0x38 + k * 0x1c) += 2 * (kExtra + kGlowExtra);
+            u16(0x38a) = u16(0x4b0) = kLogoH + 2 * kSubH;
+            u16(0x39e) = u16(0x4ec) = kGlowTexH + 2 * kSubH;
             CreateDirectoryW((LocalStatePath() + L"\\pdnet").c_str(), nullptr);
             file = g_createFile2(copy.c_str(), GENERIC_WRITE, 0, CREATE_ALWAYS, nullptr);
             if (file == INVALID_HANDLE_VALUE) return false;
