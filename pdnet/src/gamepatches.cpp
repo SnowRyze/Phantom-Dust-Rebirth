@@ -1693,7 +1693,12 @@ namespace pdnet::gamepatches
             int64_t input[2] = { 0, 0 };
             int64_t buttons = reinterpret_cast<InputFn>(At(0x1402168a0))(input); // g1 #37 (0): the buttons, as the script reads them
             int row = args[0] - kFirstOptionRow;
-            if (row >= 0 && row < kSettingRows) ChangeSetting(row, (buttons & 0x00040004) ? -1 : 1);
+            if (row >= 0 && row < kSettingRows)
+            {
+                int64_t sound[2] = { 37, 0 };
+                reinterpret_cast<InputFn>(At(0x140261750))(sound); // g1 #43 (37): the change sound the game's own rows play
+                ChangeSetting(row, (buttons & 0x00040004) ? -1 : 1);
+            }
             return 0;
         }
 
