@@ -1745,6 +1745,21 @@ namespace pdnet::gamepatches
             return args && args[0] == 3 && settings ? 0 : g_settingFlag(args);
         }
 
+        // The Settings list holds more rows than the Options screen was laid out for, so its window (menu command 37,
+        // position 56, 89; second argument the top) starts 24 higher, clear of the hint line at the bottom.
+        MenuCommandFn g_placeWindow = nullptr;
+        int64_t HookedPlaceWindow(int64_t* args)
+        {
+            if (args && args[0] == 56 && args[1] == 89 && (InSettings() || GetTickCount64() - g_settingsOpenedAt < 500))
+            {
+                int64_t moved[8];
+                memcpy(moved, args, sizeof(moved));
+                moved[1] = 65;
+                return g_placeWindow(moved);
+            }
+            return g_placeWindow(args);
+        }
+
         bool SettingsItems(const char* added)
         {
             bool rows = strcmp(added, "\a160wVoice Chat\f\a1#\a230c%s\f\a0#") == 0, hints = strcmp(added, "Set your voice chat status.") == 0;
@@ -1949,6 +1964,7 @@ namespace pdnet::gamepatches
             if (GetConfig().ratedLobbies || GetConfig().scoreboard) MenuTextPatches(GetConfig().ratedLobbies, GetConfig().scoreboard);
             // The in-game Settings menu (what was Xbox Live Options): left / right on pdnet's rows.
             WrapCommand<NativeFn>(0x1403ddde0 + 3 * 8, 0x1400bde50, &HookedSettingFlag, g_settingFlag, L"no Cross Play option");
+            WrapCommand<MenuCommandFn>(0x1403eefe0 + 37 * 8, 0x140207d50, &HookedPlaceWindow, g_placeWindow, L"settings window position");
             if (WrapCommand<SessionCommandFn>(0x1403f1150 + 154 * 8, 0x140214d60, &HookedOptionChanged, g_optionChanged, L"settings rows"))
                 Log(L"gamepatch: in-game Settings ready (multiplayer menu > Settings)");
             if (WrapCommand<MenuCommandFn>(0x1403eefe0 + 40 * 8, 0x140207e20, &HookedAddItem, g_addItem, L"menu item names"))
