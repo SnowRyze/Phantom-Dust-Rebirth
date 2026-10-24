@@ -1724,9 +1724,15 @@ namespace pdnet::gamepatches
         // The Options screen's Voice Chat row (and its hint) is replaced by pdnet's rows (and hints); Cross Play is
         // left out by PatchSettingsScript. Returns true when it added them instead of `added`.
         // g10 #3 (0x1400bde50, the game's settings flags): flag 3 means "Cross Play can be chosen" and is always 1 on
-        // PC. It reads 0 now, so the Settings screen leaves Cross Play (row, hint, detail box) out from the first draw.
+        // PC. While the Settings screen's script is loaded (menu table entry 68; it is loaded before its setup runs) it
+        // reads 0, so Cross Play (row, hint, detail box) is left out from the first draw. Elsewhere it stays 1: the
+        // multiplayer menu shows its Settings item only when it is.
         NativeFn g_settingFlag = nullptr;
-        int64_t HookedSettingFlag(int64_t* args) { return args && args[0] == 3 ? 0 : g_settingFlag(args); }
+        int64_t HookedSettingFlag(int64_t* args)
+        {
+            bool settingsLoaded = *reinterpret_cast<uint8_t* volatile*>(At(0x1403fa3d0) + kSettingsMenu * 0x18 + 0x10) != nullptr;
+            return args && args[0] == 3 && settingsLoaded ? 0 : g_settingFlag(args);
+        }
 
         bool SettingsItems(const char* added)
         {
