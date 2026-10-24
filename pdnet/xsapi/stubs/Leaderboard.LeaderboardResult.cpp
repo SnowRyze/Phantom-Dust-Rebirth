@@ -78,7 +78,10 @@ namespace winrt::Microsoft::Xbox::Services::Leaderboard::implementation
         }
         ::pdnet::Log(L"xsapi-pdnet: scoreboard %s '%s': %zu players, rows from rank %zu (%u per page), %zu extra column(s)",
             why, id.c_str(), all.size(), start + 1, max, extra.size());
-        return winrt::make<LeaderboardResult>(std::wstring(board), std::move(all), std::move(extra), start, max);
+        for (size_t i = 0; i < all.size() && i < 5; ++i)
+            if (!all[i].extra.empty())
+                ::pdnet::Log(L"xsapi-pdnet: scoreboard row %u '%S': %d, %s %d", all[i].record.rank, all[i].record.name.c_str(), all[i].record.score, extra[0].c_str(), all[i].extra[0]);
+        return winrt::make<LeaderboardResult>(std::wstring(id), std::move(all), std::move(extra), start, max); // id: the stat the game matches the first column by
     }
 
     Windows::Foundation::Collections::IVectorView<Microsoft::Xbox::Services::Leaderboard::LeaderboardColumn> LeaderboardResult::Columns()
