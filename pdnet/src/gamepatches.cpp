@@ -1144,7 +1144,7 @@ namespace pdnet::gamepatches
             { "Display the Options menu.", "Your name, nametags, start-up volume and Discord posts." },
         };
 
-        void SettingsExtraItems(const char* added); // the in-game Settings rows (below)
+        bool SettingsItems(const char* added); // the in-game Settings rows (below)
 
         int64_t HookedAddItem(int64_t* args)
         {
@@ -1163,9 +1163,8 @@ namespace pdnet::gamepatches
                             renamed[0] = reinterpret_cast<int64_t>(item.replace); // static text: the menu may keep the pointer
                             return g_addItem(renamed);
                         }
-                    int64_t result = g_addItem(args);
-                    SettingsExtraItems(text);
-                    return result;
+                    if (SettingsItems(text)) return 0; // replaced by the in-game Settings rows
+                    return g_addItem(args);
                 }
             }
             return g_addItem(args);
@@ -1491,12 +1490,12 @@ namespace pdnet::gamepatches
         constexpr Colour kColours[] = { { "Yellow", 0xFFE600 }, { "Red", 0xFF5A5A }, { "Blue", 0x4FB4FF }, { "Green", 0x5AFF6E },
                                         { "Purple", 0xB46EFF }, { "Orange", 0xFFA03C }, { "Cyan", 0x3CF0FF }, { "Pink", 0xFF78C8 },
                                         { "White", 0xFFFFFF } };
-        enum SettingRow { kName, kBodyTags, kTagColours, kDeadColour, kAllyColour, kEnemyColour, kSplashVolume, kSplashSeconds,
+        enum SettingRow { kName, kVoiceMode, kBodyTags, kTagColours, kDeadColour, kAllyColour, kEnemyColour, kSplashVolume, kSplashSeconds,
                           kDiscordLobby, kDiscordPlayers, kSettingRows };
         char g_rowText[kSettingRows][80];
         char g_optionText[kSettingRows][96]; // the rows as the Options screen shows them (RefreshSettingRows)
         constexpr int kFirstOptionRow = 3;   // after Cross Play (1) and Voice Chat (2)
-        const char* kOptionLabels[kSettingRows] = { "Name", "Body Tags", "Tag Colours", "Dead Colour", "Ally Colour", "Foe Colour",
+        const char* kOptionLabels[kSettingRows] = { "Name", "Voice Mode", "Body Tags", "Tag Colours", "Dead Colour", "Ally Colour", "Foe Colour",
                                                     "Logo Volume", "Logo Time", "Discord Lobby", "Discord Join" };
         std::atomic<bool> g_typingName{ false };
         std::wstring g_typedName;
@@ -1547,6 +1546,7 @@ namespace pdnet::gamepatches
                 name = winrt::to_string(g_typingName ? g_typedName + L"_" : c.displayName);
             }
             sprintf_s(g_rowText[kName], "Name: %s", name.c_str());
+            sprintf_s(g_rowText[kVoiceMode], "Voice mode: %s", c.voiceClassic ? "Classic" : "Modern");
             sprintf_s(g_rowText[kBodyTags], "Nametags on bodies: %s", onOff(c.nametagsOnBodies));
             sprintf_s(g_rowText[kTagColours], "Nametag colours: %s", onOff(c.nametagColors));
             sprintf_s(g_rowText[kDeadColour], "Dead colour: %s", ColourName(c.deadNametagColor).c_str());
@@ -1568,6 +1568,7 @@ namespace pdnet::gamepatches
             switch (row)
             {
             case kName: return "Left / right, then type a new name: Enter keeps it, Esc drops it.";
+            case kVoiceMode: return "Modern: the lobby's Mic option mutes only your mic. Classic: Voice Chat Off = no talking, no hearing.";
             case kBodyTags: return "Defeated players keep their nametag (Tag Team; the host's applies).";
             case kTagColours: return "Off: every nametag in the game's white.";
             case kDeadColour: return "Nametag colour of a defeated player.";
@@ -1656,6 +1657,7 @@ namespace pdnet::gamepatches
                 TypingThread();
                 Log(L"gamepatch: settings: typing a new name");
                 break;
+            case kVoiceMode: c.voiceClassic = !c.voiceClassic; SaveSetting("voice_mode", c.voiceClassic ? "classic" : "mic"); break;
             case kBodyTags: c.nametagsOnBodies = !c.nametagsOnBodies; SaveSetting("nametags_on_bodies", onOff(c.nametagsOnBodies)); UseOwnSettings(); break;
             case kTagColours: c.nametagColors = !c.nametagColors; SaveSetting("nametag_colors", onOff(c.nametagColors)); break;
             case kDeadColour: c.deadNametagColor = NextColour(c.deadNametagColor, direction); SaveSetting("dead_nametag_color", hex(c.deadNametagColor)); break;
@@ -1702,12 +1704,15 @@ namespace pdnet::gamepatches
                 if (code[0x05810 / 4] != 0x00010007) return 0;              // jump over the "pop 1"
                 bool done = code[0x05814 / 4] == 0x42B20101;
                 if (!done && (code[0x05814 / 4] != 0x0001000D || code[0x0564C / 4] != 0x0001000E || code[0x05670 / 4] != 0x0002000E ||
-                              code[0x05674 / 4] != 0xFFFF000A)) return 0;
+                              code[0x05674 / 4] != 0xFFFF000A || code[0x05418 / 4] != 0x00000010 || code[0x054A4 / 4] != 0x00000010 ||
+                              code[0x05660 / 4] != 0x00000010 || code[0x058A4 / 4] != 0x00000010)) return 0;
+                // Cross Play (its row, hint and detail box) is left out: its "is it shown" checks (g10 #3 with 3) read 0.
+                for (uint32_t at : { 0x05418u, 0x054A4u, 0x05660u, 0x058A4u }) code[at / 4] = 0x0000000E; // push 0 (was push ret)
                 code[0x05814 / 4] = 0x42B20101;                              // call session command 154 argc 1 (consumes the row)
-                // With Cross Play hidden the script maps cursor row 0 to Voice Chat (row 2) by "if row == 1: row = 2", which
-                // also sent the next row to Voice Chat: now every row moves up one ("row == row", "row += 1").
+                // Rows: cursor row + 1 is the script's row (1 Cross Play, 2 Voice Chat). Both are gone, so every cursor row
+                // moves on two more: "if row == 1: row = 2" becomes "if row == row: row += 2" (cursor 0 -> 3, pdnet's first).
                 code[0x0564C / 4] = 0xFFFF0009;                              // push var[-1] (was push 1)
-                code[0x05670 / 4] = 0x0001000E;                              // push 1 (was push 2)
+                code[0x05670 / 4] = 0x0002000E;                              // push 2
                 code[0x05674 / 4] = 0xFFFF010A;                              // var[-1] += (was store)
                 return 1;
             }
@@ -1716,21 +1721,26 @@ namespace pdnet::gamepatches
                 return 0;
             }
         }
-        // After the Options screen adds its Voice Chat row (or that row's hint), pdnet's rows (or hints) follow.
-        void SettingsExtraItems(const char* added)
+        // The Options screen's Voice Chat row (and its hint) is replaced by pdnet's rows (and hints); Cross Play is
+        // left out by PatchSettingsScript. Returns true when it added them instead of `added`.
+        // g10 #3 (0x1400bde50, the game's settings flags): flag 3 means "Cross Play can be chosen" and is always 1 on
+        // PC. It reads 0 now, so the Settings screen leaves Cross Play (row, hint, detail box) out from the first draw.
+        NativeFn g_settingFlag = nullptr;
+        int64_t HookedSettingFlag(int64_t* args) { return args && args[0] == 3 ? 0 : g_settingFlag(args); }
+
+        bool SettingsItems(const char* added)
         {
-            // No menu check: the screen adds its rows before the game makes it the current menu; the texts are its own.
             bool rows = strcmp(added, "\a160wVoice Chat\f\a1#\a230c%s\f\a0#") == 0, hints = strcmp(added, "Set your voice chat status.") == 0;
-            if (!rows && !hints) return;
+            if (!rows && !hints) return false;
             RefreshSettingRows();
             for (int r = 0; r < kSettingRows; ++r)
             {
                 int64_t item[8] = { reinterpret_cast<int64_t>(rows ? g_optionText[r] : SettingHelp(r)) };
                 g_addItem(item);
             }
-            if (rows) Log(L"gamepatch: Settings: %d pdnet rows added", static_cast<int>(kSettingRows));
+            if (rows) Log(L"gamepatch: Settings: %d rows", static_cast<int>(kSettingRows));
+            return true;
         }
-
         void SettingsScriptPatch(int menu, uint8_t* script, bool fresh)
         {
             if (menu != kSettingsMenu) return;
@@ -1921,6 +1931,7 @@ namespace pdnet::gamepatches
             if (GetConfig().ratedLobbies && !g_drawText) WrapCommand<MenuCommandFn>(0x1403eefe0 + 23 * 8, 0x140207840, &HookedDrawText, g_drawText, L"session info rated text");
             if (GetConfig().ratedLobbies || GetConfig().scoreboard) MenuTextPatches(GetConfig().ratedLobbies, GetConfig().scoreboard);
             // The in-game Settings menu (what was Xbox Live Options): left / right on pdnet's rows.
+            WrapCommand<NativeFn>(0x1403ddde0 + 3 * 8, 0x1400bde50, &HookedSettingFlag, g_settingFlag, L"no Cross Play option");
             if (WrapCommand<SessionCommandFn>(0x1403f1150 + 154 * 8, 0x140214d60, &HookedOptionChanged, g_optionChanged, L"settings rows"))
                 Log(L"gamepatch: in-game Settings ready (multiplayer menu > Settings)");
             if (WrapCommand<MenuCommandFn>(0x1403eefe0 + 40 * 8, 0x140207e20, &HookedAddItem, g_addItem, L"menu item names"))
