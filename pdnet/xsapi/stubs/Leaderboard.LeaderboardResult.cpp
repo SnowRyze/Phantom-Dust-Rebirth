@@ -50,13 +50,17 @@ namespace winrt::Microsoft::Xbox::Services::Leaderboard::implementation
         }
         for (auto& stat : extra)
         {
+            // Total Wins is the three mode counts added up (always matches the win boards).
+            std::vector<std::string> stats{ winrt::to_string(stat) };
+            if (stat == L"TotalWin") stats = { "BattleRoyaleWin", "TagTeamWin", "OneOnOneWin" };
             std::map<std::string, int32_t> scores;
-            for (size_t i = 0; i < all.size(); i += 100)
-            {
-                std::vector<std::string> ids;
-                for (size_t j = i; j < all.size() && j < i + 100; ++j) ids.push_back(all[j].record.userId);
-                scores.merge(::pdnet::scores::UserScores(winrt::to_string(stat), ids));
-            }
+            for (auto& s : stats)
+                for (size_t i = 0; i < all.size(); i += 100)
+                {
+                    std::vector<std::string> ids;
+                    for (size_t j = i; j < all.size() && j < i + 100; ++j) ids.push_back(all[j].record.userId);
+                    for (auto& [id, value] : ::pdnet::scores::UserScores(s, ids)) scores[id] += value;
+                }
             for (auto& row : all)
             {
                 auto it = scores.find(row.record.userId);

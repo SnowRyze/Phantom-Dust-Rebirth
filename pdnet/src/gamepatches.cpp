@@ -4,6 +4,7 @@
 #include "lobbies.h"
 #include "scores.h"
 #include "log.h"
+#include <intrin.h>
 #include <set>
 #include <tuple>
 
@@ -1190,8 +1191,33 @@ namespace pdnet::gamepatches
         using ApplyRatingFn = int64_t (*)(int64_t, int64_t, int64_t, int64_t, int64_t, int64_t);
         ApplyRatingFn g_applyRating = nullptr;
 
+        // Wins for the scoreboard come from the same two calls: at match start the game takes a 100-point deposit
+        // (FUN_140187710 calls with a negative change), at the end it gives back 100 plus the result
+        // (FUN_140188290, result from FUN_1401881d0), so start + end > 0 is a win. Counted in Rated and Unrated
+        // matches alike, by game type (0x1405277b4: 0 Battle Royale, 1 Tag Team, 2 One-on-One). The game's own
+        // win events (achievement progress) never arrive, so they are not used.
+        int64_t g_matchStartChange = 0;
+        bool g_matchStarted = false;
+
         int64_t HookedApplyRating(int64_t a, int64_t change, int64_t c, int64_t d, int64_t e, int64_t f)
         {
+            auto from = reinterpret_cast<uint8_t*>(_ReturnAddress());
+            bool atStart = from >= At(0x140187710) && from < At(0x140187a20), atEnd = from >= At(0x140188290) && from < At(0x140188460);
+            if (atStart)
+            {
+                g_matchStartChange = change;
+                g_matchStarted = true;
+            }
+            else if (atEnd && g_matchStarted)
+            {
+                g_matchStarted = false;
+                int64_t net = g_matchStartChange + change;
+                int type = *reinterpret_cast<int32_t*>(At(0x1405277b4));
+                static const char* kWins[] = { "BattleRoyaleWin", "TagTeamWin", "OneOnOneWin" };
+                Log(L"gamepatch: match result %+lld (%s)", net, net > 0 ? L"win" : L"no win");
+                if (net > 0 && type >= 0 && type < 3 && gamepatches::MultiplayerProfile()) scores::AddWin(kWins[type]);
+            }
+
             static int last = -1;
             int rated = scores::RatedMatch();
             if (rated < 0) rated = last; // the session can be gone by the end of the match
@@ -1204,7 +1230,6 @@ namespace pdnet::gamepatches
             else Log(L"gamepatch: rating change %lld (Rated match)", change);
             return g_applyRating(a, change, c, d, e, f);
         }
-
         void RatedLobbies()
         {
             uint8_t* start = At(0x1401878c6); // cmp edi,2 ; jg  (match start: rule > 2 -> no rating)

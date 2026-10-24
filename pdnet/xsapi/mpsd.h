@@ -110,6 +110,7 @@ namespace pdnet::mpsd
         mp::MultiplayerSessionChangeTypes subscribedChanges = mp::MultiplayerSessionChangeTypes::None;
         mp::WriteSessionStatus writeStatus = mp::WriteSessionStatus::Unknown;
         std::optional<SearchHandle> search;
+        bool hostPresent = true; // the game host (hostDeviceToken) is among the lobby's members (PD_MIDS); false: a ghost
         int rated = -1;         // the lobby's Rating option (1 Rated, 0 Unrated, -1 unknown): from the search handle's
                                 // ratinglimit, kept (PD_RATED) after the game clears the handle when a match starts
         std::wstring ownerXuid; // xuid of the lobby owner (empty for a local-only session)

@@ -28,7 +28,6 @@ namespace pdnet::scores
     {
         using namespace eossdk;
         constexpr const char* kRating = "CurrentMPRanking";
-        constexpr const char* kTotalWins = "TotalWin";
 
         std::string Narrow(const Api& api, EOS_ProductUserId id)
         {
@@ -162,7 +161,7 @@ namespace pdnet::scores
     void AddWin(const std::string& mode)
     {
         if (!GetConfig().scoreboard || !eos::SignedIn()) return;
-        Ingest({ { mode, 1 }, { kTotalWins, 1 } });
+        Ingest({ { mode, 1 } }); // Total Wins is the sum of the three modes (Leaderboard.LeaderboardResult.cpp)
         std::lock_guard guard(g_lock);
         g_ranks.erase(mode); // show it next time the board opens
     }

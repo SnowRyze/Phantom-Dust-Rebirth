@@ -4,7 +4,7 @@
 // names them:
 //   CurrentMPRanking  the multiplayer rating (stat aggregation Latest); its rows also show TotalWin
 //   BattleRoyaleWin, TagTeamWin, OneOnOneWin   wins per mode (aggregation Sum)
-//   TotalWin          all three added up (stat only, aggregation Sum)
+//   (Total Wins, the Rating board's column, is those three added up)
 //   PlayerName0-8     the player's display_name, packed 31 bits per stat (aggregation Latest; EOS keeps no names
 //                     for device-id accounts)
 // The rating comes from the game's Hero_MP_Ranking event (and once per session from the save); a win event adds 1
@@ -29,7 +29,7 @@ namespace pdnet::scores
     // Sends the rating to CurrentMPRanking (asynchronous; skipped while EOS is signed out or when unchanged).
     void SubmitRating(int rating);
 
-    // A multiplayer win: `mode` is BattleRoyaleWin, TagTeamWin or OneOnOneWin. Adds 1 to it and to TotalWin.
+    // A multiplayer win: `mode` is BattleRoyaleWin, TagTeamWin or OneOnOneWin. Adds 1 to it.
     void AddWin(const std::string& mode);
 
     // A leaderboard's ranks (EOS keeps the top 1000), refreshed at most every 20 s. Waits on the calling thread

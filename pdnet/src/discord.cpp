@@ -349,7 +349,7 @@ namespace pdnet::discord
         {
             auto stored = l.attributes.find("PD_RATED");
             int rated = stored != l.attributes.end() && !stored->second.empty() ? atoi(stored->second.c_str()) : SearchNumber(l, L"ratinglimit");
-            if (rated >= 0) text += (text.empty() ? "" : " \xC2\xB7 ") + std::string(rated ? "Rated" : "Unrated");
+            text += (text.empty() ? "" : " \xC2\xB7 ") + std::string(rated > 0 ? "Rated" : "Unrated"); // no setting at all: unrated
         }
         return text;
     }

@@ -241,6 +241,7 @@ namespace winrt::Microsoft::Xbox::Services::Multiplayer::implementation
         std::vector<::pdnet::mpsd::SessionPtr> matched;
         for (auto& doc : all)
         {
+            if (!doc->hostPresent) continue; // ghost: its game host left (mpsd.cpp, FromLobby)
             if (!filter.empty() && !::pdnet::mpsd::MatchesFilter(*doc->search, filter)) continue;
             if (joinable)
             {

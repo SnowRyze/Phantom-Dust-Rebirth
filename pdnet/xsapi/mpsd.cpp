@@ -230,6 +230,9 @@ namespace pdnet::mpsd
 
             std::map<std::wstring, uint32_t> ids;
             for (auto& [xuid, id] : ParseStringMap(lobbies::Joined(a, "PD_MIDS"))) ids[xuid] = static_cast<uint32_t>(_wtoi(id.c_str()));
+            // PD_MIDS lists the members present (every lobby owner's pdnet drops those who left): a game host missing
+            // from it has left, so the lobby is a ghost even if its owner's pdnet is too old to stop listing it.
+            d.hostPresent = d.hostDeviceToken.empty() || ids.count(d.hostDeviceToken) > 0;
             uint32_t next = static_cast<uint32_t>(atoi(Attr(a, "PD_NEXTMID").c_str()));
             if (!next) next = 1;
 
