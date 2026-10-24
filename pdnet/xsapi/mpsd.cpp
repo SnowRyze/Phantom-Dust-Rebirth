@@ -220,6 +220,10 @@ namespace pdnet::mpsd
             d.closed = Attr(a, "PD_CLOSED") == "1";
             d.hostDeviceToken = U16(Attr(a, "PD_HOST"));
             d.search = ParseSearch(lobbies::Joined(a, "PD_SEARCH"));
+            // No "within 200 of the host's rating" limit (the Rating option is Unrated / Rated), even for lobbies whose
+            // host runs an older pdnet: searches and the join check read these.
+            if (d.search && d.search->numbers.count(L"ratingmin")) d.search->numbers[L"ratingmin"] = 0;
+            if (d.search && d.search->numbers.count(L"ratingmax")) d.search->numbers[L"ratingmax"] = 1000000;
             if (auto v = Attr(a, "PD_RATED"); !v.empty()) d.rated = atoi(v.c_str());
             d.shared = lobby.joined;
             d.lobbyMemberCount = lobby.memberCount;

@@ -4,11 +4,33 @@
 #include "Events.EventsService.h"
 #include "../../src/scores.h"
 #include "../../src/gamepatches.h"
+#include <set>
 
 namespace winrt::Microsoft::Xbox::Services::Events::implementation
 {
+    namespace
+    {
+        // Wins count for the scoreboard only on the multiplayer profile (online play). The game sends them with and
+        // without (empty) property sets, so both overloads come here.
+        bool WinEvent(hstring const& eventName)
+        {
+            static std::mutex lock;
+            static std::set<std::wstring> seen;
+            {
+                std::lock_guard guard(lock);
+                if (seen.insert(std::wstring{ eventName }).second) ::pdnet::Log(L"xsapi-pdnet: game event %s (first time)", eventName.c_str());
+            }
+            if (eventName != L"BattleRoyaleWin" && eventName != L"TagTeamWin" && eventName != L"OneOnOneWin") return false;
+            bool online = ::pdnet::gamepatches::MultiplayerProfile();
+            ::pdnet::Log(L"xsapi-pdnet: win event %s%s", eventName.c_str(), online ? L"" : L" (story profile: not counted)");
+            if (online) ::pdnet::scores::AddWin(winrt::to_string(eventName));
+            return true;
+        }
+    }
+
     void EventsService::WriteInGameEvent(hstring const& eventName)
     {
+        if (WinEvent(eventName)) return;
         PDNET_XSAPI_STUB_DEFAULT("EventsService::WriteInGameEvent");
     }
     void EventsService::WriteInGameEvent(hstring const& eventName, Windows::Foundation::Collections::PropertySet const& dimensions, Windows::Foundation::Collections::PropertySet const& measurements)
@@ -39,14 +61,7 @@ namespace winrt::Microsoft::Xbox::Services::Events::implementation
             ::pdnet::scores::SubmitRating(rating);
             return;
         }
-        // Wins count for the scoreboard only on the multiplayer profile (online play).
-        if (eventName == L"BattleRoyaleWin" || eventName == L"TagTeamWin" || eventName == L"OneOnOneWin")
-        {
-            bool online = ::pdnet::gamepatches::MultiplayerProfile();
-            ::pdnet::Log(L"xsapi-pdnet: win event %s%s", eventName.c_str(), online ? L"" : L" (story profile: not counted)");
-            if (online) ::pdnet::scores::AddWin(winrt::to_string(eventName));
-            return;
-        }
+        if (WinEvent(eventName)) return;
         PDNET_XSAPI_STUB_DEFAULT("EventsService::WriteInGameEvent");
     }
 }
