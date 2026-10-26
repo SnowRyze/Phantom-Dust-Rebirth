@@ -167,7 +167,7 @@ namespace pdnet::p2p
                 if (pending) pending->reply = std::move(m);
             }
             if (pending) SetEvent(pending->event.get());
-            else if (GetConfig().p2pDebug) Log(L"p2p-debug: reply nonce %u matches no waiting request (too late?)", m.nonce);
+            else if (m.type == net::MsgType::Ack) Log(L"p2p: answer %u from %S matches no waiting request (late or repeated)", m.nonce, m.peer.substr(0, 8).c_str());
         }
 
         void Dispatch(net::Message&& m)
@@ -191,8 +191,17 @@ namespace pdnet::p2p
                     m = std::move(g_dispatch.front());
                     g_dispatch.pop_front();
                 }
+                size_t waiting = 0;
+                {
+                    std::lock_guard guard(g_dispatchLock);
+                    waiting = g_dispatch.size();
+                }
+                if (waiting > 4) Log(L"p2p: %zu control message(s) still waiting to be handled", waiting);
+                auto start = GetTickCount64();
                 try { if (g_onControl) g_onControl(m); }
                 catch (...) { Log(L"p2p: control handler threw 0x%08X", winrt::to_hresult()); }
+                if (auto took = GetTickCount64() - start; took > 1000)
+                    Log(L"p2p: handling a type %d message from %S took %llu ms", static_cast<int>(m.type), m.peer.substr(0, 8).c_str(), took);
             }
         }
 
@@ -365,10 +374,14 @@ namespace pdnet::p2p
                 }
                 else if (m.type == net::MsgType::Ack || m.type == net::MsgType::Pong)
                 {
+                    if (m.type == net::MsgType::Ack) Log(L"p2p: answer %u from %S received", m.nonce, peer.substr(0, 8).c_str());
                     Complete(std::move(m));
                 }
                 else
                 {
+                    // Join steps are logged on both sides, so a join that hangs shows where it stopped.
+                    if (m.type == net::MsgType::Connect || m.type == net::MsgType::Delete)
+                        Log(L"p2p: %s %u from %S received", m.type == net::MsgType::Connect ? L"join request" : L"leave notice", m.nonce, peer.substr(0, 8).c_str());
                     Dispatch(std::move(m));
                 }
             }
@@ -475,6 +488,7 @@ namespace pdnet::p2p
         // lost (joins then hung on "joining"). The other side answers each copy; the extra answers are ignored.
         constexpr DWORD kResendMs = 2000;
         bool ok = false;
+        Log(L"p2p: sending %s %u to %S", type == net::MsgType::Connect ? L"join request" : L"request", nonce, peer.substr(0, 8).c_str());
         for (DWORD waited = 0, sends = 1; !ok && waited < timeoutMs; ++sends)
         {
             SendControl(peer, type, nonce, body);
