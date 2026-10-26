@@ -68,6 +68,17 @@ namespace pdnet::p2p
         std::map<std::string, std::shared_ptr<Link>> g_links;
         std::map<uint32_t, std::shared_ptr<Pending>> g_pending;
         std::map<std::string, std::wstring> g_paths; // peer -> "direct" / "relayed"
+        // Game packets from a peer whose link isn't open yet: the other side's game can start sending as soon as it
+        // accepts the connection, before our CONNECT answer arrives (over a relay, unreliable packets can overtake it).
+        // Kept a few seconds and handed to the game when the link opens.
+        struct Early
+        {
+            ULONGLONG at;
+            std::vector<uint8_t> data;
+        };
+        std::map<std::string, std::deque<Early>> g_early;
+        constexpr size_t kEarlyMax = 64;
+        constexpr ULONGLONG kEarlyMs = 3000;
 
         std::mutex g_outLock;
         std::deque<Outgoing> g_out;
@@ -107,6 +118,17 @@ namespace pdnet::p2p
         sockaddr_in6 GameAddress()
         {
             return net::GameSockAddr(net::InterfaceIp(), GetConfig().gamePort);
+        }
+
+        // Link socket -> the game's own socket.
+        void ToGame(Link& link, const uint8_t* data, uint32_t bytes)
+        {
+            auto to = GameAddress();
+            if (sendto(link.socket, reinterpret_cast<const char*>(data), static_cast<int>(bytes), 0, reinterpret_cast<const sockaddr*>(&to), sizeof(to)) == SOCKET_ERROR)
+            {
+                static std::atomic<int> failures{ 0 };
+                if (failures++ < 10) Log(L"p2p: handing a packet from %S to the game failed (%d)", link.peer.substr(0, 8).c_str(), WSAGetLastError());
+            }
         }
 
         // Game -> link socket -> EOS.
@@ -311,12 +333,17 @@ namespace pdnet::p2p
                     {
                         std::lock_guard guard(g_lock);
                         if (auto it = g_links.find(peer); it != g_links.end()) link = it->second;
+                        else
+                        {
+                            auto& early = g_early[peer]; // no endpoint pair for this peer yet: keep it for when there is
+                            if (early.size() >= kEarlyMax) early.pop_front();
+                            early.push_back({ GetTickCount64(), std::vector<uint8_t>(buf, buf + bytes) });
+                        }
                     }
-                    if (!link) continue; // no endpoint pair for this peer (yet)
+                    if (!link) continue;
                     link->inPackets++;
                     link->inBytes += bytes;
-                    auto to = GameAddress();
-                    sendto(link->socket, reinterpret_cast<const char*>(buf), static_cast<int>(bytes), 0, reinterpret_cast<const sockaddr*>(&to), sizeof(to));
+                    ToGame(*link, buf, bytes);
                     continue;
                 }
 
@@ -380,6 +407,15 @@ namespace pdnet::p2p
                     if (rtt >= 0) link->rtts.push_back(rtt);
                 }
                 if (tick % 5) continue;
+                // The game and the links talk over this PC's network address, found once at start. If it changes (a
+                // network reconnect), packets between them stop arriving; say so, since only a game restart fixes it.
+                static bool addressChangeLogged = false;
+                if (!addressChangeLogged && !links.empty())
+                    if (auto now = net::CurrentInterfaceIp(); now != net::InterfaceIp())
+                    {
+                        addressChangeLogged = true;
+                        Log(L"p2p: this PC's network address changed from %s to %s - game packets through the links can't reach the game any more; restart the game", net::IpToString(net::InterfaceIp()).c_str(), net::IpToString(now).c_str());
+                    }
                 for (auto& link : links)
                 {
                     std::wstring path;
@@ -504,6 +540,20 @@ namespace pdnet::p2p
         g_links[peer] = link;
         std::thread(LinkReader, link).detach();
         Log(L"p2p: link to %S on local port %u", peer.substr(0, 8).c_str(), link->port);
+        if (auto early = g_early.find(peer); early != g_early.end())
+        {
+            int handed = 0;
+            for (auto& e : early->second)
+                if (GetTickCount64() - e.at <= kEarlyMs)
+                {
+                    link->inPackets++;
+                    link->inBytes += e.data.size();
+                    ToGame(*link, e.data.data(), static_cast<uint32_t>(e.data.size()));
+                    ++handed;
+                }
+            g_early.erase(early);
+            if (handed) Log(L"p2p: %d game packet(s) from %S arrived before the link opened - handed to the game now", handed, peer.substr(0, 8).c_str());
+        }
         return link->port;
     }
 
@@ -517,6 +567,7 @@ namespace pdnet::p2p
                 link = it->second;
                 g_links.erase(it);
             }
+            g_early.erase(peer); // what is still on its way belongs to the connection being closed
         }
         if (!link) return;
         link->closing = true;

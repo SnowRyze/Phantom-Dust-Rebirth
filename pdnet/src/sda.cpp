@@ -236,6 +236,7 @@ namespace pdnet
         };
 
         std::mutex g_lock; // guards every template's pair list
+        bool PeerInUse(const std::string& peer); // a link is shared by every pair to that peer: close it with the last one
 
         struct Template : winrt::implements<Template, xl::IXboxLiveEndpointPairTemplate>
         {
@@ -414,16 +415,10 @@ namespace pdnet
             std::string name = winrt::to_string(m_template->m_name);
             body.push_back(static_cast<uint8_t>(name.size()));
             body.insert(body.end(), name.begin(), name.end());
-            if (!m_peer.empty())
-            {
-                p2p::SendControl(m_peer, net::MsgType::Delete, net::NewNonce(), body);
-                p2p::CloseLink(m_peer);
-            }
-            else
-            {
-                net::Send(m_remote, net::MsgType::Delete, net::NewNonce(), body);
-            }
+            if (!m_peer.empty()) p2p::SendControl(m_peer, net::MsgType::Delete, net::NewNonce(), body);
+            else net::Send(m_remote, net::MsgType::Delete, net::NewNonce(), body);
             m_template->Remove(this);
+            if (!m_peer.empty() && !PeerInUse(m_peer)) p2p::CloseLink(m_peer);
             SetState(xl::XboxLiveEndpointPairState::Deleted);
         }
 
@@ -440,6 +435,16 @@ namespace pdnet
                 Log(L"sda: template '%s' (UDP %u)", name.c_str(), net::Local().gamePort);
             }
             return t;
+        }
+
+        bool PeerInUse(const std::string& peer)
+        {
+            std::lock_guard guard(g_templatesLock);
+            std::lock_guard pairsGuard(g_lock);
+            for (auto& [name, t] : g_templates)
+                for (auto& p : t->m_pairs)
+                    if (p->m_peer == peer) return true;
+            return false;
         }
 
         // Unsolicited control messages: inbound connects, remote deletes, pings.
@@ -483,7 +488,6 @@ namespace pdnet
             }
             else if (m.type == net::MsgType::Delete)
             {
-                if (!m.peer.empty()) p2p::CloseLink(m.peer);
                 auto t = GetTemplate(readName(nameAt));
                 winrt::com_ptr<EndpointPair> pair;
                 {
@@ -495,8 +499,9 @@ namespace pdnet
                     Log(L"sda: %s closed the connection", remote.Describe().c_str());
                     pair->SetState(xl::XboxLiveEndpointPairState::RemoteEndpointTerminating);
                     t->Remove(pair.get());
-                    pair->SetState(xl::XboxLiveEndpointPairState::Deleted);
                 }
+                if (!m.peer.empty() && !PeerInUse(m.peer)) p2p::CloseLink(m.peer);
+                if (pair) pair->SetState(xl::XboxLiveEndpointPairState::Deleted);
             }
         }
 

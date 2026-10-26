@@ -71,6 +71,7 @@ namespace pdnet::net
     uint32_t NewNonce();
 
     std::array<uint8_t, 16> InterfaceIp();
+    std::array<uint8_t, 16> CurrentInterfaceIp(); // the same address worked out again now (InterfaceIp is from start-up)
 
     sockaddr_in6 GameSockAddr(const std::array<uint8_t, 16>& ip, uint16_t port);
     std::wstring IpToString(const std::array<uint8_t, 16>& ip);
