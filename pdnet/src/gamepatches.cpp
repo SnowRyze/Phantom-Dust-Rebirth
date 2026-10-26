@@ -584,6 +584,11 @@ namespace pdnet::gamepatches
         PushMenuFn g_pushMenu = nullptr; // the original functions (trampolines)
         PopMenuFn g_popMenu = nullptr;
         std::atomic<bool> g_editorFromLobby{ false };
+        // The lobby ended while its Arsenal editor was open (LobbyEnded): leaving the editor then opens livegterr, the
+        // lobby's own way out when its session is lost (livegterr 84 -> liveerror 53 -> liveend 52 -> mainmenu 8).
+        // Going back into livelobby instead would start a match with nobody (menu 1).
+        std::atomic<bool> g_lobbyEndedInEditor{ false };
+        constexpr int kLobbyLostMenu = 84;
 
         int64_t MenuManager() { return *reinterpret_cast<int64_t*>(At(0x140533c58)); }
         int CurrentMenu(int64_t manager) { return manager ? *reinterpret_cast<int16_t*>(manager + 0x105f4) : -1; }
@@ -758,8 +763,13 @@ namespace pdnet::gamepatches
             if (menu != current) Log(L"menu: open %d (from %d)", menu, current);
             if (g_editorFromLobby && current == kEditorMenu && menu != kEditorMenu && menu != kStockMenu)
             {
-                Log(L"menu: leaving the Arsenal editor opened from the lobby - back to the lobby instead of menu %d", menu);
                 g_editorFromLobby = false;
+                if (g_lobbyEndedInEditor.exchange(false))
+                {
+                    Log(L"menu: leaving the Arsenal editor - the lobby ended meanwhile, so out the lobby's way (menu %d)", kLobbyLostMenu);
+                    return g_pushMenu(manager, kLobbyLostMenu, force);
+                }
+                Log(L"menu: leaving the Arsenal editor opened from the lobby - back to the lobby instead of menu %d", menu);
                 return g_popMenu();
             }
             return g_pushMenu(manager, menu, force);
@@ -767,9 +777,14 @@ namespace pdnet::gamepatches
 
         int HookedPopMenu()
         {
-            int current = CurrentMenu(MenuManager());
+            int64_t manager = MenuManager();
+            int current = CurrentMenu(manager);
             Log(L"menu: back (from %d)", current);
-            if (current == kEditorMenu) g_editorFromLobby = false;
+            if (current == kEditorMenu && g_editorFromLobby.exchange(false) && g_lobbyEndedInEditor.exchange(false))
+            {
+                Log(L"menu: leaving the Arsenal editor - the lobby ended meanwhile, so out the lobby's way (menu %d)", kLobbyLostMenu);
+                return g_pushMenu(manager, kLobbyLostMenu, 0);
+            }
             return g_popMenu();
         }
 
@@ -2086,6 +2101,7 @@ namespace pdnet::gamepatches
         if (!g_pushMenu || current != kLobbyMenu) return false;
         Log(L"menu: invite button in the lobby - opening the Arsenal editor");
         g_editorFromLobby = true;
+        g_lobbyEndedInEditor = false;
         *At(0x1404bbc34) = 0; // as the script's own "open menu" command does
         g_pushMenu(manager, kEditorMenu, 0);
         return true;
@@ -2131,6 +2147,12 @@ namespace pdnet::gamepatches
     // after a match FUN_1401835c0 adds the change to the current rating (0x14051c0b0, kept within 0-999999) and
     // FUN_1400bf1f0 copies it here and reports it as the Hero_MP_Ranking event.
     void NoteMatchWin() { g_matchWon = true; }
+
+    void LobbyEnded()
+    {
+        if (!g_editorFromLobby || g_lobbyEndedInEditor.exchange(true)) return;
+        Log(L"menu: the lobby ended while its Arsenal editor is open - leaving the editor goes out of the lobby");
+    }
 
     int SavedRating()
     {
