@@ -755,6 +755,17 @@ namespace pdnet::gamepatches
 
         std::atomic<uint64_t> g_settingsOpenedAt{ 0 }; // when menu 68 (Settings) was last opened (HookedSettingFlag)
 
+        // The lobby's "in a menu" mark (the red hand): session cmd 62 stores this player's lobby status at 0x1405277c4 (the
+        // lobby sets 1 when it shows its main LOBBY window, 0 for its Options menu and the leave prompt) and cmd 63 has it
+        // sent to the others now (0x140594e90 / e94). While a player's is 0, the host can't start the match. The Arsenal
+        // editor opened from the lobby (OpenLobbyArsenalEditor) sets 0 too, and back in the lobby it is 1 again.
+        void SetLobbyAvailable(bool available)
+        {
+            *reinterpret_cast<volatile int32_t*>(At(0x1405277c4)) = available ? 1 : 0;
+            *reinterpret_cast<volatile int32_t*>(At(0x140594e90)) = 1;
+            *reinterpret_cast<volatile int32_t*>(At(0x140594e94)) = 1;
+        }
+
         int HookedPushMenu(int64_t manager, int menu, char force)
         {
             int current = CurrentMenu(manager);
@@ -770,7 +781,9 @@ namespace pdnet::gamepatches
                     return g_pushMenu(manager, kLobbyLostMenu, force);
                 }
                 Log(L"menu: leaving the Arsenal editor opened from the lobby - back to the lobby instead of menu %d", menu);
-                return g_popMenu();
+                int result = g_popMenu();
+                SetLobbyAvailable(true);
+                return result;
             }
             return g_pushMenu(manager, menu, force);
         }
@@ -780,10 +793,16 @@ namespace pdnet::gamepatches
             int64_t manager = MenuManager();
             int current = CurrentMenu(manager);
             Log(L"menu: back (from %d)", current);
-            if (current == kEditorMenu && g_editorFromLobby.exchange(false) && g_lobbyEndedInEditor.exchange(false))
+            if (current == kEditorMenu && g_editorFromLobby.exchange(false))
             {
-                Log(L"menu: leaving the Arsenal editor - the lobby ended meanwhile, so out the lobby's way (menu %d)", kLobbyLostMenu);
-                return g_pushMenu(manager, kLobbyLostMenu, 0);
+                if (g_lobbyEndedInEditor.exchange(false))
+                {
+                    Log(L"menu: leaving the Arsenal editor - the lobby ended meanwhile, so out the lobby's way (menu %d)", kLobbyLostMenu);
+                    return g_pushMenu(manager, kLobbyLostMenu, 0);
+                }
+                int result = g_popMenu();
+                SetLobbyAvailable(true); // back in the lobby: no red hand
+                return result;
             }
             return g_popMenu();
         }
@@ -2099,9 +2118,10 @@ namespace pdnet::gamepatches
         int64_t manager = MenuManager();
         int current = CurrentMenu(manager);
         if (!g_pushMenu || current != kLobbyMenu) return false;
-        Log(L"menu: invite button in the lobby - opening the Arsenal editor");
+        Log(L"menu: invite button in the lobby - opening the Arsenal editor (red hand on until back in the lobby)");
         g_editorFromLobby = true;
         g_lobbyEndedInEditor = false;
+        SetLobbyAvailable(false); // like the lobby's own menus: the match can't start while this player is in the editor
         *At(0x1404bbc34) = 0; // as the script's own "open menu" command does
         g_pushMenu(manager, kEditorMenu, 0);
         return true;
