@@ -206,6 +206,12 @@ namespace pdnet::net
         return ip;
     }
 
+    std::array<uint8_t, 16> CurrentInterfaceIp()
+    {
+        in_addr v4{};
+        return PrimaryIpv4(v4) ? Mapped(v4) : InterfaceIp();
+    }
+
     std::vector<uint8_t> Snapshot::Serialize() const
     {
         std::vector<uint8_t> b(kSnapshotMagic, kSnapshotMagic + 4);

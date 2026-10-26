@@ -75,6 +75,27 @@ namespace pdnet::eos
             }
         }
 
+        // Like TickUntil, but keeps running the pump (P2P sends and receives): a sign-in again after the session expires
+        // happens mid-match, and without the pump every player's game packets would wait until it finished.
+        template <typename Info>
+        bool TickPumping(const Api& api, EOS_HPlatform platform, const Completion<Info>& c, uint32_t timeoutMs)
+        {
+            auto end = GetTickCount64() + timeoutMs;
+            while (!c.done && GetTickCount64() < end)
+            {
+                std::function<void(void*)> pump;
+                {
+                    std::lock_guard guard(g_lock);
+                    pump = g_pump;
+                }
+                if (pump) pump(platform);
+                api.EOS_Platform_Tick(platform);
+                if (pump) pump(platform);
+                WaitForSingleObject(g_wake, pump ? 2 : 20);
+            }
+            return c.done;
+        }
+
         // Device-ID sign-in: create the device ID if needed, log in, create the product user on first use.
         bool SignIn(const Api& api, EOS_HPlatform platform)
         {
@@ -85,7 +106,7 @@ namespace pdnet::eos
             deviceOpts.DeviceModel = "PC";
             Completion<EOS_Connect_CreateDeviceIdCallbackInfo> device;
             api.EOS_Connect_CreateDeviceId(connect, &deviceOpts, &device, decltype(device)::Callback);
-            if (!TickUntil(api, platform, device, 15000))
+            if (!TickPumping(api, platform, device, 15000))
             {
                 Log(L"eos: device ID: no response");
                 return false;
@@ -109,7 +130,7 @@ namespace pdnet::eos
             loginOpts.UserLoginInfo = &loginInfo;
             Completion<EOS_Connect_LoginCallbackInfo> login;
             api.EOS_Connect_Login(connect, &loginOpts, &login, decltype(login)::Callback);
-            if (!TickUntil(api, platform, login, 15000))
+            if (!TickPumping(api, platform, login, 15000))
             {
                 Log(L"eos: login: no response");
                 return false;
@@ -123,7 +144,7 @@ namespace pdnet::eos
                 createOpts.ContinuanceToken = login.info.ContinuanceToken;
                 Completion<EOS_Connect_CreateUserCallbackInfo> created;
                 api.EOS_Connect_CreateUser(connect, &createOpts, &created, decltype(created)::Callback);
-                if (!TickUntil(api, platform, created, 15000) || created.info.ResultCode != EOS_EResult::EOS_Success)
+                if (!TickPumping(api, platform, created, 15000) || created.info.ResultCode != EOS_EResult::EOS_Success)
                 {
                     Log(L"eos: creating the product user failed: %s", created.done ? Result(api, created.info.ResultCode).c_str() : L"no response");
                     return false;
