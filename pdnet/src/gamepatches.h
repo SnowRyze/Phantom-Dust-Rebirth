@@ -39,6 +39,10 @@ namespace pdnet::gamepatches
     // The game reported a win in the current match (its win event): its rating result is at least +1.
     void NoteMatchWin();
 
+    // The lobby this player is in closed, removed them, or lost its game host (xsapi/mpsd.cpp). If they are in the
+    // Arsenal editor opened from the lobby, leaving it takes them out the way the lobby would, not back into it.
+    void LobbyEnded();
+
     // True while the save's multiplayer profile is the active one (online play; the story uses the other).
     bool MultiplayerProfile();
 }

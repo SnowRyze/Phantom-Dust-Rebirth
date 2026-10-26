@@ -975,6 +975,7 @@ namespace pdnet::mpsd
                 ApplyHostRules(*lobby);
                 doc = FromLobby(*lobby, &*old);
             }
+            if (lost || !doc.hostPresent) gamepatches::LobbyEnded();
 
             auto changes = Compare(doc, *old);
             if (lost) changes = static_cast<mp::MultiplayerSessionChangeTypes>(static_cast<int>(changes) | static_cast<int>(mp::MultiplayerSessionChangeTypes::MemberListChange));
