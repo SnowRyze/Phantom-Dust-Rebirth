@@ -467,23 +467,31 @@ namespace pdnet
             }
 
             Snapshot remote;
-            if (!Snapshot::Parse(m.body.data(), m.body.size(), remote)) return;
+            if (!Snapshot::Parse(m.body.data(), m.body.size(), remote))
+            {
+                Log(L"sda: type %d message of %zu bytes is not from pdnet (no device address) - ignored", static_cast<int>(m.type), m.body.size());
+                return;
+            }
             std::array<uint8_t, 16> observed;
             memcpy(observed.data(), &m.from.sin6_addr, 16);
 
             size_t nameAt = remote.eosUser.empty() ? Snapshot::kSize : Snapshot::kSizeV2;
             if (m.type == net::MsgType::Connect)
             {
-                auto t = GetTemplate(readName(nameAt));
+                std::wstring name = readName(nameAt);
+                Log(L"sda: join request %u from %s (template '%s')", m.nonce, remote.Describe().c_str(), name.c_str());
+                auto t = GetTemplate(name);
                 bool created;
                 auto pair = t->GetOrAdd(remote, observed, created, m.peer);
                 if (!m.peer.empty()) p2p::SendControl(m.peer, net::MsgType::Ack, m.nonce, net::Local().Serialize());
                 else net::SendTo(m.from, net::MsgType::Ack, m.nonce, net::Local().Serialize());
+                Log(L"sda: join request %u answered (%s connection, link port %u)", m.nonce, created ? L"new" : L"existing", pair->m_linkPort);
                 if (created)
                 {
                     if (!m.peer.empty()) Log(L"sda: inbound connection from %s over EOS P2P (local link port %u)", remote.Describe().c_str(), pair->m_linkPort);
                     else Log(L"sda: inbound connection from %s (seen as %s)", remote.Describe().c_str(), net::IpToString(observed).c_str());
                     t->RaiseInbound(pair);
+                    Log(L"sda: the game was told about the connection from %016llX", remote.deviceId);
                 }
             }
             else if (m.type == net::MsgType::Delete)
