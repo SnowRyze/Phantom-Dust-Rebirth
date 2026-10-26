@@ -8,6 +8,7 @@
 #include "Multiplayer.MultiplayerSubscriptionLostEventArgs.h"
 #include "Multiplayer.MultiplayerSearchHandleDetails.h"
 #include <algorithm>
+#include <regex>
 #include "../repeatable.h"
 #include "../../src/gamepatches.h"
 #include "../../src/scores.h"
@@ -238,6 +239,12 @@ namespace winrt::Microsoft::Xbox::Services::Multiplayer::implementation
                 joinable = ::pdnet::gamepatches::JoinableRules();
                 break;
             }
+        // Cross Play plays no part: every player is on pdnet, so the game's "numbers/cross ..." clause (from its hidden
+        // Cross Play option, which can end up set differently on two PCs) is dropped.
+        filter = std::regex_replace(filter, std::wregex(L"( and )?numbers/cross [a-z]+ -?[0-9]+( and )?"), L"$1$2");
+        if (filter.size() >= 5 && filter.compare(filter.size() - 5, 5, L" and ") == 0) filter.resize(filter.size() - 5);
+        if (filter.rfind(L" and ", 0) == 0) filter.erase(0, 5);
+        for (size_t at; (at = filter.find(L" and  and ")) != std::wstring::npos;) filter.erase(at, 5);
         std::vector<::pdnet::mpsd::SessionPtr> matched;
         for (auto& doc : all)
         {
