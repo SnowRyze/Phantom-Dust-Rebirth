@@ -1827,13 +1827,9 @@ namespace pdnet::gamepatches
         // A asks to save: "Save all settings?" in a pop-up window (OpenSavePopup) and the button bar; while it shows,
         // A saves everything (a name being typed counts as entered), B cancels, and no other button reaches the screen.
         // The buttons come from g1 #37 (0x1402168a0, wrapped: the script reads them there; A is 0x1010, B 0x2020).
-        // The kit's name in the title screen's bottom-right corner ("pdnet Experimental 29"), from the first line of
-        // kit-version.txt next to pdnet ("PhantomDust-pdnet Experimental 29"). The title (menu 7) runs its draw routine
-        // every frame and calls menu command -63 once in it (0x1402068a0, a title effect setting); right after it, the
-        // label is drawn with menu command 24 (text at x, y), right-aligned by its width (FUN_140247550).
-        constexpr int kTitleMenu = 7;
-        MenuCommandFn g_titleEffect = nullptr;
-
+        // The kit's name on the main menu, under the game's own "Skill Update 1.40 applied" in the bottom-right corner:
+        // the first line of kit-version.txt next to pdnet ("PhantomDust-pdnet Experimental 29" -> "pdnet Experimental 29"),
+        // drawn by HookedDrawText right after that line, one line lower and right-aligned the same way (\a580r).
         const char* BuildLabel()
         {
             static std::string label = []
@@ -1854,17 +1850,6 @@ namespace pdnet::gamepatches
                 return "pdnet " + (first.empty() ? std::string("development build") : first);
             }();
             return label.c_str();
-        }
-
-        int64_t HookedTitleEffect(int64_t* args)
-        {
-            int64_t result = g_titleEffect(args);
-            if (CurrentMenu(MenuManager()) != kTitleMenu) return result;
-            const char* text = BuildLabel();
-            int width = reinterpret_cast<int (*)(const char*, int, int)>(At(0x140247550))(text, 0, 0);
-            int64_t draw[8] = { 628 - width, 462, reinterpret_cast<int64_t>(text) };
-            reinterpret_cast<MenuCommandFn>(At(0x140207870))(draw);
-            return result;
         }
 
         NativeFn g_buttons = nullptr;
@@ -2032,6 +2017,14 @@ namespace pdnet::gamepatches
                 return g_drawText(args);
             }
             int64_t result = g_drawText(args);
+            char format[24];
+            if (args && CopyString(reinterpret_cast<const char*>(args[2]), format, sizeof(format)) && strncmp(format, "\a580rSkill Update", 17) == 0)
+            {
+                static std::string line = std::string("\a580r") + BuildLabel();
+                int64_t label[8] = { args[0], args[1] + 20, reinterpret_cast<int64_t>(line.c_str()) };
+                g_drawText(label);
+                return result;
+            }
             int icon = GetConfig().voiceTalkIcon;
             if (!args || icon < 0 || icon >= kMnetSprites || !g_drawSprite || CurrentMenu(MenuManager()) != kLobbyMenu) return result;
             int indent = NameIndent(reinterpret_cast<const char*>(args[2]));
@@ -2193,8 +2186,6 @@ namespace pdnet::gamepatches
             WrapCommand<MenuCommandFn>(0x1403eefe0 + 37 * 8, 0x140207d50, &HookedPlaceWindow, g_placeWindow, L"settings window position");
             WrapCommand<MenuCommandFn>(0x1403eefe0 + 88 * 8, 0x140207650, &HookedButtonBar, g_buttonBar, L"settings save button");
             WrapCommand<MenuCommandFn>(0x1403eefe0 + 42 * 8, 0x140207f00, &HookedDrawWindow, g_drawWindow, L"settings save pop-up");
-            if (WrapCommand<MenuCommandFn>(0x1403eede0 + 1 * 8, 0x1402068a0, &HookedTitleEffect, g_titleEffect, L"title screen build label"))
-                Log(L"gamepatch: title screen shows '%S'", BuildLabel());
             WrapCommand<NativeFn>(0x1403fb108, 0x1402168a0, &HookedButtons, g_buttons, L"settings save confirmation");
             if (WrapCommand<SessionCommandFn>(0x1403f1150 + 154 * 8, 0x140214d60, &HookedOptionChanged, g_optionChanged, L"settings rows"))
                 Log(L"gamepatch: in-game Settings ready (multiplayer menu > Settings)");
