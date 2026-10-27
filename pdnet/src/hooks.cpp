@@ -4,6 +4,7 @@
 #include "sda.h"
 #include "log.h"
 #include "config.h"
+#include "gamepads.h"
 #include "../xsapi/xsapi.h"
 #include <set>
 
@@ -50,6 +51,18 @@ namespace pdnet
                 static auto saves = CreateGameSaveProviderFactory();
                 handled = true;
                 return static_cast<IUnknown*>(winrt::get_abi(saves))->QueryInterface(iid, factory);
+            }
+            if (cls == L"Windows.Gaming.Input.Gamepad" && GetConfig().moreControllers)
+            {
+                // PlayStation, Nintendo and other controllers next to the Xbox ones (gamepads.cpp).
+                static auto pads = [&]
+                {
+                    winrt::Windows::Foundation::IActivationFactory real{ nullptr };
+                    winrt::check_hresult(RealRoGetActivationFactory()(classId, winrt::guid_of<winrt::Windows::Foundation::IActivationFactory>(), winrt::put_abi(real)));
+                    return CreateGamepadFactory(real);
+                }();
+                handled = true;
+                return static_cast<IUnknown*>(winrt::get_abi(pads))->QueryInterface(iid, factory);
             }
             if (auto networking = GetXboxLiveNetworkingFactory(cls))
             {

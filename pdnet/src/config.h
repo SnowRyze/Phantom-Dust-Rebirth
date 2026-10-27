@@ -50,6 +50,7 @@ namespace pdnet
         bool discordPlayerMessages = true;  // discord_player_messages=on|off: "<name> joined / left" (and "full") messages
         int splashVolume = 40;              // splash_volume=: % of the remembered volume from the start-up logos until the main menu (pdlaunch; the Settings menu shows it)
         bool auraBeeps = true;              // aura_beeps=on|off: the aura particles' beeping (Options > Sound shows it)
+        bool moreControllers = true;        // more_controllers=on|off: PlayStation, Nintendo and other controllers, read by pdlaunch with SDL3 (see gamepads.cpp)
         bool soundLog = false;              // sound_log=on: log each game sound (bank, cue, caller) the first time it plays (debug, see gamepatches.cpp)
     };
 
