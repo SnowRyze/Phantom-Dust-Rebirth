@@ -34,7 +34,7 @@ if (Test-Path $before) {
     Remove-Item $before
     Write-Host 'Microphone permission for Phantom Dust put back as it was.'
 }
-if ($pkg.SignatureKind -eq 'Store') { Write-Host 'Done. Phantom Dust starts normally again (Xbox Live, cloud saves). You can delete this folder.' }
+if ($pkg.SignatureKind -eq 'Store') { Write-Host 'Done. Phantom Dust starts normally again (Xbox Live, cloud saves). You can delete the kit folder.' }
 else { Write-Host 'Done. pdnet no longer loads. Note: an unpacked copy without pdnet may hang on "retrieving profile" (Xbox cloud saves).' }
 Write-Host 'Your pdnet test saves stay in the game''s local data (pdnet\saves) and are not used by the normal game.'
 Read-Host 'Press Enter to close'

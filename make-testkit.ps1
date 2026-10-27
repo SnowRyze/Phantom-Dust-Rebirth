@@ -19,8 +19,12 @@
 # Each kit carries kit-version.txt (label, pdnet.dll MD5, build, -Notes).
 #   -Set key=value,...   pdnet.ini overrides for this kit (e.g. -Set voice_chat=off,p2p_debug=on)
 #   -Notes "..."         one line for kit-version.txt (what changed, what to test)
+#   -Commit <hash>       the commit the DLL was built from, for kit-version.txt's Source line (default: HEAD here;
+#                        tester kits are built from branch kit27, so pass its commit)
+# Kit layout (-Stage Kit / Store, from 2026-10-27): Setup.bat on its own at the top, everything else in a pdnet\ folder
+# (Setup.bat runs pdnet\setup.ps1; every script, pdlaunch and pdnet find their files in their own folder).
 param([ValidateSet('B', 'C', 'Store', 'Kit')][string]$Stage = 'Kit', [string]$EosIni, [string]$Build, [string]$Webhook,
-      [string[]]$Set, [string]$Notes, [int]$Promote)
+      [string[]]$Set, [string]$Notes, [int]$Promote, [string]$Commit)
 $ErrorActionPreference = 'Stop'
 $root = $PSScriptRoot
 Add-Type -AssemblyName System.IO.Compression, System.IO.Compression.FileSystem
@@ -31,11 +35,18 @@ function LastNumber([string]$kind) {
     if ($numbers) { ($numbers | Measure-Object -Maximum).Maximum } else { 0 }
 }
 
+# kit-version.txt in a kit zip: pdnet/kit-version.txt, or at the top in kits from before the pdnet\ folder.
+function VersionEntry($z) {
+    $entry = $z.GetEntry('pdnet/kit-version.txt')
+    if ($entry) { $entry } else { $z.GetEntry('kit-version.txt') }
+}
+
 # Rewrites kit-version.txt inside a kit zip: first line the label, the rest kept.
 function SetZipLabel([string]$zip, [string]$label) {
     $z = [IO.Compression.ZipFile]::Open($zip, 'Update')
     try {
-        $entry = $z.GetEntry('kit-version.txt')
+        $entry = VersionEntry $z
+        $path = if ($entry) { $entry.FullName } else { 'pdnet/kit-version.txt' }
         $rest = ''
         if ($entry) {
             $reader = New-Object IO.StreamReader($entry.Open())
@@ -44,7 +55,7 @@ function SetZipLabel([string]$zip, [string]$label) {
             $rest = ($lines | Select-Object -Skip 1) -join "`r`n"
             $entry.Delete()
         }
-        $writer = New-Object IO.StreamWriter($z.CreateEntry('kit-version.txt').Open(), (New-Object Text.UTF8Encoding $false))
+        $writer = New-Object IO.StreamWriter($z.CreateEntry($path).Open(), (New-Object Text.UTF8Encoding $false))
         $writer.Write("$label`r`n$rest")
         $writer.Dispose()
     }
@@ -60,7 +71,7 @@ if ($Promote) {
     SetZipLabel "D:\$label.zip" $label
     # The source of a stable kit: git tag stable-<M> on the commit its kit-version.txt names ("Source: <commit>").
     $z = [IO.Compression.ZipFile]::OpenRead("D:\$label.zip")
-    $reader = New-Object IO.StreamReader($z.GetEntry('kit-version.txt').Open())
+    $reader = New-Object IO.StreamReader((VersionEntry $z).Open())
     $source = ($reader.ReadToEnd() -split "`r?`n" | Where-Object { $_ -match '^Source: (\w+)' } | ForEach-Object { $Matches[1] } | Select-Object -First 1)
     $reader.Dispose(); $z.Dispose()
     if ($source) { git -C $root tag -f "stable-$number" $source | Out-Null; Write-Host "git tag stable-$number -> $source" }
@@ -93,24 +104,27 @@ if ($EosIni) {
 }
 
 if (Test-Path $out) { Remove-Item $out -Recurse -Force }
+$files = $out # where everything but Setup.bat goes
 if ($launcherKit) {
-    # pdnet.dll + pdlaunch.exe next to the scripts; settings are the stage C ones.
+    # Setup.bat at the top; pdnet.dll + pdlaunch.exe next to the other scripts in pdnet\; settings are the stage C ones.
     $launcher = "$root\pdnet\tools\out\pdlaunch.exe"
     if (-not (Test-Path $launcher)) { throw "No $launcher. Build it first: pdnet\tools\build-pdlaunch.cmd" }
-    New-Item -ItemType Directory $out | Out-Null
-    Copy-Item "$kitSource\*" $out
-    Copy-Item "$root\testkit-stagec\pdnet.ini" $out
-    Copy-Item $dll "$out\pdnet.dll"
-    Copy-Item $launcher $out
+    $files = "$out\pdnet"
+    New-Item -ItemType Directory $files | Out-Null
+    Copy-Item "$kitSource\Setup.bat" $out
+    Get-ChildItem $kitSource -File | Where-Object Name -ne 'Setup.bat' | Copy-Item -Destination $files
+    Copy-Item "$root\testkit-stagec\pdnet.ini" $files
+    Copy-Item $dll "$files\pdnet.dll"
+    Copy-Item $launcher $files
 } else {
     New-Item -ItemType Directory "$out\pdnet" | Out-Null
     Copy-Item "$kitSource\*" $out
     Copy-Item $dll "$out\pdnet\"
 }
-Copy-Item $sdkDll.FullName $out
+Copy-Item $sdkDll.FullName $files
 # Voice chat (voice_chat=on): EOS plays and records through XAudio 2.9, shipped with the SDK.
-Copy-Item (Join-Path $sdkDll.DirectoryName 'x64\xaudio2_9redist.dll') $out
-if ($EosIni) { Copy-Item $EosIni "$out\eos.ini" }
+Copy-Item (Join-Path $sdkDll.DirectoryName 'x64\xaudio2_9redist.dll') $files
+if ($EosIni) { Copy-Item $EosIni "$files\eos.ini" }
 if ($Stage -ne 'B') {
     $watchIni = "$root\pdnet\tools\out\lobbywatch.ini"
     if (-not $Webhook -and (Test-Path $watchIni)) {
@@ -118,23 +132,27 @@ if ($Stage -ne 'B') {
         if ($line) { $Webhook = $line.Matches[0].Groups[1].Value.Trim() }
     }
     if ($Webhook -eq 'none') { $Webhook = '' }
-    $ini = (Get-Content "$out\pdnet.ini" -Raw -Encoding UTF8) -replace '(?m)^discord_webhook=.*$', "discord_webhook=$Webhook"
+    $ini = (Get-Content "$files\pdnet.ini" -Raw -Encoding UTF8) -replace '(?m)^discord_webhook=.*$', "discord_webhook=$Webhook"
     foreach ($pair in $Set) {
         $key, $value = $pair -split '=', 2
         if ($ini -match "(?m)^$([regex]::Escape($key))=") { $ini = $ini -replace "(?m)^$([regex]::Escape($key))=.*$", "$key=$value" }
         else { $ini = $ini.TrimEnd() + "`r`n$key=$value`r`n" }
     }
-    Set-Content "$out\pdnet.ini" $ini -Encoding UTF8 -NoNewline
+    Set-Content "$files\pdnet.ini" $ini -Encoding UTF8 -NoNewline
 }
 if ($Stage -eq 'Kit') {
-    $commit = (git -C $root rev-parse --short HEAD 2>$null)
-    $dirty = if (git -C $root status --porcelain -- pdnet testkit-store testkit-stagec 2>$null) { ' + uncommitted changes' } else { '' }
-    $version = "$name`r`npdnet.dll MD5 $($md5.Substring(0, 8)) ($Build)`r`nSource: $commit$dirty`r`n" + $(if ($Set) { "Settings: $($Set -join ', ')`r`n" } else { '' }) + $(if ($Notes) { "$Notes`r`n" } else { '' })
-    [IO.File]::WriteAllText("$out\kit-version.txt", $version, (New-Object Text.UTF8Encoding $false))
+    $source = if ($Commit) { (git -C $root rev-parse --short $Commit 2>$null) } else { (git -C $root rev-parse --short HEAD 2>$null) }
+    if (-not $source) { throw "No commit $Commit in this repository." }
+    $branch = if ($Commit) { (git -C $root branch --contains $source --format '%(refname:short)' 2>$null | Select-Object -First 1) } else { '' }
+    $dirty = if (-not $Commit -and (git -C $root status --porcelain -- pdnet testkit-store testkit-stagec 2>$null)) { ' + uncommitted changes' } else { '' }
+    $version = "$name`r`npdnet.dll MD5 $($md5.Substring(0, 8)) ($Build)`r`nSource: $source$(if ($branch) { " ($branch)" })$dirty`r`n" + $(if ($Set) { "Settings: $($Set -join ', ')`r`n" } else { '' }) + $(if ($Notes) { "$Notes`r`n" } else { '' })
+    [IO.File]::WriteAllText("$files\kit-version.txt", $version, (New-Object Text.UTF8Encoding $false))
 }
 
 if (Test-Path $zip) { Remove-Item $zip -Force }
-Compress-Archive -Path "$out\*" -DestinationPath $zip
+# ZipFile, not Compress-Archive: Windows PowerShell 5's Compress-Archive writes "pdnet\x" entry names, which some
+# unzip tools don't treat as a folder.
+[IO.Compression.ZipFile]::CreateFromDirectory($out, $zip)
 if ($Stage -eq 'Kit') { Set-Content $counterFile $experimental }
 # Only the zip is for handing out: an unzipped copy here gets used by mistake (Setup.bat run from it points the game
 # at a folder this script deletes and rebuilds).

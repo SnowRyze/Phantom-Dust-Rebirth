@@ -1,7 +1,8 @@
 # Sets up pdnet for Phantom Dust: the Microsoft Store install or an unpacked copy. The game's files are NOT changed:
 # Windows starts pdlaunch.exe (from this folder) every time Phantom Dust starts, and pdlaunch loads pdnet into the game.
 #   Double-click Setup.bat (or: powershell -ExecutionPolicy Bypass -File setup.ps1 -Name "MyName" [-GameFolder "D:\Games\PhantomDust"])
-# Undo with Remove.bat (remove.ps1). Keep this folder where it is while pdnet is set up.
+# This script and everything it uses are in the kit's pdnet folder; Setup.bat (the only file outside it) runs it.
+# Undo with pdnet\Remove.bat (remove.ps1). Keep the kit folder where it is while pdnet is set up.
 # An unpacked copy set up with an older kit (which replaced Microsoft.Xbox.Services.dll) gets its original files back first.
 #   -Mic yes|no answers the microphone question without asking (voice chat).
 param([string]$Name, [string]$GameFolder, [ValidateSet('', 'yes', 'no')][string]$Mic = '', [switch]$NoPause)
@@ -19,9 +20,9 @@ function Done { if (-not $NoPause) { Ask 'Press Enter to close' | Out-Null } }
 function Fail($msg) { Write-Host "`nERROR: $msg" -ForegroundColor Red; Done; exit 1 }
 
 foreach ($f in 'pdlaunch.exe', 'pdnet.dll', 'EOSSDK-Win64-Shipping.dll', 'pdnet.ini') {
-    if (-not (Test-Path "$kit\$f")) { Fail "The kit is incomplete: $f is missing. Unzip the whole kit and run this from that folder." }
+    if (-not (Test-Path "$kit\$f")) { Fail "The kit is incomplete: $f is missing from $kit. Unzip the whole kit (Setup.bat and the pdnet folder) and run Setup.bat again." }
 }
-if (-not (Test-Path "$kit\eos.ini")) { Fail 'eos.ini is missing. The person who sent you the kit sends it separately; put it in this folder.' }
+if (-not (Test-Path "$kit\eos.ini")) { Fail "eos.ini is missing. The person who sent you the kit sends it separately; put it in $kit." }
 $creds = Get-Content "$kit\eos.ini" | Where-Object { $_ -match '^(ProductId|SandboxId|DeploymentId|ClientId|ClientSecret)=(.+)$' }
 if (@($creds).Count -lt 5) { Fail 'eos.ini is incomplete (it needs ProductId, SandboxId, DeploymentId, ClientId and ClientSecret).' }
 if (Get-Process PDUWP -ErrorAction SilentlyContinue) { Fail 'Close Phantom Dust first.' }
@@ -173,5 +174,5 @@ if ((Get-ItemProperty $consent -ErrorAction SilentlyContinue).Value -eq 'Deny') 
 Write-Host "`nSet up as '$Name'. Start Phantom Dust the normal way (Start menu)." -ForegroundColor Green
 Write-Host 'pdnet now loads every time the game starts, and the game keeps running when minimized.'
 Write-Host "Check after the first start: $kit\pdlaunch.log should say 'pdnet loaded into the game'."
-Write-Host 'To stop using pdnet, double-click Remove.bat.'
+Write-Host "To stop using pdnet, double-click Remove.bat in $kit."
 Done

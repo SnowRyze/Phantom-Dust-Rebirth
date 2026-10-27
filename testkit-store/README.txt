@@ -5,7 +5,7 @@ What this is
 ------------
 pdnet replaces Xbox Live in Phantom Dust. It works with the normal Microsoft Store install AND with an
 unpacked copy, and it does NOT change any of the game's files: when the game starts, Windows runs pdlaunch.exe
-from this folder, which loads pdnet into the game.
+from the kit's pdnet folder, which loads pdnet into the game.
 - No Xbox sign-in. Your player name comes from this kit (you choose it during setup).
 - Lobbies and matches go through Epic Online Services (EOS). No Epic account needed, no port forwarding.
 - Saves are stored locally while pdnet is set up. To bring your Xbox progress over (story, collection,
@@ -16,8 +16,9 @@ from this folder, which loads pdnet into the game.
 
 What's in the kit
 -----------------
+  Setup.bat           double-click to set up pdnet (runs pdnet\setup.ps1)
+  pdnet\              everything else:
   README.txt          this guide
-  Setup.bat           double-click to set up pdnet (runs setup.ps1)
   Remove.bat          double-click to stop using pdnet (runs remove.ps1)
   Collect-Log.bat     double-click after a test: copies the logs to your Desktop (runs collect-log.ps1)
   Restore-XboxLive.bat  double-click to undo every pdnet change and check Teredo (runs restore-xbl.ps1)
@@ -41,13 +42,13 @@ Steps
    - Answer Y to let Phantom Dust use your microphone (voice chat). N: Windows asks the first time instead.
    - Windows asks for administrator permission once ("CheckNetIsolation"). Click Yes: matches need it.
 4. Start Phantom Dust the normal way (Start menu). Host or join a lobby.
-5. After a test, double-click Collect-Log.bat and send the files it puts on your Desktop.
+5. After a test, double-click pdnet\Collect-Log.bat and send the files it puts on your Desktop.
 
-To stop using pdnet, double-click Remove.bat.
+To stop using pdnet, double-click pdnet\Remove.bat.
 To go fully back to Xbox Live and Teredo (also undoes older kits that replaced game files), double-click
-Restore-XboxLive.bat. It asks for administrator permission once.
+pdnet\Restore-XboxLive.bat. It asks for administrator permission once.
 
-Settings (pdnet.ini in this folder)
+Settings (pdnet.ini in the pdnet folder)
 -----------------------------------
 Change them in the game: multiplayer menu > Settings (left / right on a row; Name: press left or right, type,
 Enter). Or edit pdnet.ini with Notepad, then restart the game.
@@ -70,7 +71,7 @@ and Rated / Unrated lobbies (pick it with the Rating option when you create a ga
 
 If something goes wrong
 -----------------------
-- The game starts with Xbox Live as usual: pdnet didn't load. Run Collect-Log.bat and send pdlaunch-log.
+- The game starts with Xbox Live as usual: pdnet didn't load. Run pdnet\Collect-Log.bat and send pdlaunch-log.
 - "Windows refused to attach pdlaunch": send a screenshot.
 - Lobbies work but matches don't connect: run Setup.bat again and allow the administrator prompt.
 - Nobody hears you: check the lobby's Options > Mic (Voice Chat in classic mode) is On, and that Windows allows
