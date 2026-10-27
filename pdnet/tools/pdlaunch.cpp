@@ -206,10 +206,11 @@ namespace
 
     // Windows never remembers the game's Volume Mixer level (it starts at 100% every time), and the game only applies
     // its own sound settings after the splash screen, so the logos play at full volume. While the game runs: once its
-    // audio session appears, hold it at splash_volume% of the remembered level until the player is past the title
-    // screen (pdnet writes LocalState\pdnet\past-title.txt, deleted here as the game starts; without pdnet, at most
-    // kNoSignalMs), then the remembered level; after that, remember every change the player makes. The sessions are
-    // looked up again on every check: the game can open a new one later (at 100%), which then gets the remembered level too.
+    // audio session appears, hold it at splash_volume% of the remembered level while the title screen or intro is on
+    // (pdnet keeps LocalState\pdnet\past-title.txt while any other menu is, deleted here as the game starts; until it
+    // first appears at most kNoSignalMs, and not at all without pdnet), else the remembered level, remembering every
+    // change the player makes there. Backing out to the title makes it quiet again. The sessions are looked up again on
+    // every check: the game can open a new one later (at 100%), which then gets the current level too.
     // The level is kept in LocalState\pdnet\volume.txt, shared by every kit (older kits kept volume.txt next to pdlaunch.exe).
     //   pdnet.ini: splash_volume=40 (percent; the level is always remembered)
     constexpr DWORD kNoSignalMs = 180000;
@@ -232,8 +233,9 @@ namespace
         HANDLE process = OpenProcess(SYNCHRONIZE, FALSE, pid);
         if (!process) return;
         CoInitializeEx(nullptr, COINIT_MULTITHREADED);
-        DWORD found = 0, splashEnd = 0; // splashEnd: when the player got past the title screen (0: not yet)
-        float level = 1.0f, last = -1;
+        DWORD found = 0, switched = 0; // switched: when the level last changed between quiet and normal
+        float last = 1.0f;
+        bool quiet = true, everPast = false;
         std::set<std::wstring> known;
         while (WaitForSingleObject(process, found ? 250 : 50) == WAIT_TIMEOUT)
         {
@@ -241,29 +243,29 @@ namespace
             if (sessions.empty()) continue;
             if (!found)
             {
-                found = GetTickCount();
-                sessions[0].volume->GetMasterVolume(&level);
-                if (saved >= 0) level = saved;
-                Log(L"audio: game session found; volume %d%% (start-up %d%% of it until past the title screen)", static_cast<int>(level * 100 + 0.5f), static_cast<int>(splash * 100 + 0.5f));
+                found = switched = GetTickCount();
+                sessions[0].volume->GetMasterVolume(&last);
+                if (saved >= 0) last = saved;
+                Log(L"audio: game session found; volume %d%% (start-up %d%% of it on the title screen)", static_cast<int>(last * 100 + 0.5f), static_cast<int>(splash * 100 + 0.5f));
             }
-            if (!splashEnd)
+            bool past = !pastTitle.empty() && GetFileAttributesW(pastTitle.c_str()) != INVALID_FILE_ATTRIBUTES;
+            everPast = everPast || past;
+            bool nowQuiet = injected && !past && (everPast || GetTickCount() - found < kNoSignalMs);
+            if (nowQuiet != quiet)
             {
-                bool past = !pastTitle.empty() && GetFileAttributesW(pastTitle.c_str()) != INVALID_FILE_ATTRIBUTES;
-                if (past || !injected || GetTickCount() - found > kNoSignalMs)
-                {
-                    splashEnd = GetTickCount() | 1;
-                    Log(L"audio: start-up volume ends (%s)", past ? L"past the title screen" : !injected ? L"no pdnet in the game" : L"no word from pdnet in 3 minutes");
-                }
+                quiet = nowQuiet;
+                switched = GetTickCount();
+                Log(L"audio: %s", quiet ? L"back on the title screen: start-up volume" : past ? L"past the title screen: normal volume" :
+                                      !injected ? L"no pdnet in the game: normal volume" : L"no word from pdnet in 3 minutes: normal volume");
             }
-            if (!splashEnd || GetTickCount() - splashEnd < 3000)
+            if (quiet || GetTickCount() - switched < 3000)
             {
-                // the start-up level, then the remembered level held a moment, in case the game sets it as it starts up
+                // the start-up level, or the normal level held a moment after it, in case the game sets it as it starts up
                 for (auto& s : sessions)
                 {
-                    s.volume->SetMasterVolume(splashEnd ? level : level * splash, nullptr);
+                    s.volume->SetMasterVolume(quiet ? last * splash : last, nullptr);
                     known.insert(s.id);
                 }
-                if (splashEnd) last = level;
             }
             else
             {

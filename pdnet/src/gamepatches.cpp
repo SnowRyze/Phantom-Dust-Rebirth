@@ -2145,28 +2145,34 @@ namespace pdnet::gamepatches
                 g_sound2D && g_sound3D ? L"hooked" : L"NOT hooked", GetConfig().auraBeeps ? L"on" : L"off", GetConfig().soundLog ? L", sound_log on" : L"");
         }
 
-        // pdlaunch keeps the game at splash_volume until the player is past the title screen (menu 7, playdatasel):
-        // the first other menu (normally the main menu, 8) writes LocalState\pdnet\past-title.txt, which pdlaunch
-        // (deleting it as the game starts) waits for.
+        // pdlaunch keeps the game at splash_volume while the title screen or intro is on (menu 7 playdatasel, 80, or no
+        // menu yet): LocalState\pdnet\past-title.txt exists while any other menu is (normally the main menu, 8), and is
+        // deleted again when the player backs out to the title. pdlaunch deletes it as the game starts.
         constexpr int kTitleMenu = 7, kTitleAttractMenu = 80;
         void SignalPastTitle()
         {
             std::thread([]
             {
+                std::wstring path = LocalStatePath() + L"\\pdnet\\past-title.txt";
+                bool past = false;
                 for (;;)
                 {
                     Sleep(100);
                     int menu = CurrentMenu(MenuManager());
-                    if (menu < 2 || menu == kTitleMenu || menu == kTitleAttractMenu) continue;
-                    std::wstring path = LocalStatePath() + L"\\pdnet\\past-title.txt";
-                    CreateDirectoryW((LocalStatePath() + L"\\pdnet").c_str(), nullptr);
-                    if (FILE* f = nullptr; !_wfopen_s(&f, path.c_str(), L"w") && f)
+                    bool now = !(menu < 2 || menu == kTitleMenu || menu == kTitleAttractMenu);
+                    if (now == past) continue;
+                    past = now;
+                    if (past)
                     {
-                        fprintf(f, "%d\n", menu);
-                        fclose(f);
+                        CreateDirectoryW((LocalStatePath() + L"\\pdnet").c_str(), nullptr);
+                        if (FILE* f = nullptr; !_wfopen_s(&f, path.c_str(), L"w") && f)
+                        {
+                            fprintf(f, "%d\n", menu);
+                            fclose(f);
+                        }
                     }
-                    Log(L"gamepatch: past the title screen (menu %d): start-up volume ends", menu);
-                    return;
+                    else DeleteFileW(path.c_str());
+                    Log(L"gamepatch: %s (menu %d): start-up volume %s", past ? L"past the title screen" : L"back on the title screen", menu, past ? L"ends" : L"again");
                 }
             }).detach();
         }
