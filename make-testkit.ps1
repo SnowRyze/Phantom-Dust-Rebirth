@@ -150,9 +150,16 @@ if ($Stage -eq 'Kit') {
 }
 
 if (Test-Path $zip) { Remove-Item $zip -Force }
-# ZipFile, not Compress-Archive: Windows PowerShell 5's Compress-Archive writes "pdnet\x" entry names, which some
-# unzip tools don't treat as a folder.
-[IO.Compression.ZipFile]::CreateFromDirectory($out, $zip)
+# Entry by entry with "pdnet/x" names: Windows PowerShell 5's Compress-Archive (and ZipFile.CreateFromDirectory on
+# .NET Framework) write "pdnet\x", which some unzip tools and pdnet's own scripts don't treat as a folder.
+$archive = [IO.Compression.ZipFile]::Open($zip, 'Create')
+try {
+    foreach ($file in Get-ChildItem $out -Recurse -File) {
+        $entryName = $file.FullName.Substring($out.Length + 1).Replace('\', '/')
+        [IO.Compression.ZipFileExtensions]::CreateEntryFromFile($archive, $file.FullName, $entryName) | Out-Null
+    }
+}
+finally { $archive.Dispose() }
 if ($Stage -eq 'Kit') { Set-Content $counterFile $experimental }
 # Only the zip is for handing out: an unzipped copy here gets used by mistake (Setup.bat run from it points the game
 # at a folder this script deletes and rebuilds).
