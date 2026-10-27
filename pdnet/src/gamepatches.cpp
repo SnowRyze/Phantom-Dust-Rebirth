@@ -2002,30 +2002,28 @@ namespace pdnet::gamepatches
             if (fresh) Log(L"gamepatch: Settings menu (was Xbox Live Options): %d text(s), A button %s", texts, patched ? L"changes settings" : L"left as it is (script not as expected)");
         }
 
-        // Options > Sound (main menu; menu 4, option_en.ssb): two rows under the game's Music / Sound Effects Volume,
-        // Aura Particle Beeps and Menu Sounds (On / Off). The script builds the SOUND window (window 4) at 0x01350:
-        // HookedAddItem adds pdnet's rows after the Sound Effects row, and their hints after its hint. The window's left /
-        // right handler (0x02AF4) and its row drawing (0x012E8) work on option 4 + cursor row through menu commands 66
-        // (get) and 67 (set), in steps of 10. Options 6 and 7 are the Display window's otherwise, so only while the
-        // SOUND window is open (script state SOUN, set with menu commands 12 and 6) they are pdnet's rows: 66 answers 50,
-        // and 67 (40 or 60) switches the setting and saves it.
+        // Options > Sound (main menu; menu 4, option_en.ssb): a row under the game's Music / Sound Effects Volume, Aura
+        // Particle Beeps (On / Off). The script builds the SOUND window (window 4) at 0x01350: HookedAddItem adds pdnet's
+        // row after the Sound Effects row, and its hint after that row's hint. The window's left / right handler
+        // (0x02AF4) and its row drawing (0x012E8) work on option 4 + cursor row through menu commands 66 (get) and 67
+        // (set), in steps of 10. Option 6 is the Display window's otherwise, so only while the SOUND window is open
+        // (script state SOUN, set with menu commands 12 and 6) it is pdnet's row: 66 answers 50, and 67 (40 or 60)
+        // switches the setting and saves it.
         template <typename Fn> bool WrapCommand(uint64_t tableEntry, uint64_t expected, Fn hook, Fn& original, const wchar_t* name); // (below)
         constexpr int kOptionsMenu = 4;
-        constexpr int kAuraOption = 6, kMenuSoundOption = 7;
+        constexpr int kAuraOption = 6;
         std::atomic<bool> g_soundWindow{ false };
-        char g_soundRowText[2][96];
-        const char* kSoundHints[2] = { "Turn the beeping of the aura particles on or off.", "Turn the menus' cursor and button sounds on or off." };
+        char g_soundRowText[96];
+        const char* kSoundHint = "Turn the beeping of the aura particles on or off.";
 
         bool InSoundWindow() { return g_soundWindow && CurrentMenu(MenuManager()) == kOptionsMenu; }
 
         void RefreshSoundRows()
         {
-            const Config& c = GetConfig();
-            sprintf_s(g_soundRowText[0], "\a190wAura Particle Beeps\f\a1#\a150c%s\f\a0#", c.auraBeeps ? "On" : "Off");
-            sprintf_s(g_soundRowText[1], "\a190wMenu Sounds\f\a1#\a150c%s\f\a0#", c.menuSounds ? "On" : "Off");
+            sprintf_s(g_soundRowText, "\a190wAura Particle Beeps\f\a1#\a150c%s\f\a0#", GetConfig().auraBeeps ? "On" : "Off");
         }
 
-        // Called for every item added: true when it was one of the two the rows follow (added here, then pdnet's).
+        // Called for every item added: true when it was one of the two pdnet's row and hint follow (added here, then pdnet's).
         bool SoundItems(const char* added, int64_t* args, int64_t& result)
         {
             if (CurrentMenu(MenuManager()) != kOptionsMenu) return false;
@@ -2037,17 +2035,12 @@ namespace pdnet::gamepatches
             }
             result = g_addItem(args);
             RefreshSoundRows();
-            for (int r = 0; r < 2; ++r)
-            {
-                int64_t item[8] = { reinterpret_cast<int64_t>(rows ? g_soundRowText[r] : kSoundHints[r]) };
-                g_addItem(item);
-            }
+            int64_t item[8] = { reinterpret_cast<int64_t>(rows ? g_soundRowText : kSoundHint) };
+            g_addItem(item);
             if (rows)
             {
                 g_soundWindow = true;
-                int64_t manager = MenuManager();
-                int16_t* window = manager ? reinterpret_cast<int16_t*>(manager + 0x40 + 4 * 0x103c) : nullptr;
-                if (window) Log(L"gamepatch: Options > Sound: 2 rows added (window %d, %d x %d at %d, %d)", 4, window[2], window[3], window[0], window[1]);
+                Log(L"gamepatch: Options > Sound: Aura Particle Beeps row added");
             }
             return true;
         }
@@ -2055,20 +2048,18 @@ namespace pdnet::gamepatches
         MenuCommandFn g_getOption = nullptr, g_setOption = nullptr, g_setState = nullptr, g_setState12 = nullptr;
         int64_t HookedGetOption(int64_t* args)
         {
-            if (args && (args[0] == kAuraOption || args[0] == kMenuSoundOption) && InSoundWindow()) return 50;
+            if (args && args[0] == kAuraOption && InSoundWindow()) return 50;
             return g_getOption(args);
         }
 
         int64_t HookedSetOption(int64_t* args)
         {
-            if (!args || (args[0] != kAuraOption && args[0] != kMenuSoundOption) || !InSoundWindow()) return g_setOption(args);
-            bool aura = args[0] == kAuraOption;
-            Config& c = EditableConfig();
-            bool& on = aura ? c.auraBeeps : c.menuSounds;
+            if (!args || args[0] != kAuraOption || !InSoundWindow()) return g_setOption(args);
+            bool& on = EditableConfig().auraBeeps;
             on = !on;
-            SaveSetting(aura ? "aura_beeps" : "menu_sounds", on ? "on" : "off");
+            SaveSetting("aura_beeps", on ? "on" : "off");
             RefreshSoundRows();
-            Log(L"gamepatch: Options > Sound: %s %s", aura ? L"aura particle beeps" : L"menu sounds", on ? L"on" : L"off");
+            Log(L"gamepatch: Options > Sound: aura particle beeps %s", on ? L"on" : L"off");
             return 0;
         }
 
@@ -2085,9 +2076,8 @@ namespace pdnet::gamepatches
 
         // Every game sound starts in FUN_140240870 (2D) or FUN_140240a00 (3D, at a position): bank (edx), cue (r8d),
         // sound in the cue (r9d). Both are hooked: a sound turned off in Options > Sound is not started (2D answers -1,
-        // as when sound is off). Menu sounds are the script menus' own (menu command g1 #43, FUN_140261750, which goes
-        // through FUN_140276330 into the 2D start). sound_log=on logs each sound (with its caller) the first time it
-        // plays, and every 30 s the ones that played often since.
+        // as when sound is off). sound_log=on logs each sound (with its caller) the first time it plays, and every 30 s
+        // the ones that played often since.
         using SoundFn = int64_t (*)(int64_t, int64_t, int64_t, int64_t, int64_t, int64_t, int64_t, int64_t);
         SoundFn g_sound2D = nullptr, g_sound3D = nullptr;
 
@@ -2115,7 +2105,6 @@ namespace pdnet::gamepatches
         {
             const Config& c = GetConfig();
             if (c.soundLog) LogSound(positional, static_cast<int32_t>(bank), static_cast<int32_t>(cue), static_cast<int32_t>(sound), caller);
-            if (!c.menuSounds && !positional && caller == 0x140261776) return true; // from menu command g1 #43 (its call of FUN_140276330)
             (void)c.auraBeeps; // the aura particles' sound: not known yet (sound_log finds it)
             return false;
         }
@@ -2146,9 +2135,8 @@ namespace pdnet::gamepatches
                         WrapCommand<MenuCommandFn>(0x1403eefe0 + 67 * 8, 0x140208280, &HookedSetOption, g_setOption, L"Options > Sound rows (set)") &&
                         WrapCommand<MenuCommandFn>(0x1403eefe0 + 6 * 8, 0x140207180, &HookedSetState, g_setState, L"Options > Sound state") &&
                         WrapCommand<MenuCommandFn>(0x1403eefe0 + 12 * 8, 0x140207220, &HookedSetState12, g_setState12, L"Options > Sound state (12)");
-            Log(L"gamepatch: Options > Sound: rows %s, sounds %s (aura beeps %s, menu sounds %s%s)", rows ? L"ready" : L"not added",
-                g_sound2D && g_sound3D ? L"hooked" : L"NOT hooked", GetConfig().auraBeeps ? L"on" : L"off", GetConfig().menuSounds ? L"on" : L"off",
-                GetConfig().soundLog ? L", sound_log on" : L"");
+            Log(L"gamepatch: Options > Sound: row %s, sounds %s (aura beeps %s%s)", rows ? L"ready" : L"not added",
+                g_sound2D && g_sound3D ? L"hooked" : L"NOT hooked", GetConfig().auraBeeps ? L"on" : L"off", GetConfig().soundLog ? L", sound_log on" : L"");
         }
 
         bool RatedRuleText(int64_t* args, char* out, size_t size)
@@ -2353,7 +2341,7 @@ namespace pdnet::gamepatches
                 Log(L"gamepatch: in-game Settings ready (multiplayer menu > Settings)");
             if (WrapCommand<MenuCommandFn>(0x1403eefe0 + 40 * 8, 0x140207e20, &HookedAddItem, g_addItem, L"menu item names"))
                 Log(L"gamepatch: menu items renamed as they are added (Quick Join, Lobby Browser%s)", GetConfig().scoreboard ? L", Global scoreboards only" : L"");
-            SoundOptions(); // Options > Sound: Aura Particle Beeps, Menu Sounds
+            SoundOptions(); // Options > Sound: Aura Particle Beeps
             bool arsenal = GetConfig().lobbyArsenalEditor; // the Arsenal Lab button for clients too
             if (GetConfig().lobbyGamertagOption || micLabel || arsenal) LobbyScriptPatches(GetConfig().lobbyGamertagOption, micLabel, arsenal);
         });

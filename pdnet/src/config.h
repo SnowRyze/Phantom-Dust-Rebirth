@@ -51,7 +51,6 @@ namespace pdnet
         int splashVolume = 40;              // splash_volume=: % of the remembered volume during the start-up logos (pdlaunch; the Settings menu shows it)
         int splashSeconds = 12;             // splash_seconds=: how long the start-up logos stay quieter (pdlaunch)
         bool auraBeeps = true;              // aura_beeps=on|off: the aura particles' beeping (Options > Sound shows it)
-        bool menuSounds = true;             // menu_sounds=on|off: the menus' cursor / select / back sounds (Options > Sound shows it)
         bool soundLog = false;              // sound_log=on: log each game sound (bank, cue, caller) the first time it plays (debug, see gamepatches.cpp)
     };
 
