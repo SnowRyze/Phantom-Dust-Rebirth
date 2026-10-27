@@ -2083,7 +2083,9 @@ namespace pdnet::gamepatches
 
         uint64_t GhidraAddress(void* code) { return static_cast<uint64_t>(static_cast<uint8_t*>(code) - Image()) + 0x140000000ull; }
 
-        void LogSound(bool positional, int64_t bank, int64_t cue, int64_t sound, uint64_t caller)
+        bool AuraBeep(bool positional, int64_t bank, int64_t cue) { return positional && bank == 1 && cue == 1; }
+
+        void LogSound(bool positional, int64_t bank, int64_t cue, int64_t sound, uint64_t caller, bool auraOff)
         {
             static std::mutex lock;
             static std::map<uint64_t, uint32_t> counts;
@@ -2092,7 +2094,8 @@ namespace pdnet::gamepatches
                            (static_cast<uint64_t>(sound) & 0xffff) << 16 | ((caller - 0x140000000ull) & 0xffff);
             std::lock_guard guard(lock);
             if (counts.find(key) == counts.end())
-                Log(L"sound: %s bank %lld cue %lld sound %lld from 0x%llX (menu %d)", positional ? L"3D" : L"2D", bank, cue, sound, caller, CurrentMenu(MenuManager()));
+                Log(L"sound: %s bank %lld cue %lld sound %lld from 0x%llX (menu %d)%s", positional ? L"3D" : L"2D", bank, cue, sound, caller, CurrentMenu(MenuManager()),
+                    auraOff && AuraBeep(positional, bank, cue) ? L" (muted: aura beeps off)" : L"");
             ++counts[key];
             if (GetTickCount64() - summaryAt < 30000) return;
             summaryAt = GetTickCount64();
@@ -2104,9 +2107,10 @@ namespace pdnet::gamepatches
         bool SoundOff(bool positional, int64_t bank, int64_t cue, int64_t sound, uint64_t caller)
         {
             const Config& c = GetConfig();
-            if (c.soundLog) LogSound(positional, static_cast<int32_t>(bank), static_cast<int32_t>(cue), static_cast<int32_t>(sound), caller);
-            // The aura particles' beep (sound_log, 2026-10-27): 3D, bank 1, cue 4, once a second from the battle's start.
-            return !c.auraBeeps && positional && bank == 1 && cue == 4;
+            if (c.soundLog) LogSound(positional, static_cast<int32_t>(bank), static_cast<int32_t>(cue), static_cast<int32_t>(sound), caller, !c.auraBeeps);
+            // The aura particles' beep (sound_log, 2026-10-27): 3D, bank 1, cue 1, which the stage's sound emitters
+            // (FUN_1402214c0) replay on a timer. Cue 4 (the same emitters' looping sound) was tried first: the beep stayed.
+            return !c.auraBeeps && AuraBeep(positional, static_cast<int32_t>(bank), static_cast<int32_t>(cue));
         }
 
         int64_t HookedSound2D(int64_t a, int64_t bank, int64_t cue, int64_t sound, int64_t e, int64_t f, int64_t g, int64_t h)
