@@ -2105,8 +2105,8 @@ namespace pdnet::gamepatches
         {
             const Config& c = GetConfig();
             if (c.soundLog) LogSound(positional, static_cast<int32_t>(bank), static_cast<int32_t>(cue), static_cast<int32_t>(sound), caller);
-            (void)c.auraBeeps; // the aura particles' sound: not known yet (sound_log finds it)
-            return false;
+            // The aura particles' beep (sound_log, 2026-10-27): 3D, bank 1, cue 4, once a second from the battle's start.
+            return !c.auraBeeps && positional && bank == 1 && cue == 4;
         }
 
         int64_t HookedSound2D(int64_t a, int64_t bank, int64_t cue, int64_t sound, int64_t e, int64_t f, int64_t g, int64_t h)
@@ -2117,7 +2117,10 @@ namespace pdnet::gamepatches
 
         int64_t HookedSound3D(int64_t a, int64_t bank, int64_t cue, int64_t sound, int64_t e, int64_t f, int64_t g, int64_t h)
         {
-            if (SoundOff(true, bank, cue, sound, GhidraAddress(_ReturnAddress()))) return 0;
+            uint64_t caller = GhidraAddress(_ReturnAddress());
+            // Most 3D sounds come through FUN_140276330 (sub rsp,58h, then the call): name its caller instead.
+            if (caller == 0x140276399) caller = GhidraAddress(reinterpret_cast<void**>(_AddressOfReturnAddress())[1 + 0x58 / 8]);
+            if (SoundOff(true, bank, cue, sound, caller)) return 0;
             return g_sound3D(a, bank, cue, sound, e, f, g, h);
         }
 
