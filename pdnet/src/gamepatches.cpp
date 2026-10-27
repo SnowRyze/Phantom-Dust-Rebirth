@@ -1544,13 +1544,13 @@ namespace pdnet::gamepatches
         constexpr Colour kColours[] = { { "Yellow", 0xFFE600 }, { "Red", 0xFF5A5A }, { "Blue", 0x4FB4FF }, { "Green", 0x5AFF6E },
                                         { "Purple", 0xB46EFF }, { "Orange", 0xFFA03C }, { "Cyan", 0x3CF0FF }, { "Pink", 0xFF78C8 },
                                         { "White", 0xFFFFFF } };
-        enum SettingRow { kName, kVoiceMode, kBodyTags, kTagColours, kDeadColour, kAllyColour, kEnemyColour, kSplashVolume, kSplashSeconds,
+        enum SettingRow { kName, kVoiceMode, kBodyTags, kTagColours, kDeadColour, kAllyColour, kEnemyColour, kSplashVolume,
                           kDiscordLobby, kDiscordPlayers, kSettingRows };
         char g_rowText[kSettingRows][80];
         char g_optionText[kSettingRows][96]; // the rows as the Options screen shows them (RefreshSettingRows)
         constexpr int kFirstOptionRow = 3;   // after Cross Play (1) and Voice Chat (2)
         const char* kOptionLabels[kSettingRows] = { "Name", "Voice Mode", "Body Tags", "Tag Colours", "Dead Colour", "Ally Colour", "Foe Colour",
-                                                    "Logo Volume", "Logo Time", "Discord Lobby", "Discord Join" };
+                                                    "Logo Volume", "Discord Lobby", "Discord Join" };
         std::atomic<bool> g_typingName{ false };
         std::atomic<bool> g_settingsDirty{ false }; // changed in the Settings screen since it opened or was last saved
         std::atomic<bool> g_confirmingSave{ false }; // "Save all settings?" is showing (HookedButtons)
@@ -1594,7 +1594,6 @@ namespace pdnet::gamepatches
             sprintf_s(g_rowText[kAllyColour], "Teammate colour: %s", ColourName(c.allyNametagColor).c_str());
             sprintf_s(g_rowText[kEnemyColour], "Opponent colour: %s", ColourName(c.enemyNametagColor).c_str());
             sprintf_s(g_rowText[kSplashVolume], "Logo volume: %d%%", c.splashVolume);
-            sprintf_s(g_rowText[kSplashSeconds], "Logo length: %d s", c.splashSeconds);
             sprintf_s(g_rowText[kDiscordLobby], "Discord lobby posts: %s", onOff(c.discordLobbyMessages));
             sprintf_s(g_rowText[kDiscordPlayers], "Discord player posts: %s", onOff(c.discordPlayerMessages));
             for (int r = 0; r < kSettingRows; ++r)
@@ -1615,8 +1614,7 @@ namespace pdnet::gamepatches
             case kDeadColour: return "Nametag colour of a defeated player.";
             case kAllyColour: return "Nametag colour of your teammates (Tag Team).";
             case kEnemyColour: return "Nametag colour of your opponents.";
-            case kSplashVolume: return "Volume during the start-up logos (next start).";
-            case kSplashSeconds: return "How long the start-up logos stay quieter (next start).";
+            case kSplashVolume: return "Volume from the start-up logos until the main menu (next start).";
             case kDiscordLobby: return "Post 'lobby opened / closed' when you host.";
             case kDiscordPlayers: return "Post '<player> joined / left' when you host.";
             }
@@ -1703,7 +1701,6 @@ namespace pdnet::gamepatches
             case kAllyColour: c.allyNametagColor = NextColour(c.allyNametagColor, direction); break;
             case kEnemyColour: c.enemyNametagColor = NextColour(c.enemyNametagColor, direction); break;
             case kSplashVolume: c.splashVolume = (std::clamp)((c.splashVolume + 5) / 10 * 10 + direction * 10, 0, 100); break;
-            case kSplashSeconds: c.splashSeconds = (std::clamp)(c.splashSeconds / 2 * 2 + direction * 2, 0, 30); break;
             case kDiscordLobby: c.discordLobbyMessages = !c.discordLobbyMessages; break;
             case kDiscordPlayers: c.discordPlayerMessages = !c.discordPlayerMessages; break;
             }
@@ -1807,7 +1804,7 @@ namespace pdnet::gamepatches
                            { "nametags_on_bodies", onOff(c.nametagsOnBodies) }, { "nametag_colors", onOff(c.nametagColors) },
                            { "dead_nametag_color", hex(c.deadNametagColor) }, { "ally_nametag_color", hex(c.allyNametagColor) },
                            { "enemy_nametag_color", hex(c.enemyNametagColor) }, { "splash_volume", std::to_string(c.splashVolume) },
-                           { "splash_seconds", std::to_string(c.splashSeconds) }, { "discord_lobby_messages", onOff(c.discordLobbyMessages) },
+                           { "discord_lobby_messages", onOff(c.discordLobbyMessages) },
                            { "discord_player_messages", onOff(c.discordPlayerMessages) } });
             g_settingsSaved = c;
             g_settingsDirty = false;
@@ -1819,7 +1816,7 @@ namespace pdnet::gamepatches
             const Config& s = g_settingsSaved;
             c.displayName = s.displayName; c.voiceClassic = s.voiceClassic; c.nametagsOnBodies = s.nametagsOnBodies; c.nametagColors = s.nametagColors;
             c.deadNametagColor = s.deadNametagColor; c.allyNametagColor = s.allyNametagColor; c.enemyNametagColor = s.enemyNametagColor;
-            c.splashVolume = s.splashVolume; c.splashSeconds = s.splashSeconds;
+            c.splashVolume = s.splashVolume;
             c.discordLobbyMessages = s.discordLobbyMessages; c.discordPlayerMessages = s.discordPlayerMessages;
             g_settingsDirty = false;
             UseOwnSettings();
@@ -2146,6 +2143,32 @@ namespace pdnet::gamepatches
                         WrapCommand<MenuCommandFn>(0x1403eefe0 + 12 * 8, 0x140207220, &HookedSetState12, g_setState12, L"Options > Sound state (12)");
             Log(L"gamepatch: Options > Sound: row %s, sounds %s (aura beeps %s%s)", rows ? L"ready" : L"not added",
                 g_sound2D && g_sound3D ? L"hooked" : L"NOT hooked", GetConfig().auraBeeps ? L"on" : L"off", GetConfig().soundLog ? L", sound_log on" : L"");
+        }
+
+        // pdlaunch keeps the game at splash_volume until the player is past the title screen (menu 7, playdatasel):
+        // the first other menu (normally the main menu, 8) writes LocalState\pdnet\past-title.txt, which pdlaunch
+        // (deleting it as the game starts) waits for.
+        constexpr int kTitleMenu = 7, kTitleAttractMenu = 80;
+        void SignalPastTitle()
+        {
+            std::thread([]
+            {
+                for (;;)
+                {
+                    Sleep(100);
+                    int menu = CurrentMenu(MenuManager());
+                    if (menu < 2 || menu == kTitleMenu || menu == kTitleAttractMenu) continue;
+                    std::wstring path = LocalStatePath() + L"\\pdnet\\past-title.txt";
+                    CreateDirectoryW((LocalStatePath() + L"\\pdnet").c_str(), nullptr);
+                    if (FILE* f = nullptr; !_wfopen_s(&f, path.c_str(), L"w") && f)
+                    {
+                        fprintf(f, "%d\n", menu);
+                        fclose(f);
+                    }
+                    Log(L"gamepatch: past the title screen (menu %d): start-up volume ends", menu);
+                    return;
+                }
+            }).detach();
         }
 
         bool RatedRuleText(int64_t* args, char* out, size_t size)
@@ -2606,6 +2629,7 @@ namespace pdnet::gamepatches
             if (WrapCommand<MenuCommandFn>(0x1403eefe0 + 40 * 8, 0x140207e20, &HookedAddItem, g_addItem, L"menu item names"))
                 Log(L"gamepatch: menu items renamed as they are added (Quick Join, Lobby Browser%s)", GetConfig().scoreboard ? L", Global scoreboards only" : L"");
             SoundOptions(); // Options > Sound: Aura Particle Beeps
+            SignalPastTitle(); // pdlaunch's start-up volume lasts until then
             bool arsenal = GetConfig().lobbyArsenalEditor; // the Arsenal Lab button for clients too
             if (GetConfig().lobbyGamertagOption || micLabel || arsenal) LobbyScriptPatches(GetConfig().lobbyGamertagOption, micLabel, arsenal);
         });
