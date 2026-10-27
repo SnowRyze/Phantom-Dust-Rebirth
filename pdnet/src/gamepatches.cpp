@@ -8,6 +8,8 @@
 #include <winrt/Windows.ApplicationModel.Core.h>
 #include <winrt/Windows.UI.Core.h>
 #include <intrin.h>
+#include <map>
+#include <mutex>
 #include <set>
 #include <tuple>
 
@@ -814,24 +816,27 @@ namespace pdnet::gamepatches
         // trampoline). Default: mov [rsp+8],rbx; push rdi; sub rsp,20h.
         constexpr uint8_t kPrologue[10] = { 0x48, 0x89, 0x5c, 0x24, 0x08, 0x57, 0x48, 0x83, 0xec, 0x20 };
 
-        void* InlineHook(uint64_t ghidra, void* hook, const wchar_t* name, const uint8_t (&prologue)[10] = kPrologue)
+        // The same for any start of at least 5 bytes: `expected` is what the function starts with (all replaced by the
+        // jump), `replay` what the trampoline runs in its place before continuing after it (the same bytes, unless one
+        // of them is RIP-relative and has to be rewritten).
+        void* InlineHookBytes(uint64_t ghidra, const std::vector<uint8_t>& expected, const std::vector<uint8_t>& replay, void* hook, const wchar_t* name)
         {
             uint8_t* site = At(ghidra);
-            if (memcmp(site, prologue, sizeof(prologue)) != 0)
+            if (expected.size() < 5 || memcmp(site, expected.data(), expected.size()) != 0)
             {
                 Log(L"gamepatch: %s hook skipped - the game code is not what this pdnet expects", name);
                 return nullptr;
             }
-            auto trampoline = static_cast<uint8_t*>(VirtualAlloc(nullptr, 32, MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE));
+            auto trampoline = static_cast<uint8_t*>(VirtualAlloc(nullptr, 64, MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE));
             uint8_t* cave = CodeCave(16);
             if (!trampoline || !cave)
             {
                 Log(L"gamepatch: %s hook skipped - no memory for it", name);
                 return nullptr;
             }
-            std::vector<uint8_t> back(prologue, prologue + sizeof(prologue));
+            std::vector<uint8_t> back = replay;
             back.insert(back.end(), { 0xff, 0x25, 0x00, 0x00, 0x00, 0x00 });     // jmp [rip+0]
-            Put64(back, reinterpret_cast<uint64_t>(site + sizeof(prologue)));
+            Put64(back, reinterpret_cast<uint64_t>(site + expected.size()));
             memcpy(trampoline, back.data(), back.size());
             FlushInstructionCache(GetCurrentProcess(), trampoline, back.size());
 
@@ -839,13 +844,19 @@ namespace pdnet::gamepatches
             Put64(toHook, reinterpret_cast<uint64_t>(hook));
             std::vector<uint8_t> jump = { 0xe9 };
             Put32(jump, Rel32(site + 5, cave));
-            jump.resize(sizeof(prologue), 0x90);
+            jump.resize(expected.size(), 0x90);
             if (!Write(cave, toHook) || !Write(site, jump))
             {
                 Log(L"gamepatch: %s hook failed (VirtualProtect error %lu)", name, GetLastError());
                 return nullptr;
             }
             return trampoline;
+        }
+
+        void* InlineHook(uint64_t ghidra, void* hook, const wchar_t* name, const uint8_t (&prologue)[10] = kPrologue)
+        {
+            std::vector<uint8_t> bytes(prologue, prologue + sizeof(prologue));
+            return InlineHookBytes(ghidra, bytes, bytes, hook, name);
         }
 
         // menu_debug=on: while the lobby menu (44) is on screen, logs each script command (menu table 0x1403eefe0 x136,
@@ -1183,6 +1194,7 @@ namespace pdnet::gamepatches
         };
 
         bool SettingsItems(const char* added); // the in-game Settings rows (below)
+        bool SoundItems(const char* added, int64_t* args, int64_t& result); // the Options > Sound rows (below)
 
         int64_t HookedAddItem(int64_t* args)
         {
@@ -1202,6 +1214,7 @@ namespace pdnet::gamepatches
                             return g_addItem(renamed);
                         }
                     if (SettingsItems(text)) return 0; // replaced by the in-game Settings rows
+                    if (int64_t result = 0; SoundItems(text, args, result)) return result; // followed by the Options > Sound rows
                     return g_addItem(args);
                 }
             }
@@ -1989,6 +2002,155 @@ namespace pdnet::gamepatches
             if (fresh) Log(L"gamepatch: Settings menu (was Xbox Live Options): %d text(s), A button %s", texts, patched ? L"changes settings" : L"left as it is (script not as expected)");
         }
 
+        // Options > Sound (main menu; menu 4, option_en.ssb): two rows under the game's Music / Sound Effects Volume,
+        // Aura Particle Beeps and Menu Sounds (On / Off). The script builds the SOUND window (window 4) at 0x01350:
+        // HookedAddItem adds pdnet's rows after the Sound Effects row, and their hints after its hint. The window's left /
+        // right handler (0x02AF4) and its row drawing (0x012E8) work on option 4 + cursor row through menu commands 66
+        // (get) and 67 (set), in steps of 10. Options 6 and 7 are the Display window's otherwise, so only while the
+        // SOUND window is open (script state SOUN, set with menu commands 12 and 6) they are pdnet's rows: 66 answers 50,
+        // and 67 (40 or 60) switches the setting and saves it.
+        template <typename Fn> bool WrapCommand(uint64_t tableEntry, uint64_t expected, Fn hook, Fn& original, const wchar_t* name); // (below)
+        constexpr int kOptionsMenu = 4;
+        constexpr int kAuraOption = 6, kMenuSoundOption = 7;
+        std::atomic<bool> g_soundWindow{ false };
+        char g_soundRowText[2][96];
+        const char* kSoundHints[2] = { "Turn the beeping of the aura particles on or off.", "Turn the menus' cursor and button sounds on or off." };
+
+        bool InSoundWindow() { return g_soundWindow && CurrentMenu(MenuManager()) == kOptionsMenu; }
+
+        void RefreshSoundRows()
+        {
+            const Config& c = GetConfig();
+            sprintf_s(g_soundRowText[0], "\a190wAura Particle Beeps\f\a1#\a150c%s\f\a0#", c.auraBeeps ? "On" : "Off");
+            sprintf_s(g_soundRowText[1], "\a190wMenu Sounds\f\a1#\a150c%s\f\a0#", c.menuSounds ? "On" : "Off");
+        }
+
+        // Called for every item added: true when it was one of the two the rows follow (added here, then pdnet's).
+        bool SoundItems(const char* added, int64_t* args, int64_t& result)
+        {
+            if (CurrentMenu(MenuManager()) != kOptionsMenu) return false;
+            bool rows = strcmp(added, "\a190wSound Effects Volume\f\a1#\a150c%2d %s\f\a0#") == 0, hints = strcmp(added, "Set the sound effects volume.") == 0;
+            if (!rows && !hints)
+            {
+                if (strcmp(added, "\a190wMusic Volume\f\a1#\a150c%2d %s\f\a0#") != 0 && strcmp(added, "Set the music volume.") != 0) g_soundWindow = false; // another window
+                return false;
+            }
+            result = g_addItem(args);
+            RefreshSoundRows();
+            for (int r = 0; r < 2; ++r)
+            {
+                int64_t item[8] = { reinterpret_cast<int64_t>(rows ? g_soundRowText[r] : kSoundHints[r]) };
+                g_addItem(item);
+            }
+            if (rows)
+            {
+                g_soundWindow = true;
+                int64_t manager = MenuManager();
+                int16_t* window = manager ? reinterpret_cast<int16_t*>(manager + 0x40 + 4 * 0x103c) : nullptr;
+                if (window) Log(L"gamepatch: Options > Sound: 2 rows added (window %d, %d x %d at %d, %d)", 4, window[2], window[3], window[0], window[1]);
+            }
+            return true;
+        }
+
+        MenuCommandFn g_getOption = nullptr, g_setOption = nullptr, g_setState = nullptr, g_setState12 = nullptr;
+        int64_t HookedGetOption(int64_t* args)
+        {
+            if (args && (args[0] == kAuraOption || args[0] == kMenuSoundOption) && InSoundWindow()) return 50;
+            return g_getOption(args);
+        }
+
+        int64_t HookedSetOption(int64_t* args)
+        {
+            if (!args || (args[0] != kAuraOption && args[0] != kMenuSoundOption) || !InSoundWindow()) return g_setOption(args);
+            bool aura = args[0] == kAuraOption;
+            Config& c = EditableConfig();
+            bool& on = aura ? c.auraBeeps : c.menuSounds;
+            on = !on;
+            SaveSetting(aura ? "aura_beeps" : "menu_sounds", on ? "on" : "off");
+            RefreshSoundRows();
+            Log(L"gamepatch: Options > Sound: %s %s", aura ? L"aura particle beeps" : L"menu sounds", on ? L"on" : L"off");
+            return 0;
+        }
+
+        // Menu commands 12 and 6 set the script's state ("SOUN" / "aSOUN" while the SOUND window is open).
+        void NoteState(int64_t* args)
+        {
+            char state[16];
+            if (!args || !CopyString(reinterpret_cast<const char*>(args[0]), state, sizeof(state))) return;
+            size_t n = strlen(state);
+            g_soundWindow = n >= 4 && strcmp(state + n - 4, "SOUN") == 0;
+        }
+        int64_t HookedSetState(int64_t* args) { NoteState(args); return g_setState(args); }
+        int64_t HookedSetState12(int64_t* args) { NoteState(args); return g_setState12(args); }
+
+        // Every game sound starts in FUN_140240870 (2D) or FUN_140240a00 (3D, at a position): bank (edx), cue (r8d),
+        // sound in the cue (r9d). Both are hooked: a sound turned off in Options > Sound is not started (2D answers -1,
+        // as when sound is off). Menu sounds are the script menus' own (menu command g1 #43, FUN_140261750, which goes
+        // through FUN_140276330 into the 2D start). sound_log=on logs each sound (with its caller) the first time it
+        // plays, and every 30 s the ones that played often since.
+        using SoundFn = int64_t (*)(int64_t, int64_t, int64_t, int64_t, int64_t, int64_t, int64_t, int64_t);
+        SoundFn g_sound2D = nullptr, g_sound3D = nullptr;
+
+        uint64_t GhidraAddress(void* code) { return static_cast<uint64_t>(static_cast<uint8_t*>(code) - Image()) + 0x140000000ull; }
+
+        void LogSound(bool positional, int64_t bank, int64_t cue, int64_t sound, uint64_t caller)
+        {
+            static std::mutex lock;
+            static std::map<uint64_t, uint32_t> counts;
+            static uint64_t summaryAt = GetTickCount64();
+            uint64_t key = (positional ? 1ull << 63 : 0) | (static_cast<uint64_t>(bank) & 0xff) << 48 | (static_cast<uint64_t>(cue) & 0xffff) << 32 |
+                           (static_cast<uint64_t>(sound) & 0xffff) << 16 | ((caller - 0x140000000ull) & 0xffff);
+            std::lock_guard guard(lock);
+            if (counts.find(key) == counts.end())
+                Log(L"sound: %s bank %lld cue %lld sound %lld from 0x%llX (menu %d)", positional ? L"3D" : L"2D", bank, cue, sound, caller, CurrentMenu(MenuManager()));
+            ++counts[key];
+            if (GetTickCount64() - summaryAt < 30000) return;
+            summaryAt = GetTickCount64();
+            for (auto& [k, n] : counts)
+                if (n >= 5) Log(L"sound: %s bank %llu cue %llu sound %llu played %u times in 30 s", (k >> 63) ? L"3D" : L"2D", (k >> 48) & 0xff, (k >> 32) & 0xffff, (k >> 16) & 0xffff, n);
+            for (auto& [k, n] : counts) n = 0;
+        }
+
+        bool SoundOff(bool positional, int64_t bank, int64_t cue, int64_t sound, uint64_t caller)
+        {
+            const Config& c = GetConfig();
+            if (c.soundLog) LogSound(positional, static_cast<int32_t>(bank), static_cast<int32_t>(cue), static_cast<int32_t>(sound), caller);
+            if (!c.menuSounds && !positional && caller == 0x140261776) return true; // from menu command g1 #43 (its call of FUN_140276330)
+            (void)c.auraBeeps; // the aura particles' sound: not known yet (sound_log finds it)
+            return false;
+        }
+
+        int64_t HookedSound2D(int64_t a, int64_t bank, int64_t cue, int64_t sound, int64_t e, int64_t f, int64_t g, int64_t h)
+        {
+            if (SoundOff(false, bank, cue, sound, GhidraAddress(_ReturnAddress()))) return -1;
+            return g_sound2D(a, bank, cue, sound, e, f, g, h);
+        }
+
+        int64_t HookedSound3D(int64_t a, int64_t bank, int64_t cue, int64_t sound, int64_t e, int64_t f, int64_t g, int64_t h)
+        {
+            if (SoundOff(true, bank, cue, sound, GhidraAddress(_ReturnAddress()))) return 0;
+            return g_sound3D(a, bank, cue, sound, e, f, g, h);
+        }
+
+        void SoundOptions()
+        {
+            // FUN_140240870 starts with sub rsp,68h / mov rax,[rip+...] (the stack cookie at 0x1403d40f8): the
+            // trampoline loads the cookie from its absolute address instead (mov rax,[imm64]).
+            std::vector<uint8_t> start2D = { 0x48, 0x83, 0xEC, 0x68, 0x48, 0x8B, 0x05, 0x7D, 0x38, 0x19, 0x00 };
+            std::vector<uint8_t> replay2D = { 0x48, 0x83, 0xEC, 0x68, 0x48, 0xA1 };
+            Put64(replay2D, reinterpret_cast<uint64_t>(At(0x1403d40f8)));
+            std::vector<uint8_t> start3D = { 0x40, 0x55, 0x41, 0x56, 0x41, 0x57 }; // push rbp / push r14 / push r15
+            g_sound2D = reinterpret_cast<SoundFn>(InlineHookBytes(0x140240870, start2D, replay2D, reinterpret_cast<void*>(&HookedSound2D), L"sound (2D)"));
+            g_sound3D = reinterpret_cast<SoundFn>(InlineHookBytes(0x140240a00, start3D, start3D, reinterpret_cast<void*>(&HookedSound3D), L"sound (3D)"));
+            bool rows = WrapCommand<MenuCommandFn>(0x1403eefe0 + 66 * 8, 0x140208260, &HookedGetOption, g_getOption, L"Options > Sound rows (get)") &&
+                        WrapCommand<MenuCommandFn>(0x1403eefe0 + 67 * 8, 0x140208280, &HookedSetOption, g_setOption, L"Options > Sound rows (set)") &&
+                        WrapCommand<MenuCommandFn>(0x1403eefe0 + 6 * 8, 0x140207180, &HookedSetState, g_setState, L"Options > Sound state") &&
+                        WrapCommand<MenuCommandFn>(0x1403eefe0 + 12 * 8, 0x140207220, &HookedSetState12, g_setState12, L"Options > Sound state (12)");
+            Log(L"gamepatch: Options > Sound: rows %s, sounds %s (aura beeps %s, menu sounds %s%s)", rows ? L"ready" : L"not added",
+                g_sound2D && g_sound3D ? L"hooked" : L"NOT hooked", GetConfig().auraBeeps ? L"on" : L"off", GetConfig().menuSounds ? L"on" : L"off",
+                GetConfig().soundLog ? L", sound_log on" : L"");
+        }
+
         bool RatedRuleText(int64_t* args, char* out, size_t size)
         {
             char format[64], rule[48];
@@ -2191,6 +2353,7 @@ namespace pdnet::gamepatches
                 Log(L"gamepatch: in-game Settings ready (multiplayer menu > Settings)");
             if (WrapCommand<MenuCommandFn>(0x1403eefe0 + 40 * 8, 0x140207e20, &HookedAddItem, g_addItem, L"menu item names"))
                 Log(L"gamepatch: menu items renamed as they are added (Quick Join, Lobby Browser%s)", GetConfig().scoreboard ? L", Global scoreboards only" : L"");
+            SoundOptions(); // Options > Sound: Aura Particle Beeps, Menu Sounds
             bool arsenal = GetConfig().lobbyArsenalEditor; // the Arsenal Lab button for clients too
             if (GetConfig().lobbyGamertagOption || micLabel || arsenal) LobbyScriptPatches(GetConfig().lobbyGamertagOption, micLabel, arsenal);
         });
