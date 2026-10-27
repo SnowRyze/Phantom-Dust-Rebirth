@@ -151,7 +151,9 @@ namespace pdnet::discord
                 std::lock_guard guard(g_queueLock);
                 g_messages.erase(job.lobbyId);
             }
-            ExitNote(job.closing || !job.alone ? std::string() : message, job.closedText);
+            // No note while Discord lobby posts are off: "closed" is a lobby post (a message can still exist when only
+            // player posts are on, since those edit the lobby's message).
+            ExitNote(job.closing || !job.alone || !GetConfig().discordLobbyMessages ? std::string() : message, job.closedText);
         }
 
         // Queues the lobby's message as it should now read. A newer state replaces a queued one for the same lobby,
