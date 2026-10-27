@@ -261,26 +261,25 @@ namespace pdnet::discord
             return std::to_string(members) + "/" + std::to_string(max) + " players";
         }
 
-        // A name inside a Discord code span (``name``): markdown isn't read there, so it goes in as it is, without
-        // backticks (they would end the span) or line breaks.
-        std::string Code(const std::string& s)
+        // A name on its own in the message: plain text, markdown escaped (Name), no line breaks.
+        std::string Plain(const std::string& s)
         {
             std::string out;
-            for (char c : s) if (c != '`' && c != '\n' && c != '\r') out += c;
-            return "``" + (out.empty() ? std::string("A player") : out) + "``";
+            for (char c : s) if (c != '\n' && c != '\r') out += c;
+            return Name(out);
         }
 
-        // The lobby's message as it should read now (layout from the community, 2026-10-27):
-        //   🌐 3/4 Open Lobby - Rated Standard Tag - ``toaf joined the lobby``
-        //   ``AnoMayCry``
-        //   ``Snow Ryze``
-        //   ``toaf``
-        //   ``< public slot >``
-        // Full: "4/4 Full Lobby". Once closed: 🔴 Closed Lobby - Rated Standard Tag - ``Host's lobby closed``
+        // The lobby's message as it should read now (layout from the community, 2026-10-27), plain text:
+        //   🌐 3/4 Open Lobby - Rated Standard Tag - toaf joined the lobby
+        //   AnoMayCry
+        //   Snow Ryze
+        //   toaf
+        //   < public slot >
+        // Full: "4/4 Full Lobby". Once closed: 🔴 Closed Lobby - Rated Standard Tag - Host's lobby closed
         std::string Card(const Announced& a, bool closed = false)
         {
             std::string match = a.match.empty() ? "" : " - " + a.match;
-            if (closed) return "\xF0\x9F\x94\xB4 Closed Lobby" + match + " - " + Code(a.name + "'s lobby closed");
+            if (closed) return "\xF0\x9F\x94\xB4 Closed Lobby" + match + " - " + Plain(a.name) + "'s lobby closed";
             auto name = [&](const std::string& id)
             {
                 auto it = a.known.find(id);
@@ -290,7 +289,7 @@ namespace pdnet::discord
             bool full = a.members >= max;
             std::string who = a.eventId.empty() ? a.name : name(a.eventId);
             std::string text = "\xF0\x9F\x8C\x90 " + std::to_string(a.members) + "/" + std::to_string(max) + (full ? " Full Lobby" : " Open Lobby") + match +
-                               " - " + Code((who.empty() ? "A player" : who) + " " + (a.event.empty() ? "opened the lobby" : a.event));
+                               " - " + (who.empty() ? std::string("A player") : Plain(who)) + " " + (a.event.empty() ? "opened the lobby" : a.event);
             // The slots: the host first, then the others in the order they joined, then the open slots.
             std::string hostId;
             for (auto& [id, n] : a.players) if (name(id) == a.name) { hostId = id; break; }
@@ -299,7 +298,7 @@ namespace pdnet::discord
             for (auto& id : a.order) if (id != hostId && a.players.count(id)) ids.push_back(id);
             for (auto& [id, n] : a.players) if (std::find(ids.begin(), ids.end(), id) == ids.end()) ids.push_back(id);
             for (auto& id : ids) slots.push_back(name(id));
-            for (uint32_t i = 0; i < max; ++i) text += "\n" + (i < slots.size() ? Code(slots[i]) : std::string("``< public slot >``"));
+            for (uint32_t i = 0; i < max; ++i) text += "\n" + (i < slots.size() ? Plain(slots[i]) : std::string("< public slot >"));
             return text;
         }
 
