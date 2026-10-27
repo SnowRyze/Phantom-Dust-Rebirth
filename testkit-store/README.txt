@@ -26,6 +26,7 @@ What's in the kit
   pdnet.dll           the pdnet build
   pdnet.ini           settings (name, nametags, Discord messages)
   EOSSDK-Win64-Shipping.dll   Epic Online Services runtime
+  SDL3.dll            reads PlayStation, Nintendo and other controllers for the game (SDL, zlib licence)
   eos.ini             connection settings for the test. Please don't share it further.
   setup.ps1, remove.ps1, collect-log.ps1, nosuspend.ps1   the scripts behind the .bat files
 
@@ -65,6 +66,8 @@ Enter). Or edit pdnet.ini with Notepad, then restart the game.
   voice_listen=          on/off: hear other players (mic mode only)
   splash_volume=         % of your volume from the start-up logos until you are past the title screen
   discord_*              lobby announcements in Discord when you host
+  more_controllers=      on/off: PlayStation, Nintendo and other controllers work like an Xbox controller
+                         (Xbox and XInput controllers always work; if a pad reacts twice, close DS4Windows / Steam)
 Always on: the lobby's Arsenal Lab button, Gamertag when alone, Max Credits & Skills in the shop
 (up to 5,000,000 credits, 80 of every skill incl. DLC, one 2-School Arsenal Case), the global scoreboards,
 and Rated / Unrated lobbies (pick it with the Rating option when you create a game).

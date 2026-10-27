@@ -17,7 +17,10 @@
 #include <cstdio>
 #include <set>
 #include <string>
+#include <thread>
 #include <vector>
+#include <SDL3/SDL.h>  // types only: SDL3.dll is loaded at run time (ReadControllers)
+#include "padshare.h"
 #pragma comment(lib, "winhttp.lib")
 
 namespace
@@ -301,6 +304,197 @@ namespace
         CoUninitialize();
     }
 
+    // Controllers the game can't see itself: it lists only Xbox / XInput pads (Windows.Gaming.Input.Gamepad), and its
+    // sandbox can't open PlayStation, Nintendo or other HID controllers. While the game runs, SDL3 (SDL3.dll next to
+    // pdlaunch.exe, loaded here so pdlaunch works without it) reads them, and every 4 ms their state goes into
+    // LocalState\pdnet\pads.bin in Xbox layout (padshare.h) for pdnet's Gamepad class (gamepads.cpp). Xbox-type pads
+    // are left out: the game reads those itself. Rumble the game asks for comes back through the same file.
+    //   pdnet.ini: more_controllers=off turns it off.
+    struct Sdl
+    {
+        HMODULE dll = nullptr;
+#define PD_SDL(name) decltype(&::name) name = nullptr;
+        PD_SDL(SDL_SetHint) PD_SDL(SDL_Init) PD_SDL(SDL_Quit) PD_SDL(SDL_PollEvent) PD_SDL(SDL_GetError) PD_SDL(SDL_OpenGamepad)
+        PD_SDL(SDL_CloseGamepad) PD_SDL(SDL_GetRealGamepadType) PD_SDL(SDL_GetGamepadName) PD_SDL(SDL_GetGamepadButton)
+        PD_SDL(SDL_GetGamepadAxis) PD_SDL(SDL_RumbleGamepad) PD_SDL(SDL_RumbleGamepadTriggers) PD_SDL(SDL_GetGamepads) PD_SDL(SDL_free)
+#undef PD_SDL
+        bool Load()
+        {
+            dll = LoadLibraryExW((g_dir + L"SDL3.dll").c_str(), nullptr, LOAD_WITH_ALTERED_SEARCH_PATH);
+            if (!dll) return false;
+            bool ok = true;
+#define PD_SDL(name) ok = ok && (name = reinterpret_cast<decltype(name)>(GetProcAddress(dll, #name))) != nullptr;
+            PD_SDL(SDL_SetHint) PD_SDL(SDL_Init) PD_SDL(SDL_Quit) PD_SDL(SDL_PollEvent) PD_SDL(SDL_GetError) PD_SDL(SDL_OpenGamepad)
+            PD_SDL(SDL_CloseGamepad) PD_SDL(SDL_GetRealGamepadType) PD_SDL(SDL_GetGamepadName) PD_SDL(SDL_GetGamepadButton)
+            PD_SDL(SDL_GetGamepadAxis) PD_SDL(SDL_RumbleGamepad) PD_SDL(SDL_RumbleGamepadTriggers) PD_SDL(SDL_GetGamepads) PD_SDL(SDL_free)
+#undef PD_SDL
+            return ok;
+        }
+    };
+
+    pdnet::pads::Shared* MapPads(const std::wstring& localState)
+    {
+        CreateDirectoryW((localState + L"\\pdnet").c_str(), nullptr);
+        HANDLE file = CreateFileW((localState + pdnet::pads::kFile).c_str(), GENERIC_READ | GENERIC_WRITE, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+                                  nullptr, OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
+        if (file == INVALID_HANDLE_VALUE) return nullptr;
+        HANDLE mapping = CreateFileMappingW(file, nullptr, PAGE_READWRITE, 0, sizeof(pdnet::pads::Shared), nullptr);
+        CloseHandle(file);
+        void* view = mapping ? MapViewOfFile(mapping, FILE_MAP_ALL_ACCESS, 0, 0, sizeof(pdnet::pads::Shared)) : nullptr;
+        if (mapping) CloseHandle(mapping);
+        return static_cast<pdnet::pads::Shared*>(view);
+    }
+
+    void ReadControllers(DWORD pid, std::wstring localState)
+    {
+        if (_wcsicmp(Setting(L"more_controllers", L"on").c_str(), L"off") == 0 || localState.empty()) return;
+        Sdl sdl;
+        if (!sdl.Load())
+        {
+            Log(L"controllers: no usable SDL3.dll next to pdlaunch.exe - only Xbox controllers");
+            return;
+        }
+        pdnet::pads::Shared* shared = MapPads(localState);
+        if (!shared)
+        {
+            Log(L"controllers: can't map %s%s (error %lu)", localState.c_str(), pdnet::pads::kFile, GetLastError());
+            return;
+        }
+        shared->sequence = 0;
+        memset(shared->pads, 0, sizeof(shared->pads));
+        shared->magic = pdnet::pads::kMagic;
+        shared->version = pdnet::pads::kVersion;
+
+        sdl.SDL_SetHint(SDL_HINT_JOYSTICK_ALLOW_BACKGROUND_EVENTS, "1"); // pdlaunch never has the focus
+        // Xbox pads stay the game's: SDL doesn't take their HID connection, and doesn't read Windows.Gaming.Input (the
+        // game's own API). XInput stays on so off-brand XInput pads show as Xbox type and are left out (no double input).
+        sdl.SDL_SetHint(SDL_HINT_JOYSTICK_HIDAPI_XBOX, "0");
+        sdl.SDL_SetHint(SDL_HINT_JOYSTICK_WGI, "0");
+        if (!sdl.SDL_Init(SDL_INIT_GAMEPAD))
+        {
+            Log(L"controllers: SDL_Init failed (%S)", sdl.SDL_GetError());
+            return;
+        }
+        Log(L"controllers: SDL3 ready (PlayStation, Nintendo and other controllers go to the game as Xbox-layout pads)");
+
+        struct Slot { SDL_JoystickID sdlId = 0; SDL_Gamepad* pad = nullptr; uint32_t id = 0; SDL_GamepadType type = SDL_GAMEPAD_TYPE_UNKNOWN; char name[64] = {}; float rumble[4] = {}; DWORD rumbledAt = 0; };
+        Slot slots[pdnet::pads::kMaxPads];
+        uint32_t nextId = 1;
+        HANDLE process = OpenProcess(SYNCHRONIZE, FALSE, pid);
+
+        auto open = [&](SDL_JoystickID which)
+        {
+            for (auto& s : slots) if (s.pad && s.sdlId == which) return;
+            SDL_Gamepad* pad = sdl.SDL_OpenGamepad(which);
+            if (!pad) return;
+            SDL_GamepadType type = sdl.SDL_GetRealGamepadType(pad);
+            const char* name = sdl.SDL_GetGamepadName(pad);
+            if (type == SDL_GAMEPAD_TYPE_XBOX360 || type == SDL_GAMEPAD_TYPE_XBOXONE)
+            {
+                Log(L"controllers: %S is an Xbox controller - the game reads it itself", name ? name : "?");
+                sdl.SDL_CloseGamepad(pad);
+                return;
+            }
+            for (auto& s : slots)
+                if (!s.pad)
+                {
+                    s = Slot{};
+                    s.sdlId = which;
+                    s.pad = pad;
+                    s.id = nextId++;
+                    s.type = type;
+                    strncpy_s(s.name, name ? name : "Controller", _TRUNCATE);
+                    Log(L"controllers: %S connected (SDL type %d) - in the game as an Xbox-layout pad", s.name, static_cast<int>(type));
+                    return;
+                }
+            sdl.SDL_CloseGamepad(pad); // all slots taken
+        };
+
+        while (!process || WaitForSingleObject(process, 4) == WAIT_TIMEOUT)
+        {
+            SDL_Event e;
+            while (sdl.SDL_PollEvent(&e))
+            {
+                if (e.type == SDL_EVENT_GAMEPAD_ADDED) open(e.gdevice.which);
+                else if (e.type == SDL_EVENT_GAMEPAD_REMOVED)
+                    for (auto& s : slots)
+                        if (s.pad && s.sdlId == e.gdevice.which)
+                        {
+                            Log(L"controllers: %S disconnected", s.name);
+                            sdl.SDL_CloseGamepad(s.pad);
+                            s = Slot{};
+                        }
+            }
+
+            // The pads, in Xbox layout (SDL's south / east / west / north buttons are A / B / X / Y wherever they sit).
+            shared->sequence = shared->sequence + 1;
+            MemoryBarrier();
+            for (int i = 0; i < pdnet::pads::kMaxPads; ++i)
+            {
+                Slot& s = slots[i];
+                pdnet::pads::Pad& p = shared->pads[i];
+                if (!s.pad) { p = {}; continue; }
+                struct { SDL_GamepadButton sdl; uint32_t xbox; } const kButtons[] = {
+                    { SDL_GAMEPAD_BUTTON_SOUTH, pdnet::pads::kA }, { SDL_GAMEPAD_BUTTON_EAST, pdnet::pads::kB },
+                    { SDL_GAMEPAD_BUTTON_WEST, pdnet::pads::kX }, { SDL_GAMEPAD_BUTTON_NORTH, pdnet::pads::kY },
+                    { SDL_GAMEPAD_BUTTON_START, pdnet::pads::kMenu }, { SDL_GAMEPAD_BUTTON_BACK, pdnet::pads::kView },
+                    { SDL_GAMEPAD_BUTTON_LEFT_SHOULDER, pdnet::pads::kLeftShoulder }, { SDL_GAMEPAD_BUTTON_RIGHT_SHOULDER, pdnet::pads::kRightShoulder },
+                    { SDL_GAMEPAD_BUTTON_LEFT_STICK, pdnet::pads::kLeftThumbstick }, { SDL_GAMEPAD_BUTTON_RIGHT_STICK, pdnet::pads::kRightThumbstick },
+                    { SDL_GAMEPAD_BUTTON_DPAD_UP, pdnet::pads::kDPadUp }, { SDL_GAMEPAD_BUTTON_DPAD_DOWN, pdnet::pads::kDPadDown },
+                    { SDL_GAMEPAD_BUTTON_DPAD_LEFT, pdnet::pads::kDPadLeft }, { SDL_GAMEPAD_BUTTON_DPAD_RIGHT, pdnet::pads::kDPadRight },
+                    { SDL_GAMEPAD_BUTTON_RIGHT_PADDLE1, pdnet::pads::kPaddle1 }, { SDL_GAMEPAD_BUTTON_LEFT_PADDLE1, pdnet::pads::kPaddle2 },
+                    { SDL_GAMEPAD_BUTTON_RIGHT_PADDLE2, pdnet::pads::kPaddle3 }, { SDL_GAMEPAD_BUTTON_LEFT_PADDLE2, pdnet::pads::kPaddle4 },
+                };
+                uint32_t buttons = 0;
+                for (auto& b : kButtons) if (sdl.SDL_GetGamepadButton(s.pad, b.sdl)) buttons |= b.xbox;
+                auto axis = [&](SDL_GamepadAxis a) { return std::clamp(sdl.SDL_GetGamepadAxis(s.pad, a) / 32767.0f, -1.0f, 1.0f); };
+                p.id = s.id;
+                p.type = static_cast<uint32_t>(s.type);
+                p.buttons = buttons;
+                p.leftX = axis(SDL_GAMEPAD_AXIS_LEFTX);
+                p.leftY = -axis(SDL_GAMEPAD_AXIS_LEFTY); // SDL: down is positive; Xbox: up is
+                p.rightX = axis(SDL_GAMEPAD_AXIS_RIGHTX);
+                p.rightY = -axis(SDL_GAMEPAD_AXIS_RIGHTY);
+                p.leftTrigger = (std::max)(0.0f, axis(SDL_GAMEPAD_AXIS_LEFT_TRIGGER));
+                p.rightTrigger = (std::max)(0.0f, axis(SDL_GAMEPAD_AXIS_RIGHT_TRIGGER));
+                memcpy(p.name, s.name, sizeof(p.name));
+            }
+            shared->heartbeat = GetTickCount();
+            MemoryBarrier();
+            shared->sequence = shared->sequence + 1;
+
+            // Rumble from the game (pdnet writes it with its own sequence number); renewed while it lasts.
+            uint32_t before = shared->rumbleSequence;
+            if (before & 1) continue;
+            MemoryBarrier();
+            pdnet::pads::Rumble rumble[pdnet::pads::kMaxPads];
+            memcpy(rumble, const_cast<pdnet::pads::Rumble*>(shared->rumble), sizeof(rumble));
+            MemoryBarrier();
+            if (shared->rumbleSequence != before) continue;
+            for (int i = 0; i < pdnet::pads::kMaxPads; ++i)
+            {
+                Slot& s = slots[i];
+                if (!s.pad) continue;
+                float want[4] = {};
+                if (rumble[i].id == s.id) { want[0] = rumble[i].leftMotor; want[1] = rumble[i].rightMotor; want[2] = rumble[i].leftTrigger; want[3] = rumble[i].rightTrigger; }
+                bool changed = memcmp(want, s.rumble, sizeof(want)) != 0;
+                bool on = want[0] > 0 || want[1] > 0 || want[2] > 0 || want[3] > 0;
+                if (!changed && !(on && GetTickCount() - s.rumbledAt > 500)) continue;
+                auto level = [](float v) { return static_cast<Uint16>(std::clamp(v, 0.0f, 1.0f) * 65535.0f); };
+                sdl.SDL_RumbleGamepad(s.pad, level(want[0]), level(want[1]), on ? 1000 : 0);
+                sdl.SDL_RumbleGamepadTriggers(s.pad, level(want[2]), level(want[3]), on ? 1000 : 0);
+                memcpy(s.rumble, want, sizeof(want));
+                s.rumbledAt = GetTickCount();
+            }
+        }
+        shared->sequence = shared->sequence + 1;
+        memset(shared->pads, 0, sizeof(shared->pads));
+        shared->sequence = shared->sequence + 1;
+        for (auto& s : slots) if (s.pad) sdl.SDL_CloseGamepad(s.pad);
+        sdl.SDL_Quit();
+        if (process) CloseHandle(process);
+    }
+
     // Discord: pdnet leaves LocalState\pdnet\discord-close.txt (message id, newline, "closed" text, UTF-8) while this
     // PC is alone in a lobby it announced (src\discord.cpp). If the game exits with it still there (closed from the
     // lobby, or a crash), the lobby ended with it: edit the message to "closed" with discord_webhook from pdnet.ini.
@@ -418,6 +612,7 @@ int wmain(int argc, wchar_t** argv)
     HANDLE game = OpenProcess(SYNCHRONIZE | PROCESS_QUERY_LIMITED_INFORMATION, FALSE, pid);
     std::wstring localState = game ? GameLocalState(game) : std::wstring();
     if (!localState.empty()) DeleteFileW(PastTitleFile(localState).c_str()); // from the last start: pdnet writes it again
+    std::thread controllers(ReadControllers, pid, localState); // until the game exits
     bool injected = Inject(pid);
 
     HANDLE thread = OpenThread(THREAD_SUSPEND_RESUME, FALSE, tid);
@@ -431,5 +626,6 @@ int wmain(int argc, wchar_t** argv)
         CloseHandle(game);
         if (injected && !localState.empty()) CloseDiscordMessage(localState);
     }
+    controllers.join();
     return injected ? 0 : 1;
 }

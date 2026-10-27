@@ -116,6 +116,10 @@ if ($launcherKit) {
     Copy-Item "$root\testkit-stagec\pdnet.ini" $files
     Copy-Item $dll "$files\pdnet.dll"
     Copy-Item $launcher $files
+    # PlayStation / Nintendo / other controllers: pdlaunch reads them with SDL3 (build-pdlaunch.cmd copies the DLL).
+    $sdl = "$root\pdnet\tools\out\SDL3.dll"
+    if (-not (Test-Path $sdl)) { throw "No $sdl. Build pdlaunch first: pdnet\tools\build-pdlaunch.cmd" }
+    Copy-Item $sdl $files
 } else {
     New-Item -ItemType Directory "$out\pdnet" | Out-Null
     Copy-Item "$kitSource\*" $out
