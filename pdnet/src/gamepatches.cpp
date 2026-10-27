@@ -2147,19 +2147,21 @@ namespace pdnet::gamepatches
 
         // pdlaunch keeps the game at splash_volume while the title screen or intro is on (menu 7 playdatasel, 80, or no
         // menu yet): LocalState\pdnet\past-title.txt exists while any other menu is (normally the main menu, 8), and is
-        // deleted again when the player backs out to the title. pdlaunch deletes it as the game starts.
+        // deleted again when the player backs out to the title. pdlaunch deletes it as the game starts. "No menu" is the
+        // intro only before the first time past the title: a match has no menu either (menu -1), at normal volume.
         constexpr int kTitleMenu = 7, kTitleAttractMenu = 80;
         void SignalPastTitle()
         {
             std::thread([]
             {
                 std::wstring path = LocalStatePath() + L"\\pdnet\\past-title.txt";
-                bool past = false;
+                bool past = false, everPast = false;
                 for (;;)
                 {
                     Sleep(100);
                     int menu = CurrentMenu(MenuManager());
-                    bool now = !(menu < 2 || menu == kTitleMenu || menu == kTitleAttractMenu);
+                    bool now = !(menu == kTitleMenu || menu == kTitleAttractMenu || (menu < 2 && !everPast));
+                    everPast = everPast || now;
                     if (now == past) continue;
                     past = now;
                     if (past)
