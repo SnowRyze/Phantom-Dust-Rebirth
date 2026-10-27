@@ -13,6 +13,7 @@
 #include <audiopolicy.h>
 #include <appmodel.h>
 #include <winhttp.h>
+#include <wincred.h>
 #include <algorithm>
 #include <cstdio>
 #include <set>
@@ -22,6 +23,7 @@
 #include <SDL3/SDL.h>  // types only: SDL3.dll is loaded at run time (ReadControllers)
 #include "padshare.h"
 #pragma comment(lib, "winhttp.lib")
+#pragma comment(lib, "advapi32.lib")
 
 namespace
 {
@@ -302,6 +304,96 @@ namespace
         }
         CloseHandle(process);
         CoUninitialize();
+    }
+
+    // The player's identity outlives the game: uninstalling Phantom Dust deletes LocalState, where pdnet keeps the EOS
+    // device credential (eos\credentials\*.cred: which Epic product user this PC signs in as, and so its scoreboard
+    // entries) and pdnet\identity.txt (the local player id). A new one after a reinstall would be a second player on the
+    // boards. So pdlaunch keeps a copy of each in Windows Credential Manager (generic credentials "pdnet/identity/<file>",
+    // this Windows user, this PC; the files as they are, already DPAPI-protected by pdnet), and the first copy kept is
+    // the player's for good: before the game starts, a missing or different file is put back from it.
+    constexpr const wchar_t* kIdentityPrefix = L"pdnet/identity/";
+
+    std::vector<std::wstring> IdentityFiles(const std::wstring& localState)
+    {
+        std::vector<std::wstring> files; // paths under LocalState
+        WIN32_FIND_DATAW found;
+        HANDLE find = FindFirstFileW((localState + L"\\eos\\credentials\\*.cred").c_str(), &found);
+        if (find != INVALID_HANDLE_VALUE)
+        {
+            do if (!(found.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY)) files.push_back(std::wstring(L"eos\\credentials\\") + found.cFileName);
+            while (FindNextFileW(find, &found));
+            FindClose(find);
+        }
+        if (GetFileAttributesW((localState + L"\\pdnet\\identity.txt").c_str()) != INVALID_FILE_ATTRIBUTES) files.push_back(L"pdnet\\identity.txt");
+        return files;
+    }
+
+    bool ReadWhole(const std::wstring& path, std::vector<uint8_t>& out)
+    {
+        HANDLE f = CreateFileW(path.c_str(), GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr, OPEN_EXISTING, 0, nullptr);
+        if (f == INVALID_HANDLE_VALUE) return false;
+        DWORD size = GetFileSize(f, nullptr), got = 0;
+        out.resize(size);
+        bool ok = size <= CRED_MAX_CREDENTIAL_BLOB_SIZE && ReadFile(f, out.data(), size, &got, nullptr) && got == size;
+        CloseHandle(f);
+        return ok;
+    }
+
+    // restore: put kept files back first (before the game runs); then keep every file that has no copy yet.
+    void KeepIdentity(const std::wstring& localState, bool restore)
+    {
+        if (localState.empty()) return;
+        int restored = 0, kept = 0;
+        if (restore)
+        {
+            DWORD count = 0;
+            PCREDENTIALW* creds = nullptr;
+            if (CredEnumerateW((std::wstring(kIdentityPrefix) + L"*").c_str(), 0, &count, &creds))
+            {
+                for (DWORD i = 0; i < count; ++i)
+                {
+                    std::wstring file = creds[i]->TargetName + wcslen(kIdentityPrefix);
+                    if (file.find(L"..") != std::wstring::npos) continue;
+                    std::wstring path = localState + L"\\" + file;
+                    std::vector<uint8_t> now, kept(creds[i]->CredentialBlob, creds[i]->CredentialBlob + creds[i]->CredentialBlobSize);
+                    if (ReadWhole(path, now) && now == kept) continue;
+                    CreateDirectoryW((localState + L"\\eos").c_str(), nullptr);
+                    CreateDirectoryW((localState + L"\\eos\\credentials").c_str(), nullptr);
+                    CreateDirectoryW((localState + L"\\pdnet").c_str(), nullptr);
+                    HANDLE f = CreateFileW(path.c_str(), GENERIC_WRITE, 0, nullptr, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
+                    DWORD wrote = 0;
+                    bool ok = f != INVALID_HANDLE_VALUE && WriteFile(f, kept.data(), static_cast<DWORD>(kept.size()), &wrote, nullptr) && wrote == kept.size();
+                    if (f != INVALID_HANDLE_VALUE) CloseHandle(f);
+                    Log(L"identity: %s %s from Windows Credential Manager%s", file.c_str(), now.empty() ? L"put back" : L"replaced (a different one had appeared)", ok ? L"" : L" - FAILED");
+                    if (ok) ++restored;
+                }
+                CredFree(creds);
+            }
+        }
+        for (const std::wstring& file : IdentityFiles(localState))
+        {
+            std::wstring target = kIdentityPrefix + file;
+            PCREDENTIALW existing = nullptr;
+            if (CredReadW(target.c_str(), CRED_TYPE_GENERIC, 0, &existing))
+            {
+                CredFree(existing); // the first one kept stays the player's
+                continue;
+            }
+            std::vector<uint8_t> data;
+            if (!ReadWhole(localState + L"\\" + file, data) || data.empty()) continue;
+            CREDENTIALW c{};
+            c.Type = CRED_TYPE_GENERIC;
+            c.TargetName = const_cast<LPWSTR>(target.c_str());
+            c.Comment = const_cast<LPWSTR>(L"Phantom Dust pdnet: keeps this PC's player (scoreboards) when the game is reinstalled");
+            c.CredentialBlobSize = static_cast<DWORD>(data.size());
+            c.CredentialBlob = data.data();
+            c.Persist = CRED_PERSIST_LOCAL_MACHINE;
+            c.UserName = const_cast<LPWSTR>(L"pdnet");
+            if (CredWriteW(&c, 0)) ++kept;
+            else Log(L"identity: could not keep %s in Windows Credential Manager (error %lu)", file.c_str(), GetLastError());
+        }
+        if (restored || kept) Log(L"identity: %d file(s) put back, %d newly kept in Windows Credential Manager", restored, kept);
     }
 
     // Controllers the game can't see itself: it lists only Xbox / XInput pads (Windows.Gaming.Input.Gamepad), and its
@@ -612,6 +704,7 @@ int wmain(int argc, wchar_t** argv)
     HANDLE game = OpenProcess(SYNCHRONIZE | PROCESS_QUERY_LIMITED_INFORMATION, FALSE, pid);
     std::wstring localState = game ? GameLocalState(game) : std::wstring();
     if (!localState.empty()) DeleteFileW(PastTitleFile(localState).c_str()); // from the last start: pdnet writes it again
+    KeepIdentity(localState, true); // before the game runs: the same player as always
     std::thread controllers(ReadControllers, pid, localState); // until the game exits
     bool injected = Inject(pid);
 
@@ -626,6 +719,7 @@ int wmain(int argc, wchar_t** argv)
         CloseHandle(game);
         if (injected && !localState.empty()) CloseDiscordMessage(localState);
     }
+    KeepIdentity(localState, false); // a first sign-in made its credential while the game ran
     controllers.join();
     return injected ? 0 : 1;
 }

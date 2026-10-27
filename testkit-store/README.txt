@@ -13,6 +13,8 @@ from the kit's pdnet folder, which loads pdnet into the game.
   Your previous pdnet saves are kept in a backup folder, and the Xbox cloud save itself is never changed.
   This needs the Microsoft Store version signed in to Xbox.
 - Everyone you play with needs this kit (or a newer one).
+- Your player (what the scoreboards count) is kept in Windows Credential Manager ("pdnet/identity/..."), so
+  reinstalling the game or deleting the kit doesn't turn you into a new player. Don't delete those entries.
 
 What's in the kit
 -----------------
