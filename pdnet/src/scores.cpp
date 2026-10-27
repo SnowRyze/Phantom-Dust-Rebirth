@@ -238,6 +238,25 @@ namespace pdnet::scores
                     r.name = it != names.end() && !it->second.empty() ? it->second : "Player " + r.userId.substr(0, 6);
                 }
         }
+        // Entries taken off the boards (a game client can't delete another player's stats on EOS): by name, matched
+        // without case; the ranks below one move up.
+        static const char* kHidden[] = { "phantomdust.online" };
+        uint32_t hidden = 0;
+        std::vector<Record> shown;
+        for (auto& r : ranks)
+        {
+            bool hide = false;
+            for (const char* name : kHidden) hide = hide || _stricmp(r.name.c_str(), name) == 0;
+            if (hide && !r.me)
+            {
+                ++hidden;
+                Log(L"scores: %S: '%S' (product user %S) is off the boards", board.c_str(), r.name.c_str(), r.userId.c_str());
+                continue;
+            }
+            r.rank -= (std::min)(r.rank > 0 ? r.rank - 1 : 0u, hidden);
+            shown.push_back(std::move(r));
+        }
+        ranks = std::move(shown);
         std::lock_guard guard(g_lock);
         g_ranks[board] = { ranks, GetTickCount64() };
         return ranks;
