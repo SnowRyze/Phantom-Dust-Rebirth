@@ -2083,7 +2083,11 @@ namespace pdnet::gamepatches
 
         uint64_t GhidraAddress(void* code) { return static_cast<uint64_t>(static_cast<uint8_t*>(code) - Image()) + 0x140000000ull; }
 
-        bool AuraBeep(bool positional, int64_t bank, int64_t cue) { return positional && bank == 1 && cue == 1; }
+        // The aura beep: FUN_14024de20 raises a player's aura towards its maximum and, each time the whole number goes
+        // up (own player only), plays 2D bank 0 cue 5 (through FUN_140276330, which jumps into the 2D start, so the
+        // caller seen is its call at 0x14024DF22). Found 2026-10-27 after bank 1 cues 4 and 1 (the stage's sound
+        // emitters, FUN_1402214c0) were tried and the beep stayed.
+        bool AuraBeep(bool positional, int64_t bank, int64_t cue, uint64_t caller) { return !positional && bank == 0 && cue == 5 && caller == 0x14024DF22; }
 
         void LogSound(bool positional, int64_t bank, int64_t cue, int64_t sound, uint64_t caller, bool auraOff)
         {
@@ -2095,7 +2099,7 @@ namespace pdnet::gamepatches
             std::lock_guard guard(lock);
             if (counts.find(key) == counts.end())
                 Log(L"sound: %s bank %lld cue %lld sound %lld from 0x%llX (menu %d)%s", positional ? L"3D" : L"2D", bank, cue, sound, caller, CurrentMenu(MenuManager()),
-                    auraOff && AuraBeep(positional, bank, cue) ? L" (muted: aura beeps off)" : L"");
+                    auraOff && AuraBeep(positional, bank, cue, caller) ? L" (muted: aura beeps off)" : L"");
             ++counts[key];
             if (GetTickCount64() - summaryAt < 30000) return;
             summaryAt = GetTickCount64();
@@ -2108,9 +2112,7 @@ namespace pdnet::gamepatches
         {
             const Config& c = GetConfig();
             if (c.soundLog) LogSound(positional, static_cast<int32_t>(bank), static_cast<int32_t>(cue), static_cast<int32_t>(sound), caller, !c.auraBeeps);
-            // The aura particles' beep (sound_log, 2026-10-27): 3D, bank 1, cue 1, which the stage's sound emitters
-            // (FUN_1402214c0) replay on a timer. Cue 4 (the same emitters' looping sound) was tried first: the beep stayed.
-            return !c.auraBeeps && AuraBeep(positional, static_cast<int32_t>(bank), static_cast<int32_t>(cue));
+            return !c.auraBeeps && AuraBeep(positional, static_cast<int32_t>(bank), static_cast<int32_t>(cue), caller);
         }
 
         int64_t HookedSound2D(int64_t a, int64_t bank, int64_t cue, int64_t sound, int64_t e, int64_t f, int64_t g, int64_t h)
