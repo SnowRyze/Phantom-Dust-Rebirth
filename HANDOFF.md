@@ -320,6 +320,8 @@ Discord toggles (pdnet.ini, default on): discord_lobby_messages (opened/closed),
 
 "Closed" on game exit (2026-10-27): when the game exits while alone in its lobby, pdnet writes `discord-close.txt` and pdlaunch edits the message to "closed". Both now skip this when discord_lobby_messages is off (before, it still happened whenever player posts were on). Fix ab55850 on master, c081b28 on kit27; testers need the new pdnet.dll and pdlaunch.exe.
 
+Game volume (2026-10-27): Windows never saves a Volume Mixer level for PDUWP.exe (no entry in its PolicyConfig\PropertyStore), so it starts at 100% every time. pdlaunch's WatchVolume remembers it, but used to watch only the first audio session it found and saved volume.txt per kit folder, so nothing was ever saved. Now it re-reads all of the game's sessions every 250 ms, gives any new session the remembered level, and saves to LocalState\pdnet\volume.txt (shared by every kit; the kit folder's volume.txt is still read as a fallback).
+
 Empty lobbies (2026-10-27): after a host's game closes or crashes, Epic keeps the lobby for a while with 0 members, and the game listed it as 0/4. Only its owner can destroy it, so lobby searches and Quick Join now skip any lobby with 0 members (MultiplayerService.cpp, GetSearchHandlesAsyncImpl).
 
 ## Stage / variant selection (RE notes, PDUWP Ghidra addresses)

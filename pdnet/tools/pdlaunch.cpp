@@ -15,7 +15,9 @@
 #include <winhttp.h>
 #include <algorithm>
 #include <cstdio>
+#include <set>
 #include <string>
+#include <vector>
 #pragma comment(lib, "winhttp.lib")
 
 namespace
@@ -152,14 +154,21 @@ namespace
         return value;
     }
 
-    // The game's audio session (the Volume Mixer entry) on the default playback device, or null.
-    ISimpleAudioVolume* FindGameVolume(DWORD pid)
+    // One of the game's audio sessions (Volume Mixer entries) on the default playback device.
+    struct GameSession
+    {
+        std::wstring id; // session instance id: a new one means the game opened a new session
+        ISimpleAudioVolume* volume;
+    };
+
+    // All of the game's audio sessions on the default playback device (each volume to be released).
+    std::vector<GameSession> FindGameVolumes(DWORD pid)
     {
         IMMDeviceEnumerator* devices = nullptr;
         IMMDevice* device = nullptr;
         IAudioSessionManager2* manager = nullptr;
         IAudioSessionEnumerator* sessions = nullptr;
-        ISimpleAudioVolume* found = nullptr;
+        std::vector<GameSession> found;
         if (SUCCEEDED(CoCreateInstance(__uuidof(MMDeviceEnumerator), nullptr, CLSCTX_ALL, __uuidof(IMMDeviceEnumerator), reinterpret_cast<void**>(&devices))) &&
             SUCCEEDED(devices->GetDefaultAudioEndpoint(eRender, eConsole, &device)) &&
             SUCCEEDED(device->Activate(__uuidof(IAudioSessionManager2), CLSCTX_ALL, nullptr, reinterpret_cast<void**>(&manager))) &&
@@ -167,7 +176,7 @@ namespace
         {
             int count = 0;
             sessions->GetCount(&count);
-            for (int i = 0; i < count && !found; ++i)
+            for (int i = 0; i < count; ++i)
             {
                 IAudioSessionControl* control = nullptr;
                 IAudioSessionControl2* control2 = nullptr;
@@ -176,7 +185,13 @@ namespace
                     SUCCEEDED(control->QueryInterface(__uuidof(IAudioSessionControl2), reinterpret_cast<void**>(&control2))) &&
                     SUCCEEDED(control2->GetProcessId(&owner)) && owner == pid)
                 {
-                    control->QueryInterface(__uuidof(ISimpleAudioVolume), reinterpret_cast<void**>(&found));
+                    GameSession s{ {}, nullptr };
+                    if (wchar_t* id = nullptr; SUCCEEDED(control2->GetSessionInstanceIdentifier(&id)) && id)
+                    {
+                        s.id = id;
+                        CoTaskMemFree(id);
+                    }
+                    if (SUCCEEDED(control->QueryInterface(__uuidof(ISimpleAudioVolume), reinterpret_cast<void**>(&s.volume)))) found.push_back(s);
                 }
                 if (control2) control2->Release();
                 if (control) control->Release();
@@ -189,69 +204,84 @@ namespace
         return found;
     }
 
-    // Windows resets the game's Volume Mixer level to 100% every start, and the game only applies its own sound
-    // settings after the splash screen, so the logos play at full volume. While the game runs: once its audio
-    // session appears, hold it at splash_volume% of the remembered level for splash_seconds, then the remembered
-    // level; after that, remember every change the player makes (volume.txt next to pdlaunch.exe).
+    // Windows never remembers the game's Volume Mixer level (it starts at 100% every time), and the game only applies
+    // its own sound settings after the splash screen, so the logos play at full volume. While the game runs: once its
+    // audio session appears, hold it at splash_volume% of the remembered level for splash_seconds, then the remembered
+    // level; after that, remember every change the player makes. The sessions are looked up again on every check: the
+    // game can open a new one later (at 100%), which then gets the remembered level too.
+    // The level is kept in LocalState\pdnet\volume.txt, shared by every kit (older kits kept volume.txt next to pdlaunch.exe).
     //   pdnet.ini: splash_volume=40 (percent), splash_seconds=12 (the level is always remembered)
-    void WatchVolume(DWORD pid)
+    void WatchVolume(DWORD pid, const std::wstring& localState)
     {
-        const bool remember = true; // always on (no longer a pdnet.ini setting)
         float splash = std::clamp(static_cast<float>(_wtof(Setting(L"splash_volume", L"40").c_str())) / 100.0f, 0.0f, 1.0f);
         DWORD splashMs = static_cast<DWORD>(std::clamp(_wtoi(Setting(L"splash_seconds", L"12").c_str()), 0, 120)) * 1000;
-        std::wstring file = g_dir + L"volume.txt";
+        std::wstring file = localState.empty() ? g_dir + L"volume.txt" : localState + L"\\pdnet\\volume.txt";
         float saved = -1;
-        if (FILE* f = nullptr; remember && !_wfopen_s(&f, file.c_str(), L"r") && f)
-        {
-            fwscanf_s(f, L"%f", &saved);
-            fclose(f);
-        }
-        if (!remember && splash >= 1.0f) return;
+        for (const std::wstring& path : { file, g_dir + L"volume.txt" })
+            if (FILE* f = nullptr; saved < 0 && !_wfopen_s(&f, path.c_str(), L"r") && f)
+            {
+                if (fwscanf_s(f, L"%f", &saved) != 1 || saved > 1) saved = -1;
+                fclose(f);
+            }
 
         HANDLE process = OpenProcess(SYNCHRONIZE, FALSE, pid);
         if (!process) return;
         CoInitializeEx(nullptr, COINIT_MULTITHREADED);
-        ISimpleAudioVolume* volume = nullptr;
         DWORD found = 0;
         float level = 1.0f, last = -1;
-        while (WaitForSingleObject(process, volume ? 250 : 50) == WAIT_TIMEOUT)
+        std::set<std::wstring> known;
+        while (WaitForSingleObject(process, found ? 250 : 50) == WAIT_TIMEOUT)
         {
-            if (!volume)
+            std::vector<GameSession> sessions = FindGameVolumes(pid);
+            if (sessions.empty()) continue;
+            if (!found)
             {
-                volume = FindGameVolume(pid);
-                if (!volume) continue;
                 found = GetTickCount();
-                volume->GetMasterVolume(&level);
-                if (remember && saved >= 0 && saved <= 1) level = saved;
+                sessions[0].volume->GetMasterVolume(&level);
+                if (saved >= 0) level = saved;
                 Log(L"audio: game session found; volume %d%% (splash %d%% of it for %lu s)", static_cast<int>(level * 100 + 0.5f), static_cast<int>(splash * 100 + 0.5f), splashMs / 1000);
             }
             DWORD age = GetTickCount() - found;
-            if (age < splashMs)
+            if (age < splashMs + 3000)
             {
-                volume->SetMasterVolume(level * splash, nullptr);
-            }
-            else if (age < splashMs + 3000)
-            {
-                volume->SetMasterVolume(level, nullptr); // held a moment, in case the game sets it as it starts up
-                last = level;
-            }
-            else if (remember)
-            {
-                float now = 0;
-                if (SUCCEEDED(volume->GetMasterVolume(&now)) && (last < 0 || now < last - 0.004f || now > last + 0.004f))
+                // the splash level, then the remembered level held a moment, in case the game sets it as it starts up
+                for (auto& s : sessions)
                 {
-                    last = now;
+                    s.volume->SetMasterVolume(age < splashMs ? level * splash : level, nullptr);
+                    known.insert(s.id);
+                }
+                if (age >= splashMs) last = level;
+            }
+            else
+            {
+                float changed = -1;
+                for (auto& s : sessions)
+                {
+                    float now = 0;
+                    if (known.insert(s.id).second)
+                    {
+                        s.volume->SetMasterVolume(last, nullptr);
+                        Log(L"audio: the game opened another audio session; set it to %d%%", static_cast<int>(last * 100 + 0.5f));
+                    }
+                    else if (changed < 0 && SUCCEEDED(s.volume->GetMasterVolume(&now)) && (now < last - 0.004f || now > last + 0.004f))
+                        changed = now;
+                }
+                if (changed >= 0)
+                {
+                    last = changed;
+                    for (auto& s : sessions) s.volume->SetMasterVolume(last, nullptr); // one level for all of the game's sessions
+                    if (!localState.empty()) CreateDirectoryW((localState + L"\\pdnet").c_str(), nullptr);
                     FILE* f = nullptr;
                     if (!_wfopen_s(&f, file.c_str(), L"w") && f)
                     {
-                        fwprintf(f, L"%.3f\n", now);
+                        fwprintf(f, L"%.3f\n", last);
                         fclose(f);
                     }
-                    Log(L"audio: remembered volume %d%%", static_cast<int>(now * 100 + 0.5f));
+                    Log(L"audio: remembered volume %d%%", static_cast<int>(last * 100 + 0.5f));
                 }
             }
+            for (auto& s : sessions) s.volume->Release();
         }
-        if (volume) volume->Release();
         CloseHandle(process);
         CoUninitialize();
     }
@@ -378,7 +408,7 @@ int wmain(int argc, wchar_t** argv)
     Log(L"game resumed (suspend count was %ld)%s", static_cast<long>(previous), injected ? L"" : L" WITHOUT pdnet");
     HANDLE game = OpenProcess(SYNCHRONIZE | PROCESS_QUERY_LIMITED_INFORMATION, FALSE, pid);
     std::wstring localState = game ? GameLocalState(game) : std::wstring();
-    WatchVolume(pid); // until the game exits (returns at once when there is nothing to do for the volume)
+    WatchVolume(pid, localState); // until the game exits (returns at once when there is nothing to do for the volume)
     if (game)
     {
         WaitForSingleObject(game, INFINITE);
