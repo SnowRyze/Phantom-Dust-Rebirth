@@ -42,6 +42,7 @@ Never break the Teredo build or the master dump.
 - Save data: `%LOCALAPPDATA%\Packages\Microsoft.MSEsper_8wekyb3d8bbwe\LocalState\pdnet\saves`. Backup: `_netmod\backup\LocalState-2026-10-17`.
   The files there are EFS-encrypted, so `Copy-Item` to D: fails. Copy the contents with `[IO.File]::ReadAllBytes`/`WriteAllBytes`.
 - Log: `...\LocalState\pdnet.log` (now opened with sharing, so it can be read while the game runs).
+- GitHub (from 2026-10-27): `_netmod` is pushed to https://github.com/SnowRyze/Phantom-Dust-Rebirth (remote `origin`; branches master and kit27, tags stable-N). Every code change gets a simple commit, a note in this file, and a push.
 
 ## 4. Done and verified by the user
 
@@ -316,6 +317,8 @@ Don't also run `lobbytool watch` on the same channel, or lobbies are announced t
 Discord messages: 'opened' is posted once the lobby has the game's search handle and names gametype (0 Battle Royale, 1 Tag Team, 2 One-on-One) and gamerule (0 Standard Battle ... 11 Annihilate the Odd One, order from Assets\Data\Menu\livesession_en.ssb); no rating. Confirmed in game with build-discord2 (7C6381D2), installed in the Direct build.
 
 Discord toggles (pdnet.ini, default on): discord_lobby_messages (opened/closed), discord_player_messages (<name> joined/left/full). Join/leave messages name players from each member's PD_NAME.
+
+"Closed" on game exit (2026-10-27): when the game exits while alone in its lobby, pdnet writes `discord-close.txt` and pdlaunch edits the message to "closed". Both now skip this when discord_lobby_messages is off (before, it still happened whenever player posts were on). Fix ab55850 on master, c081b28 on kit27; testers need the new pdnet.dll and pdlaunch.exe.
 
 ## Stage / variant selection (RE notes, PDUWP Ghidra addresses)
 - Stage id = DAT_1403e0304 (0-29, names in Assets\Data\setup\stageset\stageset*.dat; files Map\stNN.alr/.dat; e.g. 02 Spiral / 12 Lightning / 22 Sunlight Highway). Units digit = arena (camera st%02dcam.alr uses id % 10).
