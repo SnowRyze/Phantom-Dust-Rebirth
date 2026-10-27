@@ -1,7 +1,7 @@
-# Handoff: Phantom Dust (2017 UWP): replacing Xbox Live / Teredo networking
+﻿# Handoff: Phantom Dust (2017 UWP): replacing Xbox Live / Teredo networking
 
 Written 2026-10-17 by the first Claude Code session, updated by a second session (source repair and test peer),
-and updated again on 2026-10-18 and 2026-10-19 (EOS, Xbox-free mode). See §10 and `git log` in `_netmod`.
+and updated again on 2026-10-18 and 2026-10-19 (EOS, Xbox-free mode). See Â§10 and `git log` in `_netmod`.
 Read next: [`EOS_PLAN.md`](EOS_PLAN.md) (the current direction, with detailed progress) and [`MODDING_PLAN.md`](MODDING_PLAN.md) (original design and research).
 
 ## 1. Goal
@@ -47,7 +47,7 @@ Never break the Teredo build or the master dump.
 ## 4. Done and verified by the user
 
 1. **Recon.** All Xbox code lives in `PDUWP.exe` (C++/CX glue built from Microsoft's Xbox multiplayer samples) plus the XSAPI
-   WinRT DLL. The engine (`WPFLibRelease_UWP.dll`) has no Xbox dependency. The full list of Xbox classes in use (~50) is in `MODDING_PLAN.md` §4b.
+   WinRT DLL. The engine (`WPFLibRelease_UWP.dll`) has no Xbox dependency. The full list of Xbox classes in use (~50) is in `MODDING_PLAN.md` Â§4b.
 2. **`pdnet` shim DLL** (`_netmod\pdnet`), shipped as `Microsoft.Xbox.Services.dll`; the original is renamed `Microsoft.Xbox.Services.orig.dll`:
    - It forwards every XSAPI activation to the original and logs it.
    - It IAT-patches `RoGetActivationFactory` in every loaded module (key one: `vccorlib140_app.dll`, which all C++/CX activations go through) to answer selected OS classes itself.
@@ -55,7 +55,7 @@ Never break the Teredo build or the master dump.
      **"retrieving profile" hang**: `GetForUserAsync` never completes for the sideloaded copy. Verified: profile creation, save and reload all work.
    - The static CRT (`/MT`) means it needs nothing from the package. Build with `_netmod\pdnet\build.cmd`.
 3. **Debug menu move.** The dump had `Menu\option_en.ssb` replaced by a patched debug menu, with the real options kept as `option_enx.ssb`.
-   The game loads `Assets\Data\Menu\<name>_en.ssb` by name. Now Options = real options, and Multiplayer → Split Screen
+   The game loads `Assets\Data\Menu\<name>_en.ssb` by name. Now Options = real options, and Multiplayer â†’ Split Screen
    (`vsmode_en.ssb`) = debug menu. Script: `_netmod\debugmenu.ps1 [-Revert]`. Verified by the user.
 4. **Stage 2 code (direct UDP instead of Teredo)**, first built 12:26 (still the Teredo build's DLL); the Direct build now runs the rebuilt test-peer version. It replaces
    `Windows.Networking.XboxLive.*`: device addresses become pdnet snapshots carrying the IP and ports, and endpoint pairs come from a CONNECT/ACK
@@ -81,7 +81,7 @@ Never break the Teredo build or the master dump.
    - **Verified by the user:** boots without Xbox sign-in; main menu, scenario mode and the multiplayer menu work; **creating a match lobby works**
      (on this PC only, since sessions exist only in memory).
 9. **Stage B code: sessions shared through EOS lobbies** (2026-10-19, session 3, commit `e689999`, DLL `pdnet\build-stageb`, MD5 `91379196`).
-   Follows [`STAGE_B_GUIDE.md`](STAGE_B_GUIDE.md) steps 1–8. The session ↔ lobby mapping is written down at the top of `xsapi\mpsd.h`.
+   Follows [`STAGE_B_GUIDE.md`](STAGE_B_GUIDE.md) steps 1â€“8. The session â†” lobby mapping is written down at the top of `xsapi\mpsd.h`.
    - `src\lobbies.*`: the EOS lobby layer (plain C++, no EOS types, so the XSAPI side can use it). Each call is posted to the EOS thread and
      the caller waits with a 12 s timeout, so the game can't hang on a lost callback. Notifications go to one worker thread in order.
    - `xsapi\mpsd.*`: `SessionStore` creates/joins/updates/leaves the lobby inside `Write()`. The lobby id is `pd1` + SHA-256 of the session key,
@@ -96,14 +96,14 @@ Never break the Teredo build or the master dump.
      `search`, `show <id>`, `join <id> [s]` (joins as fake player "lobbytool" with a TEST-NET address), `host <id> [s]` (self-test).
    - **Verified (no game):** all 40 lobby functions resolve; lobbytool self-test against EOS passed (create, 1300-byte value split and rejoined,
      read by id, update visible, destroy). A new lobby shows up in bucket searches after a few seconds, not instantly.
-   - **In game (2026-10-19 00:27, Direct build with `build-stageb`, user created a match):** the game created lobby `pd12f7be…` (owner = the
+   - **In game (2026-10-19 00:27, Direct build with `build-stageb`, user created a match):** the game created lobby `pd12f7beâ€¦` (owner = the
      game's product user), wrote it 4 times and set its search handle (numbers cross, crossplat, crossplay, gamerule, gametype, language,
      rating, ratinglimit, ratingmin/ratingmax, reqmoney, reqskill, sendskill, sessiontype, stage, state, version=140; strings gamename,
-     platform). `lobbytool search` found it with all properties. `lobbytool join … 60`: the game numbered the new member 2 within ~150 ms,
+     platform). `lobbytool search` found it with all properties. `lobbytool join â€¦ 60`: the game numbered the new member 2 within ~150 ms,
      raised `MemberListChange`, re-read the session (2 members); on leave it raised it again (1 member). No crash, no multiplayer stubs hit.
      **The lobby screen did not list "lobbytool"** (user, 00:29).
    - **Test peer in game (00:36, `test_peer=on`, DLL `A3755102`):** first in-game run of pdnet's stage 2 networking: 4/4 PASS (ping, CONNECT/ACK,
-     HELLO both ways — the game named itself `<xuid> [noid]` — then 20 s of heartbeats and a clean DELETE). Right after HELLO the game sent one
+     HELLO both ways â€” the game named itself `<xuid> [noid]` â€” then 20 s of heartbeats and a clean DELETE). Right after HELLO the game sent one
      48-byte type-3 (chat/custom) message that the test peer doesn't answer. **The lobby screen listed nothing either.**
    - So neither a session member alone nor a mesh peer alone shows up. Likely the UI needs both (a member whose device address matches the
      connected peer) and/or the game's own player-info exchange after HELLO. Next: Ghidra on the lobby member list and the type-3 message,
@@ -123,7 +123,7 @@ Never break the Teredo build or the master dump.
 - Mesh message types: HELLO, HEARTBEAT, ACK, CHAT, CUSTOM (`PDUWP.NetworkMesh`). Sessions and matchmaking go through `PDUWP.Xbox.Samples.Multiplayer.MultiplayerManager` on XSAPI MPSD, SmartMatch and search handles.
 - On this sideloaded copy, **Xbox Live sign-in, title storage (card data) and the lobby browser still work**. Only Connected Storage hangs.
 - Meld (`MeldRelease_UWP.dll`) requests an Xbox token (`GetTokenAndSignature`), so it probably also calls a separate web backend. Not investigated.
-- Menu scripts: `.ssb`. Name table in `PDUWP.exe` (`menu1, shop, vsmode, option, command, vsmenu, mainmenu, …`).
+- Menu scripts: `.ssb`. Name table in `PDUWP.exe` (`menu1, shop, vsmode, option, command, vsmenu, mainmenu, â€¦`).
 - `tms_options.csv` holds the store product definitions and online version gates. Saved copies under `UserConfig` are AES-encrypted by the game.
 
 ## 6. Current state of the source tree
@@ -137,12 +137,12 @@ Never break the Teredo build or the master dump.
   - control message = `"PDNC" | type | nonce (4 bytes, native order) | body`, on one dual-stack UDP socket bound to `controlPort`
   - Ack and Pong complete a pending `Request` by nonce. Everything else goes to the handler.
 - Verified: builds clean with `build.cmd build-repair`. Exports, imports and all UTF-16 strings are identical to the installed DLL,
-  and every `pdnet::net` function exists in both. A loopback harness passed the snapshot and Base64 round trips, connect→ack and
-  ping→pong against a Python peer written from the disassembled format, plus the unsolicited-message path. Not yet run inside the game.
+  and every `pdnet::net` function exists in both. A loopback harness passed the snapshot and Base64 round trips, connectâ†’ack and
+  pingâ†’pong against a Python peer written from the disassembled format, plus the unsolicited-message path. Not yet run inside the game.
 - `build.cmd [outdir]` now takes an optional output folder. `pdnet\build-stage2-1226\` is a copy of the original good build (DLL + PDB + objs), ignored by git.
-- The rebuilt DLL (`pdnet\build-repair`, MD5 8316A4A1…) was installed in the Direct build and smoke-tested in game on 2026-10-17
-  (13:07: it loaded and lobby creation worked). It was then replaced there by the test-peer build (§6a).
-  The Teredo build and `pdnet\build` still have the original 12:26 DLL (MD5 E3E67884…), which is also kept in `pdnet\build-stage2-1226`.
+- The rebuilt DLL (`pdnet\build-repair`, MD5 8316A4A1â€¦) was installed in the Direct build and smoke-tested in game on 2026-10-17
+  (13:07: it loaded and lobby creation worked). It was then replaced there by the test-peer build (Â§6a).
+  The Teredo build and `pdnet\build` still have the original 12:26 DLL (MD5 E3E67884â€¦), which is also kept in `pdnet\build-stage2-1226`.
 - Build output folders: `build` / `build-stage2-1226` = original 12:26, `build-repair` = repaired source, `build-testpeer` = repaired + test peer,
   `build-eostest` (CAD9F6F4) = EOS test, `build-eos` (5CF6B75D) = long-lived sign-in, `build-xboxoff` (F21B9852) = Xbox-free mode stage A, `build-stageb` (91379196) = stage B, EOS lobbies (current source).
   Don't build into `build` or `build-stage2-1226`; they're the known-good copies.
@@ -157,27 +157,27 @@ Never break the Teredo build or the master dump.
 3 s after the game first calls `XboxLiveEndpointPairTemplate.GetTemplateByName` (lobby creation). It uses its own sockets
 (control 43212, game 43213) inside the game process, which sidesteps AppContainer loopback isolation. The steps are:
 ping, then CONNECT, then HELLO on the game port, then 20 s of heartbeats with ACKs, then DELETE. It logs `testpeer: n/4 PASS|FAIL` lines to pdnet.log.
-Code: `src\testpeer.cpp`. Verified offline against net.cpp plus a Python stand-in for the game port. The Direct build has this DLL (`build-testpeer`, MD5 632CEAC6…).
+Code: `src\testpeer.cpp`. Verified offline against net.cpp plus a Python stand-in for the game port. The Direct build has this DLL (`build-testpeer`, MD5 632CEAC6â€¦).
 **Not yet run in the game:** as of 2026-10-18, pdnet.log has no `testpeer:` lines. Running it is the next one-PC step: register the Direct build, create an Xbox Live lobby, then read the log.
 
 Game mesh facts found for it (PDUWP.exe, Microsoft's sample MeshManager):
 - Packet: `seq u16 | type u8 | length u16 | flags u16 (0x8000 = wants ACK) | body`, little-endian; several messages per datagram.
   Type 1 = heartbeat, 2 = HELLO (`responding u8 | nameLen u16 | UTF-16 name`), 3 = chat/custom, 4 = ACK (seq = acked seq), 0x40+ = game messages.
   Builders: HELLO `FUN_140028310`, ACK `FUN_140028670`, heartbeat `FUN_1400281a0`. Dispatcher: `FUN_140029c50`.
-- Receive loop `FUN_140029330`: the sender is looked up by address, then via `FindEndpointPairBySocketAddressBytes` → device address → mesh connection.
+- Receive loop `FUN_140029330`: the sender is looked up by address, then via `FindEndpointPairBySocketAddressBytes` â†’ device address â†’ mesh connection.
   An unknown sender is logged and skipped. A sender that is **known but in state 0/1 makes the loop `break` (the receive thread stops)**.
 - `OnAssociationIncoming` (`FUN_140037740`) creates a mesh connection for **any** inbound endpoint pair, in state 2 (accepted). HELLO moves it to 3.
-  So the host does not need the joiner's MPSD membership to accept packets. This answers the §7 question at the mesh level.
+  So the host does not need the joiner's MPSD membership to accept packets. This answers the Â§7 question at the mesh level.
 
 ## 7. What's left
 
-1. ~~Repair the source tree~~ Done and smoke-tested in game (§6).
-2. ~~Replace sign-in and title storage~~ Done in Xbox-free mode (§4.8).
-3. **Sessions shared between players** (stage B): **written and tested against EOS without the game (§4.9); in-game test next.**
+1. ~~Repair the source tree~~ Done and smoke-tested in game (Â§6).
+2. ~~Replace sign-in and title storage~~ Done in Xbox-free mode (Â§4.8).
+3. **Sessions shared between players** (stage B): **written and tested against EOS without the game (Â§4.9); in-game test next.**
    Then the guide's test plan (two PCs, soak, `xbox=on`/Teredo regression).
-4. **In-match connections between players** (stage C). For now the Direct build's networking is pdnet's direct UDP (§4.4): it should work on a LAN,
-   and over the internet only if the host forwards ports. Not done; see §8.
-5. **Two-PC testing** of anything multiplayer, once the user has a second PC or tester (the test kit, §4.5, is for that).
+4. **In-match connections between players** (stage C). For now the Direct build's networking is pdnet's direct UDP (Â§4.4): it should work on a LAN,
+   and over the internet only if the host forwards ports. Not done; see Â§8.
+5. **Two-PC testing** of anything multiplayer, once the user has a second PC or tester (the test kit, Â§4.5, is for that).
 6. Remaining Xbox-free stubs that only affect local features (stats, presence, profiles, events) currently return defaults; they can stay.
 7. Optional: give the Direct build its own package identity once it no longer needs Xbox Live at all, so it can coexist with the Teredo build.
    Card packs and paid content: the agreed scope is restoring play, not unlocking paid content.
@@ -188,7 +188,7 @@ Game mesh facts found for it (PDUWP.exe, Microsoft's sample MeshManager):
   1. while writing the plug-and-play internet connectivity layer (automatic public-address discovery and NAT traversal on the game's socket);
   2. while writing the stage 3 relay server (`pdserver.py`), which forwards game traffic between players;
   3. (2026-10-18) while writing a passive "link monitor" for the Teredo build, which would have logged the state of
-     Windows' player-to-player endpoint pairs to diagnose "cross lagging" (see §11). Its partial file was deleted and nothing was installed;
+     Windows' player-to-player endpoint pairs to diagnose "cross lagging" (see Â§11). Its partial file was deleted and nothing was installed;
   4. (2026-10-19) while starting stage B, connecting the game's multiplayer sessions to EOS lobbies. Nothing had been written yet;
      the stopped step only read the EOS SDK headers.
 
@@ -212,7 +212,7 @@ Game mesh facts found for it (PDUWP.exe, Microsoft's sample MeshManager):
 ## 9. User preferences learned
 
 - Keep the Teredo build and the master dump playable and untouched; back things up before changing anything.
-- Debug menu stays on Multiplayer → Split Screen.
+- Debug menu stays on Multiplayer â†’ Split Screen.
 - Server language: Python (the user had no preference). Testing will be on 2 PCs once available.
 - They like short, practical explanations, with one-command scripts for anything they have to run.
 - They actively play online with the Teredo build, so leave it registered when you're done testing.
@@ -233,19 +233,19 @@ Game mesh facts found for it (PDUWP.exe, Microsoft's sample MeshManager):
 
 ## 10. Session history
 
-- **Session 1** (2026-10-17, ~12:00–12:50): recon, the pdnet shim (saves, then stage 2 networking), menu move, build folders, this handoff.
-  Two of its responses were stopped by the safety classifier (§8). It ended with the source tree broken.
-- **Session 2** (2026-10-17, ~12:54–13:10): `git init` in `_netmod`, source repair, smoke test, test peer. Its commits carry the user's git name.
+- **Session 1** (2026-10-17, ~12:00â€“12:50): recon, the pdnet shim (saves, then stage 2 networking), menu move, build folders, this handoff.
+  Two of its responses were stopped by the safety classifier (Â§8). It ended with the source tree broken.
+- **Session 2** (2026-10-17, ~12:54â€“13:10): `git init` in `_netmod`, source repair, smoke test, test peer. Its commits carry the user's git name.
   `git log` shows the test-peer commit `8abdf07` first even though its author date (12:19) is earlier. Go by commit order, not the date.
 - **2026-10-18:** the user played online with the Teredo build (log entry at 17:10). Session 1 updated this document to match git and the files on disk.
   Also: the test kit, the cross-lagging diagnosis and `lagmonitor.ps1`, and the third classifier stop.
 - **2026-10-19 (session 1):** EOS plan, feasibility test plus credential store, `nosuspend.ps1`, long-lived EOS sign-in, the sign-in recon in Ghidra,
   and Xbox-free mode up to stage A (create match works). The fourth classifier stop came at the start of stage B; then this update.
 - **2026-10-19 (session 3):** stage B from `STAGE_B_GUIDE.md`: EOS lobby layer, EOS-backed session store, search handles, change events,
-  `lobbytool` (second EOS client) and its self-test against EOS. No classifier stop this time. Not yet run in the game (§4.9).
-- **2026-10-19 (session 3, later):** stage B tester kit for unpacked copies: `testkit-stageb\` + `make-testkit.ps1 -Stage B` →
+  `lobbytool` (second EOS client) and its self-test against EOS. No classifier stop this time. Not yet run in the game (Â§4.9).
+- **2026-10-19 (session 3, later):** stage B tester kit for unpacked copies: `testkit-stageb\` + `make-testkit.ps1 -Stage B` â†’
   `D:\PhantomDust-pdnet-StageB-TestKit-2026-10-19.zip` (DLL `A3755102`, the one tested in game and installed in the Direct build; **no eos.ini
-  inside** — send a tester client's eos.ini separately). Also started, **untested and parked**: running pdnet in an unmodified Microsoft Store
+  inside** â€” send a tester client's eos.ini separately). Also started, **untested and parked**: running pdnet in an unmodified Microsoft Store
   install via a launcher (`pdnet\tools\pdlaunch.cpp`, `testkit-store\store-setup.ps1`/`store-remove.ps1`): Windows' package-debugger setting
   starts `pdlaunch.exe`, which injects `pdnet.dll` and calls its new `PdInjectedInit` export; with `xbox=off` the activation hook then answers
   `Microsoft.Xbox.Services.*` itself. Not needed now (the tester has an unpacked copy). Note: `pdnet\build-stageb` now holds a rebuild with
@@ -255,19 +255,19 @@ Game mesh facts found for it (PDUWP.exe, Microsoft's sample MeshManager):
   browser and lobby join worked, but the match connection timed out (host's advertised address was a private LAN address on another network).
   Run 2: user hosted with UDP 43210/43211 forwarded and `advertise_ip=<public IP>`; the tester found and joined the lobby, connected directly
   (`sda: inbound connection ... (seen as <tester's public IP>)`), and **the user reports everything running correctly** (lobby and match).
-  Remaining: automatic internet connectivity without port forwarding (stage C, e.g. EOS P2P relays — see §8 before starting), longer soak,
+  Remaining: automatic internet connectivity without port forwarding (stage C, e.g. EOS P2P relays â€” see Â§8 before starting), longer soak,
   `xbox=on`/Teredo regression check.
-- **2026-10-20 (session 3): stage C — match traffic through EOS P2P (`network_mode=eos`), commit `76c4d44`, DLL `pdnet\build-stagec`
+- **2026-10-20 (session 3): stage C â€” match traffic through EOS P2P (`network_mode=eos`), commit `76c4d44`, DLL `pdnet\build-stagec`
   (MD5 `C5F9697B`), design at the top of `src\p2p.h`.** Device addresses v2 carry the EOS product user id; pairs to v2 peers handshake over
   EOS P2P and the game sends to a local "link" socket that pdnet bridges to the peer (Epic does NAT traversal, relays as fallback). v1 peers
-  (older kits, other modes) keep direct UDP — so both players need this build in `network_mode=eos`. EOS thread pumps every ~2 ms
+  (older kits, other modes) keep direct UDP â€” so both players need this build in `network_mode=eos`. EOS thread pumps every ~2 ms
   (`timeBeginPeriod(1)`). Every 10 s each link logs ping/jitter/loss/path/traffic (`p2p: link ...`).
   **One-PC test passed in game (Direct build, 00:09):** `lobbytool p2ppeer 20` = 4/4 PASS over EOS P2P (ping, connect/ack, HELLO both ways,
-  heartbeats, delete), ping 3–4 ms, 0 loss. `lobbytool p2ppeer 30 force` (Epic relays only) = 4/4 PASS, ping ~42 ms, 0 loss.
+  heartbeats, delete), ping 3â€“4 ms, 0 loss. `lobbytool p2ppeer 30 force` (Epic relays only) = 4/4 PASS, ping ~42 ms, 0 loss.
   Known issue: the direct/relayed label is unreliable (EOS reported "direct" with forced relays; the game side kept a stale label because no
-  close event came between runs) — use the ping. Next: two-PC test with no port forwarding, then measure real matches; redundancy later.
+  close event came between runs) â€” use the ping. Next: two-PC test with no port forwarding, then measure real matches; redundancy later.
 - **2026-10-20: stage C tester kit** `testkit-stagec\` (README for no port forwarding, `network_mode=eos`) built with
-  `make-testkit.ps1 -Stage C -EosIni .\eos.tester.ini` → `D:\PhantomDust-pdnet-StageC-TestKit-C5F9697B-with-eos.zip`. Kit zips are now named
+  `make-testkit.ps1 -Stage C -EosIni .\eos.tester.ini` â†’ `D:\PhantomDust-pdnet-StageC-TestKit-C5F9697B-with-eos.zip`. Kit zips are now named
   after the DLL's MD5 prefix (the clock jumps made dated names ambiguous). Both players need stage C; the user's Direct build already matches.
 - **2026-10-20: wrong card names in Xbox-free mode** ("Aura Particle" shown as "Rebirth", still behaving as Aura). Cause: the dump's
   `Assets\Data\gstorage\gsdata_en.dat` (C519B2D8, 2022-07-12) is an edited copy; next to it are `gsdata_en.dat.bak` (984175A8) and
@@ -276,7 +276,7 @@ Game mesh facts found for it (PDUWP.exe, Microsoft's sample MeshManager):
   On Xbox Live the game downloaded the real blob, so this only shows with pdnet serving local files. Fix (Direct build only): the original
   copy as an override, `D:\PhantomDust-Direct\titlestorage\gsdata_en.dat` (pdnet checks `titlestorage\` first). Master and Teredo untouched.
   Not yet confirmed in game. Testers with the same dump would see the same bug.
-- **2026-10-19/20: crash when leaving a lobby (both players)** — access violation at PDUWP.exe+0xA7083. Ghidra: `FUN_14009c7c0` is the
+- **2026-10-19/20: crash when leaving a lobby (both players)** â€” access violation at PDUWP.exe+0xA7083. Ghidra: `FUN_14009c7c0` is the
   game's session-write task; it polls `TryWriteSessionAsync` every frame and calls `GetResults` on it more than once, then reads
   `WriteSessionResult.Succeeded` without a null check. C++/WinRT coroutines move their result out on the first `GetResults`
   (`return std::move(m_result)` in windows.foundation.h), so the second read was null. Fix: `xsapi\repeatable.h` wraps every implemented
@@ -288,7 +288,7 @@ Game mesh facts found for it (PDUWP.exe, Microsoft's sample MeshManager):
 - **2026-10-20: nametag investigation (user wants nametags kept on dead bodies).** The over-head nametag is the white gamertag (from the
   session, i.e. pdnet). Ghidra: players in a 4-entry table `DAT_1404bc9d8` (position at +0x12e40, flags +0x10/+0x20/+0x24), names for HUD
   panels in `DAT_1404bca30` (65 bytes each); HUD panels/scoreboard (`FUN_140155310`, `FUN_140150c30`, `FUN_1401ca1e0`) draw via
-  `FUN_1402477e0` — none of that is the floating nametag, which is probably remaster code reading the gamertag via the XSAPI classes.
+  `FUN_1402477e0` â€” none of that is the floating nametag, which is probably remaster code reading the gamertag via the XSAPI classes.
   New debug option `name_trace=on` (`xsapi\nametrace.*`, commit `9acf2fe`, DLL `pdnet\build-nametrace` 7D824149, not shipped): hardware
   breakpoints on copies of other players' gamertags, logs the PDUWP.exe call chains that read them. One-PC check (lobbytool in the lobby):
   works, no crash, 23 heap copies, reads from chains under `140009b06 <- 140008953 <- 1400c58f6`. Next: a real match with the tester while
@@ -320,7 +320,7 @@ Discord toggles (pdnet.ini, default on): discord_lobby_messages (opened/closed),
 
 "Closed" on game exit (2026-10-27): when the game exits while alone in its lobby, pdnet writes `discord-close.txt` and pdlaunch edits the message to "closed". Both now skip this when discord_lobby_messages is off (before, it still happened whenever player posts were on). Fix ab55850 on master, c081b28 on kit27; testers need the new pdnet.dll and pdlaunch.exe.
 
-Options > Sound row (2026-10-27, in test): Aura Particle Beeps (On / Off, settings.ini aura_beeps) under Music / Sound Effects Volume. A Menu Sounds row was tried and dropped (the cursor sounds come from the game's own code at 0x14024B456 / 0x14024B118, not only from menu cmd g1 #43). The SOUND window (menu 4 option, window 4, built at 0x01350 of option_en.ssb = the dump's option_enx.ssb) gets the rows from HookedAddItem; its key handler (0x02AF4) and row drawing use option 4 + cursor row via menu cmd 66 / 67, so option 6 is pdnet's while the script state is SOUN (menu cmd 12 / 6). Every sound starts in FUN_140240870 (2D) or FUN_140240a00 (3D): bank edx, cue r8d, sound r9d; both inline-hooked (SoundOff). sound_log=on logs every sound once, with its caller (for 3D sounds through FUN_140276330, that function's caller). Aura beep: bank 1 sounds come from the stage's sound emitters (FUN_1402214c0: mode 0 replays its cue on a timer, mode 1 starts a loop once). Muting 3D bank 1 cue 4 (the loop, Experimental 34) or cue 1 (the timed one, Experimental 35) did not stop the beep. The beep is the aura counter: FUN_14024de20 raises a player's aura and plays 2D bank 0 cue 5 each time the whole number goes up (own player only; call at 0x14024DF22). Experimental 36 mutes exactly that call when aura_beeps=off. 3D bank 0 cues 34 / 35 are footsteps (FUN_140231010 / FUN_1402311e0).
+Options > Sound row (2026-10-27, works): Aura Particle Beeps (On / Off, settings.ini aura_beeps) under Music / Sound Effects Volume. A Menu Sounds row was tried and dropped (the cursor sounds come from the game's own code at 0x14024B456 / 0x14024B118, not only from menu cmd g1 #43). The SOUND window (menu 4 option, window 4, built at 0x01350 of option_en.ssb = the dump's option_enx.ssb) gets the rows from HookedAddItem; its key handler (0x02AF4) and row drawing use option 4 + cursor row via menu cmd 66 / 67, so option 6 is pdnet's while the script state is SOUN (menu cmd 12 / 6). Every sound starts in FUN_140240870 (2D) or FUN_140240a00 (3D): bank edx, cue r8d, sound r9d; both inline-hooked (SoundOff). sound_log=on logs every sound once, with its caller (for 3D sounds through FUN_140276330, that function's caller). Aura beep: bank 1 sounds come from the stage's sound emitters (FUN_1402214c0: mode 0 replays its cue on a timer, mode 1 starts a loop once). Muting 3D bank 1 cue 4 (the loop, Experimental 34) or cue 1 (the timed one, Experimental 35) did not stop the beep. The beep is the aura counter: FUN_14024de20 raises a player's aura and plays 2D bank 0 cue 5 each time the whole number goes up (own player only; call at 0x14024DF22). Experimental 36 mutes exactly that call when aura_beeps=off: confirmed in game by the user (2026-10-27, the beeping stopped). 3D bank 0 cues 34 / 35 are footsteps (FUN_140231010 / FUN_1402311e0).
 
 Game volume (2026-10-27): Windows never saves a Volume Mixer level for PDUWP.exe (no entry in its PolicyConfig\PropertyStore), so it starts at 100% every time. pdlaunch's WatchVolume remembers it, but used to watch only the first audio session it found and saved volume.txt per kit folder, so nothing was ever saved. Now it re-reads all of the game's sessions every 250 ms, gives any new session the remembered level, and saves to LocalState\pdnet\volume.txt (shared by every kit; the kit folder's volume.txt is still read as a fallback).
 
@@ -479,7 +479,7 @@ The scoreboard menu (liveranking, menu 41) shows only the 4 Global boards (Patch
 
 ## Rated / Unrated lobbies
 
-rated_lobbies=on: the create-session Rating option (session number ratinglimit 0/1, originally ±200 join limit) reads Unrated / Rated; the search option finds one kind; ratingmin/ratingmax are forced to 0/1000000 (no join limit). FUN_1401835c0 (rating += change, match start and end) is hooked: change 0 unless the session pdnet holds has ratinglimit 1 (scores::RatedMatch in xsapi/mpsd.cpp). The game's 'Official Battle rules only' checks (0x1401878c9 jg, 0x1401882c8 ja) are NOPed, so any rule can be Rated. The '[Official Battle] Applies toward Scoreboard Total' line is removed from rule descriptions in every menu script. Wins count in both kinds. Log: 'gamepatch: rating change'.
+rated_lobbies=on: the create-session Rating option (session number ratinglimit 0/1, originally Â±200 join limit) reads Unrated / Rated; the search option finds one kind; ratingmin/ratingmax are forced to 0/1000000 (no join limit). FUN_1401835c0 (rating += change, match start and end) is hooked: change 0 unless the session pdnet holds has ratinglimit 1 (scores::RatedMatch in xsapi/mpsd.cpp). The game's 'Official Battle rules only' checks (0x1401878c9 jg, 0x1401882c8 ja) are NOPed, so any rule can be Rated. The '[Official Battle] Applies toward Scoreboard Total' line is removed from rule descriptions in every menu script. Wins count in both kinds. Log: 'gamepatch: rating change'.
 
 ## In-game Settings
 
