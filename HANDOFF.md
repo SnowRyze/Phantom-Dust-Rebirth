@@ -320,6 +320,8 @@ Discord toggles (pdnet.ini, default on): discord_lobby_messages (opened/closed),
 
 "Closed" on game exit (2026-10-27): when the game exits while alone in its lobby, pdnet writes `discord-close.txt` and pdlaunch edits the message to "closed". Both now skip this when discord_lobby_messages is off (before, it still happened whenever player posts were on). Fix ab55850 on master, c081b28 on kit27; testers need the new pdnet.dll and pdlaunch.exe.
 
+Empty lobbies (2026-10-27): after a host's game closes or crashes, Epic keeps the lobby for a while with 0 members, and the game listed it as 0/4. Only its owner can destroy it, so lobby searches and Quick Join now skip any lobby with 0 members (MultiplayerService.cpp, GetSearchHandlesAsyncImpl).
+
 ## Stage / variant selection (RE notes, PDUWP Ghidra addresses)
 - Stage id = DAT_1403e0304 (0-29, names in Assets\Data\setup\stageset\stageset*.dat; files Map\stNN.alr/.dat; e.g. 02 Spiral / 12 Lightning / 22 Sunlight Highway). Units digit = arena (camera st%02dcam.alr uses id % 10).
 - Online: the host's stage menu picks a stage-set entry DAT_14051775c (FUN_140213c00); the table at DAT_140509bb8 (40-byte entries, filled at run time) gives [0] stage id and [1] layout count; the host rolls DAT_140527c54 = rand() % count (rolled again for each next round in FUN_140187b70).

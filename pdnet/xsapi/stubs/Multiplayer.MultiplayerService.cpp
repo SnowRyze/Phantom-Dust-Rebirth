@@ -249,6 +249,7 @@ namespace winrt::Microsoft::Xbox::Services::Multiplayer::implementation
         for (auto& doc : all)
         {
             if (!doc->hostPresent) continue; // ghost: its game host left (mpsd.cpp, FromLobby)
+            if (!doc->shared && doc->lobbyMemberCount == 0) continue; // empty: Epic keeps a lobby for a while after its host's game closed
             if (!filter.empty() && !::pdnet::mpsd::MatchesFilter(*doc->search, filter)) continue;
             if (joinable)
             {
