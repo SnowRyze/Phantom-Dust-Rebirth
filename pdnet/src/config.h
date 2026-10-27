@@ -48,8 +48,7 @@ namespace pdnet
         std::wstring discordWebhook;        // discord_webhook=<URL>: announce lobbies this PC hosts in a Discord channel (see discord.h)
         bool discordLobbyMessages = true;   // discord_lobby_messages=on|off: "opened" / "closed" messages
         bool discordPlayerMessages = true;  // discord_player_messages=on|off: "<name> joined / left" (and "full") messages
-        int splashVolume = 40;              // splash_volume=: % of the remembered volume during the start-up logos (pdlaunch; the Settings menu shows it)
-        int splashSeconds = 12;             // splash_seconds=: how long the start-up logos stay quieter (pdlaunch)
+        int splashVolume = 40;              // splash_volume=: % of the remembered volume from the start-up logos until the main menu (pdlaunch; the Settings menu shows it)
         bool auraBeeps = true;              // aura_beeps=on|off: the aura particles' beeping (Options > Sound shows it)
         bool soundLog = false;              // sound_log=on: log each game sound (bank, cue, caller) the first time it plays (debug, see gamepatches.cpp)
     };
@@ -59,7 +58,7 @@ namespace pdnet
 
     // The same settings, for the in-game Settings menu (gamepatches.cpp): change fields, then SaveSettings writes
     // key=value lines to LocalState\pdnet\settings.ini (read after pdnet.ini, so they win; the game can't write the kit
-    // folder). pdlaunch reads splash_volume / splash_seconds from there too.
+    // folder). pdlaunch reads splash_volume from there too.
     Config& EditableConfig();
     void SaveSettings(const std::vector<std::pair<std::string, std::string>>& values);
     void SaveSetting(const std::string& key, const std::string& value);

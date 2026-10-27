@@ -62,7 +62,7 @@ Enter). Or edit pdnet.ini with Notepad, then restart the game.
   voice_mode=            mic: the in-game option is called Mic and turns only your microphone on/off
                          classic: the original Voice Chat option - Off means you neither talk nor hear
   voice_listen=          on/off: hear other players (mic mode only)
-  splash_volume=         % of your volume during the start-up logos; splash_seconds= how long
+  splash_volume=         % of your volume from the start-up logos until you are past the title screen
   discord_*              lobby announcements in Discord when you host
 Always on: the lobby's Arsenal Lab button, Gamertag when alone, Max Credits & Skills in the shop
 (up to 5,000,000 credits, 80 of every skill incl. DLC, one 2-School Arsenal Case), the global scoreboards,

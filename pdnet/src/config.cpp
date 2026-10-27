@@ -89,7 +89,6 @@ namespace pdnet
                 else if (key == "discord_lobby_messages") c.discordLobbyMessages = _stricmp(value.c_str(), "off") != 0;
                 else if (key == "discord_player_messages") c.discordPlayerMessages = _stricmp(value.c_str(), "off") != 0;
                 else if (key == "splash_volume" && !value.empty()) c.splashVolume = (std::clamp)(std::stoi(value), 0, 100);
-                else if (key == "splash_seconds" && !value.empty()) c.splashSeconds = (std::clamp)(std::stoi(value), 0, 60);
                 else if (key == "aura_beeps") c.auraBeeps = _stricmp(value.c_str(), "off") != 0;
                 else if (key == "sound_log") c.soundLog = _stricmp(value.c_str(), "on") == 0;
                 else if (key == "display_name" && !value.empty())
