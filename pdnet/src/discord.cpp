@@ -37,6 +37,9 @@ namespace pdnet::discord
             bool closing = false; // the lobby's last state: forget its message afterwards
             std::string closedText; // how the message reads once the lobby is gone
             bool alone = false;     // this PC is the only member: if the game closes now, the lobby ends with it
+            bool opening = false;   // the "lobby opened" post: the only job that may create the message. Player posts
+                                    // and "closed" only edit it, so a lobby its host keeps off Discord (lobby posts off)
+                                    // gets no message at all, also from players who take the lobby over.
         };
 
         // Closing the game straight from the lobby (or a crash) gives pdnet no chance to edit the message, so while
@@ -124,12 +127,17 @@ namespace pdnet::discord
                 if (it != g_messages.end()) message = it->second;
             }
             DWORD status = 0;
+            if (message.empty() && !job.opening)
+            {
+                Log(L"discord: lobby %S has no message (not announced) - nothing posted", job.lobbyId.c_str());
+                return;
+            }
             if (!message.empty())
             {
                 status = Request(url, L"PATCH", L"/messages/" + std::wstring(winrt::to_hstring(message)), job.text, nullptr);
-                if (status == 404) message.clear(); // someone deleted the message: post a new one
+                if (status == 404) message.clear(); // someone deleted the message: post a new one (only when opening)
             }
-            if (message.empty())
+            if (message.empty() && job.opening)
             {
                 std::string response;
                 status = Request(url, L"POST", L"?wait=true", job.text, &response);
@@ -158,7 +166,7 @@ namespace pdnet::discord
 
         // Queues the lobby's message as it should now read. A newer state replaces a queued one for the same lobby,
         // so a burst of joins becomes one edit.
-        void Show(const std::string& lobbyId, const std::string& text, bool closing, const std::string& closedText = {}, bool alone = false)
+        void Show(const std::string& lobbyId, const std::string& text, bool closing, const std::string& closedText = {}, bool alone = false, bool opening = false)
         {
             const std::wstring& url = GetConfig().discordWebhook;
             if (url.empty()) return;
@@ -170,8 +178,9 @@ namespace pdnet::discord
                 queued->closing |= closing;
                 queued->closedText = closedText;
                 queued->alone = alone;
+                queued->opening |= opening;
             }
-            else g_queue.push_back(Job{ lobbyId, text, closing, closedText, alone });
+            else g_queue.push_back(Job{ lobbyId, text, closing, closedText, alone, opening });
             if (!g_threadStarted)
             {
                 g_threadStarted = true;
@@ -374,7 +383,7 @@ namespace pdnet::discord
                 alone = a.members <= 1;
             }
         }
-        if (!text.empty()) Show(l.id, text, false, closed, alone);
+        if (!text.empty()) Show(l.id, text, false, closed, alone, true);
     }
 
     void LobbyChanged(const lobbies::Lobby& l)
@@ -383,7 +392,7 @@ namespace pdnet::discord
         bool mine = l.joined && l.ownerId == lobbies::LocalUserId();
         uint32_t members = Members(l);
         std::string text, closed;
-        bool alone = false;
+        bool alone = false, opening = false;
         {
             std::lock_guard guard(g_lock);
             if (g_gone.count(l.id)) return; // already shown as closed (LobbyGone)
@@ -410,6 +419,7 @@ namespace pdnet::discord
             if (!a.opened)
             {
                 if (Open(l, a)) text = Card(a);
+                opening = !text.empty();
             }
             else if (members > 0)
             {
@@ -440,7 +450,7 @@ namespace pdnet::discord
                 alone = a.members <= 1;
             }
         }
-        if (!text.empty()) Show(l.id, text, false, closed, alone);
+        if (!text.empty()) Show(l.id, text, false, closed, alone, opening);
     }
 
     void LobbyLeft(const std::string& id, bool lastMember)
