@@ -208,13 +208,16 @@ namespace pdnet::discord
             uint32_t members = 0;
             bool opened = false; // "opened" waits for the game's search handle, which says the game type and rule
             std::map<std::string, std::string> players; // EOS product user id -> player name
-            std::string match;       // "Tag Team · Standard Battle"
+            std::string match;       // "Rated Standard Tag" (ShortMatch)
             uint32_t maxMembers = 0;
             // The latest join/leave, by user id. A member's PD_NAME arrives in a lobby update after the one that adds
             // them, so names are looked up when the message is drawn (`known` keeps the names of those who left).
             std::vector<std::string> joined, left;
             std::map<std::string, std::string> known;
+            std::string eventId, event; // the latest player event, for the message's first line ("joined the lobby")
+            std::vector<std::string> order; // user ids in the order they joined (the message's slots)
         };
+        std::string ShortMatch(const lobbies::Lobby& l); // (below)
         std::mutex g_lock;
         std::map<std::string, Announced> g_lobbies; // lobbies this PC owns and announces
         std::set<std::string> g_gone;               // lobbies whose game host left: their message says closed (LobbyGone)
@@ -258,35 +261,45 @@ namespace pdnet::discord
             return std::to_string(members) + "/" + std::to_string(max) + " players";
         }
 
-        // The lobby's message as it should read now:
-        //   🟢 **Host** opened a Phantom Dust lobby · Tag Team · Standard Battle · 2/4 players   (🎮 ... · full)
-        //   Players: **Host**, **B**
-        //   👥 **B** joined
-        // and once closed: 🔴 **Host**'s lobby closed · Tag Team · Standard Battle
+        // A name inside a Discord code span (``name``): markdown isn't read there, so it goes in as it is, without
+        // backticks (they would end the span) or line breaks.
+        std::string Code(const std::string& s)
+        {
+            std::string out;
+            for (char c : s) if (c != '`' && c != '\n' && c != '\r') out += c;
+            return "``" + (out.empty() ? std::string("A player") : out) + "``";
+        }
+
+        // The lobby's message as it should read now (layout from the community, 2026-10-27):
+        //   🌐 3/4 Open Lobby - Rated Standard Tag - ``toaf joined the lobby``
+        //   ``AnoMayCry``
+        //   ``Snow Ryze``
+        //   ``toaf``
+        //   ``< public slot >``
+        // Full: "4/4 Full Lobby". Once closed: 🔴 Closed Lobby - Rated Standard Tag - ``Host's lobby closed``
         std::string Card(const Announced& a, bool closed = false)
         {
-            std::string match = a.match.empty() ? "" : " \xC2\xB7 " + a.match;
-            if (closed) return "\xF0\x9F\x94\xB4 **" + Name(a.name) + "**'s lobby closed" + match;
-            bool full = a.maxMembers && a.members >= a.maxMembers;
-            auto names = [&](const std::vector<std::string>& ids)
+            std::string match = a.match.empty() ? "" : " - " + a.match;
+            if (closed) return "\xF0\x9F\x94\xB4 Closed Lobby" + match + " - " + Code(a.name + "'s lobby closed");
+            auto name = [&](const std::string& id)
             {
-                std::vector<std::string> out;
-                for (auto& id : ids)
-                {
-                    auto it = a.known.find(id);
-                    out.push_back(it != a.known.end() ? it->second : std::string());
-                }
-                return out;
+                auto it = a.known.find(id);
+                return it != a.known.end() ? it->second : std::string();
             };
-            std::vector<std::string> everyone;
-            for (auto& [id, name] : a.players) everyone.push_back(id);
-            std::string text = (full ? "\xF0\x9F\x8E\xAE **" : "\xF0\x9F\x9F\xA2 **") + Name(a.name) + "** opened a Phantom Dust lobby" + match +
-                               " \xC2\xB7 " + Players(a.members, a.maxMembers) + (full ? " \xC2\xB7 full" : "");
-            if (!everyone.empty()) text += "\nPlayers: " + Names(names(everyone));
-            std::string change;
-            if (!a.joined.empty()) change = "\xF0\x9F\x91\xA5 " + Names(names(a.joined)) + " joined";
-            if (!a.left.empty()) change += (change.empty() ? "" : "  ") + std::string("\xF0\x9F\x91\x8B ") + Names(names(a.left)) + " left";
-            if (!change.empty()) text += "\n" + change;
+            uint32_t max = a.maxMembers ? a.maxMembers : 4;
+            bool full = a.members >= max;
+            std::string who = a.eventId.empty() ? a.name : name(a.eventId);
+            std::string text = "\xF0\x9F\x8C\x90 " + std::to_string(a.members) + "/" + std::to_string(max) + (full ? " Full Lobby" : " Open Lobby") + match +
+                               " - " + Code((who.empty() ? "A player" : who) + " " + (a.event.empty() ? "opened the lobby" : a.event));
+            // The slots: the host first, then the others in the order they joined, then the open slots.
+            std::string hostId;
+            for (auto& [id, n] : a.players) if (name(id) == a.name) { hostId = id; break; }
+            std::vector<std::string> slots, ids;
+            if (!hostId.empty()) ids.push_back(hostId);
+            for (auto& id : a.order) if (id != hostId && a.players.count(id)) ids.push_back(id);
+            for (auto& [id, n] : a.players) if (std::find(ids.begin(), ids.end(), id) == ids.end()) ids.push_back(id);
+            for (auto& id : ids) slots.push_back(name(id));
+            for (uint32_t i = 0; i < max; ++i) text += "\n" + (i < slots.size() ? Code(slots[i]) : std::string("``< public slot >``"));
             return text;
         }
 
@@ -299,7 +312,8 @@ namespace pdnet::discord
             a.members = Members(l);
             a.players = Roster(l);
             for (auto& [id, name] : a.players) if (!name.empty()) a.known[id] = name;
-            a.match = MatchDescription(l);
+            for (auto& [id, name] : a.players) a.order.push_back(id);
+            a.match = ShortMatch(l);
             a.maxMembers = l.maxMembers;
             return GetConfig().discordLobbyMessages;
         }
@@ -367,6 +381,30 @@ namespace pdnet::discord
         return text;
     }
 
+    namespace
+    {
+        // The lobby message's short form (the community's terms): "Rated Standard Tag" - rated, rule, type.
+        std::string ShortMatch(const lobbies::Lobby& l)
+        {
+            static const char* kTypes[] = { "BR", "Tag", "1v1" };
+            static const char* kRules[] = { "Standard", "Ante", "Quick", "Puny", "Heavy", "Spec Enviro", "1 School", "Highlander", "Puny Only",
+                                            "Heavy Only", "KO", "Odd One Out" };
+            int type = SearchNumber(l, L"gametype"), rule = SearchNumber(l, L"gamerule");
+            std::vector<std::string> parts;
+            if (GetConfig().ratedLobbies)
+            {
+                auto stored = l.attributes.find("PD_RATED");
+                int rated = stored != l.attributes.end() && !stored->second.empty() ? atoi(stored->second.c_str()) : SearchNumber(l, L"ratinglimit");
+                parts.push_back(rated > 0 ? "Rated" : "Unrated");
+            }
+            if (rule >= 0 && rule < static_cast<int>(std::size(kRules))) parts.push_back(kRules[rule]);
+            if (type >= 0 && type < static_cast<int>(std::size(kTypes))) parts.push_back(kTypes[type]);
+            std::string text;
+            for (auto& p : parts) text += (text.empty() ? "" : " ") + p;
+            return text;
+        }
+    }
+
     void LobbyOpened(const lobbies::Lobby& l)
     {
         if (GetConfig().discordWebhook.empty() || !Public(l)) return;
@@ -405,7 +443,7 @@ namespace pdnet::discord
             if (it == g_lobbies.end())
             {
                 // Handed to this PC (host migration): keep editing the message the old host posted.
-                Announced a{ HostName(l), members, true, Roster(l), MatchDescription(l), l.maxMembers };
+                Announced a{ HostName(l), members, true, Roster(l), ShortMatch(l), l.maxMembers };
                 g_lobbies[l.id] = a;
                 auto posted = l.attributes.find("PD_DISCORD");
                 if (posted != l.attributes.end() && !posted->second.empty())
@@ -437,6 +475,10 @@ namespace pdnet::discord
                     a.left.clear();
                     for (auto& [id, name] : now) if (!a.players.count(id)) a.joined.push_back(id);
                     for (auto& [id, name] : a.players) if (!now.count(id)) a.left.push_back(id);
+                    for (auto& id : a.joined) a.order.push_back(id);
+                    // The first line names the latest event: a join if there is one, else a leave.
+                    if (!a.joined.empty()) { a.eventId = a.joined.back(); a.event = "joined the lobby"; }
+                    else if (!a.left.empty()) { a.eventId = a.left.back(); a.event = "left the lobby"; }
                     a.members = members;
                     a.players = std::move(now);
                     a.maxMembers = l.maxMembers;
@@ -485,7 +527,7 @@ namespace pdnet::discord
             std::lock_guard guard(g_lock);
             if (!g_gone.insert(l.id).second) return;
             auto it = g_lobbies.find(l.id);
-            Announced a = it != g_lobbies.end() ? it->second : Announced{ HostName(l), Members(l), true, Roster(l), MatchDescription(l), l.maxMembers };
+            Announced a = it != g_lobbies.end() ? it->second : Announced{ HostName(l), Members(l), true, Roster(l), ShortMatch(l), l.maxMembers };
             if (it != g_lobbies.end()) g_lobbies.erase(it);
             if (!a.opened || !GetConfig().discordLobbyMessages) return;
             text = Card(a, true);
