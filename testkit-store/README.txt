@@ -57,7 +57,6 @@ Change them in the game: multiplayer menu > Settings (left / right on a row; Nam
 Enter). Or edit pdnet.ini with Notepad, then restart the game.
   display_name=          your name (Setup.bat sets it)
   nametags_on_bodies=    on/off: defeated players keep their nametag. In a lobby the HOST's setting applies.
-  nametag_colors=        on/off: coloured nametags (off: all white)
   dead_nametag_color=    colour of a defeated player's nametag (RRGGBB), FFE600 = yellow
                          (also shown on a player lying in Play Dead, until they move or are hit)
   ally_nametag_color=    teammates' nametags (Tag Team), RRGGBB
