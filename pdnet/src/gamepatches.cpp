@@ -2245,14 +2245,21 @@ namespace pdnet::gamepatches
             }).detach();
         }
 
-        bool RatedRuleText(int64_t* args, char* out, size_t size)
+        // "Game Rule: <rule>" in a session info box -> "<rule> (Rated)" / "(Unrated)": in the Lobby Browser for the
+        // selected search result, in the lobby (its SESSION INFO box) for the lobby this player is in.
+        bool RatedRuleText(int64_t* args, char* out, size_t size, bool inLobby)
         {
             char format[64], rule[48];
             if (!CopyString(reinterpret_cast<const char*>(args[2]), format, sizeof(format)) || !strstr(format, "Game Rule")) return false;
             if (!CopyString(reinterpret_cast<const char*>(args[3]), rule, sizeof(rule)) || !rule[0]) return false;
-            int64_t cursor[2] = { 1, 9 }; // the script pushes 9 then 1: the last push is the first argument
-            int64_t row = reinterpret_cast<MenuCommandFn>(*reinterpret_cast<void**>(At(0x1403eefe0) + 55 * 8))(cursor);
-            int rated = row >= 0 ? scores::SearchResultRated(static_cast<size_t>(row)) : -1;
+            int rated = -1;
+            if (inLobby) rated = scores::RatedMatch();
+            else
+            {
+                int64_t cursor[2] = { 1, 9 }; // the script pushes 9 then 1: the last push is the first argument
+                int64_t row = reinterpret_cast<MenuCommandFn>(*reinterpret_cast<void**>(At(0x1403eefe0) + 55 * 8))(cursor);
+                rated = row >= 0 ? scores::SearchResultRated(static_cast<size_t>(row)) : -1;
+            }
             if (rated < 0) return false;
             sprintf_s(out, size, "%s (%s)", rule, rated ? "Rated" : "Unrated");
             return true;
@@ -2260,17 +2267,18 @@ namespace pdnet::gamepatches
 
         int64_t HookedDrawText(int64_t* args)
         {
-            if (args && GetConfig().ratedLobbies && CurrentMenu(MenuManager()) == kSessionListMenu)
+            int menu = CurrentMenu(MenuManager());
+            if (args && GetConfig().ratedLobbies && (menu == kSessionListMenu || menu == kLobbyMenu))
             {
                 static char text[96];
-                if (RatedRuleText(args, text, sizeof(text)))
+                if (RatedRuleText(args, text, sizeof(text), menu == kLobbyMenu))
                 {
                     int64_t changed[8];
                     memcpy(changed, args, sizeof(changed));
                     changed[3] = reinterpret_cast<int64_t>(text);
                     return g_drawText(changed);
                 }
-                return g_drawText(args);
+                if (menu == kSessionListMenu) return g_drawText(args); // the lobby's other texts go on below (talking icons)
             }
             int64_t result = g_drawText(args);
             char format[24];
