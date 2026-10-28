@@ -2435,27 +2435,29 @@ namespace pdnet::gamepatches
         using CreateFile2Fn = HANDLE(WINAPI*)(LPCWSTR, DWORD, DWORD, DWORD, LPCREATEFILE2_EXTENDED_PARAMETERS);
         CreateFile2Fn g_createFile2 = nullptr;
 
-        constexpr int kSubH = 84;
-        constexpr float kPressDown = 36; // "PRESS ENTER TO START" (y 379..395, FUN_140279410) moves down to clear the word
+        constexpr int kSubH = 74, kLift = 10; // the word starts kLift rows up, over the logo's own bottom rows
+        constexpr float kPressDown = 60; // "PRESS ENTER TO START" (y 379..395, FUN_140279410) moves down to clear the word
+                                         // (no further: the title's offscreen target is 456 rows)
 
-        // The word in kLogoW x kSubH BGRA rows, centred: the finished lettering from rebirth_word.h (the logo's glow
-        // animation lights it through RebirthGlow).
-        std::vector<uint8_t> RebirthRows(const uint8_t*, int logoW)
+        // The word in kLogoW x (kLift + kSubH) BGRA rows, centred: the finished lettering from rebirth_word.h (the
+        // logo's glow animation lights it through RebirthGlow). The first kLift rows go over the logo's last ones.
+        std::vector<uint8_t> RebirthRows(int logoW)
         {
-            std::vector<uint8_t> rows(logoW * kSubH * 4, 0);
-            int ox = (logoW - kRebirthWordW) / 2, oy = (kSubH - kRebirthWordH) / 2;
+            constexpr int h = kLift + kSubH;
+            std::vector<uint8_t> rows(logoW * h * 4, 0);
+            int ox = (logoW - kRebirthWordW) / 2, oy = (h - kRebirthWordH) / 2;
             for (int y = 0; y < kRebirthWordH; ++y)
                 memcpy(&rows[((oy + y) * logoW + ox) * 4], &kRebirthWord[y * kRebirthWordW * 4], kRebirthWordW * 4);
             return rows;
         }
 
-        // The word's glow, like the logo's own: its silhouette widened by 2 px and softened, kGlowW x (kSubH + 16)
+        // The word's glow, like the logo's own: its silhouette widened by 2 px and softened, kGlowW x (word rows + 16)
         // with the word's rows at (8, 8).
         std::vector<uint8_t> RebirthGlow(const std::vector<uint8_t>& rows, int logoW, int glowW)
         {
-            int gh = kSubH + 16;
+            int wordH = static_cast<int>(rows.size() / (logoW * 4)), gh = wordH + 16;
             std::vector<uint8_t> a(glowW * gh, 0), b(glowW * gh, 0);
-            for (int y = 0; y < kSubH; ++y)
+            for (int y = 0; y < wordH; ++y)
                 for (int x = 0; x < logoW; ++x) a[(y + 8) * glowW + x + 8] = rows[(y * logoW + x) * 4 + 3];
             for (int y = 0; y < gh; ++y) // widen
                 for (int x = 0; x < glowW; ++x)
@@ -2508,19 +2510,32 @@ namespace pdnet::gamepatches
                 memcmp(&data[0x4b8], "logo_03.dds", 11) != 0)
                 return false;
 
-            std::vector<uint8_t> rows = RebirthRows(&data[kHeader + kLogo], kLogoW);
+            std::vector<uint8_t> rows = RebirthRows(kLogoW);
             std::vector<uint8_t> wordGlow = RebirthGlow(rows, kLogoW, kGlowTexW);
             std::vector<uint8_t> glow(kGlowExtra, 0);
             glow.insert(glow.end(), &data[kHeader + kGlow], &data[kHeader + kGlowEnd]);
             glow.resize(glow.size() + kGlowExtra, 0);
-            // The glow box starts 14 rows above the logo's, so the word (logo row kSubH + 96) is glow row kSubH + 110,
-            // and its glow (the word at row 8 of wordGlow) starts at kSubH + 102; what passes the texture's end is cut.
-            for (int y = 0; y < kSubH + 16 && kSubH + 102 + y < kGlowTexH + 2 * kSubH; ++y)
+            // The glow box starts 14 rows above the logo's, so the word (logo row kSubH + 96 - kLift) is glow row
+            // kSubH + 110 - kLift, and its glow (the word at row 8 of wordGlow) starts 8 above; past the end is cut.
+            const int glowAt = kSubH + 102 - kLift, glowRows = static_cast<int>(wordGlow.size() / kGlowTexW);
+            for (int y = 0; y < glowRows && glowAt + y < kGlowTexH + 2 * kSubH; ++y)
                 for (int x = 0; x < kGlowTexW; ++x)
                 {
-                    uint8_t& p = glow[(kSubH + 102 + y) * kGlowTexW + x];
+                    uint8_t& p = glow[(glowAt + y) * kGlowTexW + x];
                     p = (std::max)(p, wordGlow[y * kGlowTexW + x]);
                 }
+            // The word's first kLift rows over the logo's last ones (straight-alpha "over").
+            for (int y = 0; y < kLift; ++y)
+                for (int x = 0; x < kLogoW; ++x)
+                {
+                    const uint8_t* s = &rows[(y * kLogoW + x) * 4];
+                    uint8_t* p = &data[kHeader + kLogo + ((kLogoH - kLift + y) * kLogoW + x) * 4];
+                    int a = s[3], under = p[3] * (255 - a) / 255, all = a + under;
+                    if (!a) continue;
+                    for (int c = 0; c < 3; ++c) p[c] = static_cast<uint8_t>((s[c] * a + p[c] * under) / all);
+                    p[3] = static_cast<uint8_t>(all);
+                }
+            rows.erase(rows.begin(), rows.begin() + kLift * kLogoW * 4);
 
             std::vector<uint8_t> out(data.begin(), data.begin() + kHeader + kLogo);
             out.resize(out.size() + kExtra, 0);
