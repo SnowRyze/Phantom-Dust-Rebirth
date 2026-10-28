@@ -84,6 +84,9 @@ namespace pdnet::p2p
         std::mutex g_outLock;
         std::deque<Outgoing> g_out;
         std::vector<std::string> g_accept; // players to accept connections from ahead of their request (Expect; under g_outLock)
+        // Players whose direct connection gets no answer, to reconnect over Epic's relays (NoAnswer; under g_outLock).
+        std::vector<std::string> g_reroute;
+        bool g_relayForced = false; // EOS thread only
 
         std::mutex g_dispatchLock;
         std::condition_variable g_dispatchWake;
@@ -158,6 +161,33 @@ namespace pdnet::p2p
                 link->outBytes += n;
                 Queue({ link->peer, kGame, std::vector<uint8_t>(buf.begin(), buf.begin() + n) });
             }
+        }
+
+        // A player didn't answer. EOS can report a "direct" connection that carries nothing (2026-10-29: one pair of PCs
+        // never got a packet through, while forcing the relay on works). With p2p_relay=allow, this switches EOS to
+        // relays only for the rest of the game run and reconnects that player through them (done on the EOS thread,
+        // in Pump: relay settings only reach a connection when it is made again). Once per player per minute.
+        void NoAnswer(const std::string& peer, const wchar_t* what)
+        {
+            if (_wcsicmp(GetConfig().p2pRelay.c_str(), L"allow") != 0) return;
+            {
+                std::lock_guard guard(g_lock);
+                if (auto it = g_paths.find(peer); it != g_paths.end() && it->second.rfind(L"relayed", 0) == 0) return;
+            }
+            static std::mutex lock;
+            static std::map<std::string, ULONGLONG> last;
+            {
+                std::lock_guard guard(lock);
+                ULONGLONG& at = last[peer];
+                if (at && GetTickCount64() - at < 60000) return;
+                at = GetTickCount64();
+            }
+            Log(L"p2p: %S %s - reconnecting through Epic's relay", peer.substr(0, 8).c_str(), what);
+            {
+                std::lock_guard guard(g_outLock);
+                g_reroute.push_back(peer);
+            }
+            eos::Wake();
         }
 
         void Complete(net::Message&& m)
@@ -298,11 +328,32 @@ namespace pdnet::p2p
 
             // Send everything queued (after accepting the players Expect named).
             std::deque<Outgoing> out;
-            std::vector<std::string> accept;
+            std::vector<std::string> accept, reroute;
             {
                 std::lock_guard guard(g_outLock);
                 out.swap(g_out);
                 accept.swap(g_accept);
+                reroute.swap(g_reroute);
+            }
+            if (!reroute.empty() && !g_relayForced)
+            {
+                EOS_P2P_SetRelayControlOptions rc{ EOS_P2P_SETRELAYCONTROL_API_LATEST, EOS_ERelayControl::EOS_RC_ForceRelays };
+                EOS_EResult r = api.EOS_P2P_SetRelayControl(p2p, &rc);
+                g_relayForced = r == EOS_EResult::EOS_Success;
+                Log(L"p2p: relays forced for the rest of this game run%s", g_relayForced ? L"" : (L" - failed: " + Result(api, r)).c_str());
+            }
+            for (auto& peer : reroute)
+            {
+                EOS_ProductUserId id = api.EOS_ProductUserId_FromString(peer.c_str());
+                EOS_P2P_CloseConnectionOptions c{ EOS_P2P_CLOSECONNECTION_API_LATEST, me, id, Socket() };
+                api.EOS_P2P_CloseConnection(p2p, &c);
+                {
+                    std::lock_guard guard(g_lock);
+                    g_paths.erase(peer);
+                }
+                EOS_P2P_AcceptConnectionOptions a{ EOS_P2P_ACCEPTCONNECTION_API_LATEST, me, id, Socket() };
+                api.EOS_P2P_AcceptConnection(p2p, &a); // the next packet either way makes the connection anew
+                Log(L"p2p: connection to %S closed and accepted again, to be made through the relay", peer.substr(0, 8).c_str());
             }
             for (auto& peer : accept)
             {
@@ -459,6 +510,7 @@ namespace pdnet::p2p
                         if (link->rtts.size() > 1) jitter /= static_cast<int>(link->rtts.size() - 1);
                     }
                     int lost = link->pingsSent - static_cast<int>(link->rtts.size());
+                    if (link->pingsSent >= 4 && lost == link->pingsSent) NoAnswer(link->peer, L"answered none of the last pings");
                     Log(L"p2p: link %S %s | ping %d ms (%d-%d) jitter %d ms, %d/%d pings lost | game out %llu pkt %llu KB, in %llu pkt %llu KB",
                         link->peer.substr(0, 8).c_str(), path.c_str(), avg, lo, hi, jitter, lost, link->pingsSent,
                         link->outPackets.exchange(0), link->outBytes.exchange(0) / 1024, link->inPackets.exchange(0), link->inBytes.exchange(0) / 1024);
@@ -506,6 +558,7 @@ namespace pdnet::p2p
             ok = WaitForSingleObject(pending->event.get(), slice) == WAIT_OBJECT_0;
             waited += slice;
             if (!ok && waited < timeoutMs && sends == 1) Log(L"p2p: no answer from %S yet - sending the request again every %lu s", peer.substr(0, 8).c_str(), kResendMs / 1000);
+            if (!ok && waited < timeoutMs && sends == 3) NoAnswer(peer, L"didn't answer a request in 6 s");
         }
         RemovePending(nonce);
         if (ok)
@@ -537,8 +590,13 @@ namespace pdnet::p2p
         }
         std::thread([peer]
         {
-            int ms = Ping(peer, 20000);
-            Log(L"p2p: %S reached from this side %s", peer.substr(0, 8).c_str(), ms >= 0 ? (L"(ping " + std::to_wstring(ms) + L" ms)").c_str() : L"- no answer in 20 s");
+            int ms = Ping(peer, 8000);
+            if (ms < 0)
+            {
+                NoAnswer(peer, L"gave no answer in 8 s");
+                ms = Ping(peer, 20000);
+            }
+            Log(L"p2p: %S reached from this side %s", peer.substr(0, 8).c_str(), ms >= 0 ? (L"(ping " + std::to_wstring(ms) + L" ms)").c_str() : L"- no answer");
         }).detach();
     }
 
