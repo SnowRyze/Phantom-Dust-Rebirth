@@ -2109,7 +2109,7 @@ namespace pdnet::gamepatches
         }
 
         // Options > Send Log (main menu, menu 4): a seventh item in the OPTIONS list, after Keyboard, with its hint after
-        // Keyboard's. Picking an item runs the script's label "aMAIN_S<item>" (FUN_1402ab6b0 looks the name up, hashed
+        // Keyboard's (added as the list is built, before menu 4 counts as current). Picking an item runs the script's label "aMAIN_S<item>" (FUN_1402ab6b0 looks the name up, hashed
         // by FUN_1402847c0, in the script's label table); the script has no aMAIN_S6, so the game itself does nothing,
         // and HookedScriptEvent uploads the logs to log_webhook (discord::SendLogs) instead. The item's text says how
         // it went.
@@ -2121,12 +2121,14 @@ namespace pdnet::gamepatches
 
         bool LogItems(const char* added, int64_t* args, int64_t& result)
         {
-            if (!g_scriptEvent || CurrentMenu(MenuManager()) != kOptionsMenu) return false; // no item that can't work
+            // Only the Options scripts add $KEYBOARD items. No menu check: the list is built before menu 4 is current.
+            if (!g_scriptEvent) return false; // no item that can't work
             bool row = strcmp(added, "$KEYBOARD") == 0, hint = strcmp(added, "$KEYBOARD_HINT") == 0;
             if (!row && !hint) return false;
             result = g_addItem(args);
             int64_t item[8] = { reinterpret_cast<int64_t>(row ? g_logRowText : kLogHint) };
             g_addItem(item);
+            if (row) Log(L"gamepatch: Options > Send Log item added");
             return true;
         }
 
@@ -2152,7 +2154,7 @@ namespace pdnet::gamepatches
             static const HashFn hash = reinterpret_cast<HashFn>(At(0x1402847c0));
             static const auto sendLog = [] { int32_t h[2]; hash(h, "aMAIN_S6"); return std::make_pair(h[0], h[1]); }();
             int32_t h[2] = { -1, -1 };
-            if (name && CurrentMenu(MenuManager()) == kOptionsMenu)
+            if (name) // no script has a label of that name (checked 2026-10-29), so no menu check either
             {
                 hash(h, name);
                 if (h[0] == sendLog.first && h[1] == sendLog.second)
