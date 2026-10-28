@@ -1088,6 +1088,27 @@ namespace pdnet::gamepatches
             }
         }
 
+        // FUN_1402aa620 prepares every script right after it is read, before it runs. The watcher (MenuTextPatches) is
+        // 50 ms too late for texts used at once: the multiplayer menu types its "Xbox Live" header out on its first
+        // visit. So the rename also happens here. The function starts `test rcx,rcx / jz 0x1402aa7d8`: the trampoline
+        // replays the test, and the jump as an absolute one.
+        using PrepareFn = void (*)(uint8_t* script);
+        PrepareFn g_prepareScript = nullptr;
+        void HookedPrepareScript(uint8_t* script)
+        {
+            if (script) RenameXboxLive(script);
+            g_prepareScript(script);
+        }
+
+        void RenameAtLoad()
+        {
+            std::vector<uint8_t> start = { 0x48, 0x85, 0xC9, 0x0F, 0x84, 0xAF, 0x01, 0x00, 0x00 };
+            std::vector<uint8_t> replay = { 0x48, 0x85, 0xC9, 0x75, 0x0E, 0xFF, 0x25, 0x00, 0x00, 0x00, 0x00 }; // test; jnz +14; jmp [rip+0]
+            Put64(replay, reinterpret_cast<uint64_t>(At(0x1402aa7d8)));
+            g_prepareScript = reinterpret_cast<PrepareFn>(InlineHookBytes(0x1402aa620, start, replay, reinterpret_cast<void*>(&HookedPrepareScript), L"script texts at load"));
+            if (g_prepareScript) Log(L"gamepatch: Xbox Live texts are renamed Online as each script loads");
+        }
+
         // A new label longer than the old one ("OptiMatch" -> "Lobby Browser") can't be written in place. It is stored
         // in a longer text that gets a shorter replacement (`donor`: the item's description), right after that text's
         // new end, and the label's push-string instruction is pointed there. Returns 1 when the label shows `label`.
@@ -2670,7 +2691,8 @@ namespace pdnet::gamepatches
             if (GetConfig().shopMaxOut) ShopMaxOut();
             if (GetConfig().ratedLobbies) RatedLobbies();
             if (GetConfig().ratedLobbies && !g_drawText) WrapCommand<MenuCommandFn>(0x1403eefe0 + 23 * 8, 0x140207840, &HookedDrawText, g_drawText, L"session info rated text");
-            MenuTextPatches(GetConfig().ratedLobbies, GetConfig().scoreboard); // also "Xbox Live" -> "Online" everywhere
+            RenameAtLoad(); // "Xbox Live" -> "Online" before a script runs
+            MenuTextPatches(GetConfig().ratedLobbies, GetConfig().scoreboard); // also "Xbox Live" -> "Online" in scripts already loaded
             // The in-game Settings menu (what was Xbox Live Options): left / right on pdnet's rows.
             WrapCommand<NativeFn>(0x1403ddde0 + 3 * 8, 0x1400bde50, &HookedSettingFlag, g_settingFlag, L"no Cross Play option");
             WrapCommand<MenuCommandFn>(0x1403eefe0 + 37 * 8, 0x140207d50, &HookedPlaceWindow, g_placeWindow, L"settings window position");
