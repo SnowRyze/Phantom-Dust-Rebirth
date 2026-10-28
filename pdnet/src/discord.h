@@ -11,6 +11,11 @@ namespace pdnet::discord
     // POSTs {"content": text} to `url` now (blocking). Mentions are disabled, so names like "@everyone" don't ping anyone.
     bool PostNow(const std::wstring& url, const std::string& text);
 
+    // Options > Send Log: uploads LocalState\pdnet.log and the kit's pdlaunch.log (the last few MB of each, under
+    // Discord's upload limit) to log_webhook with `text` as the message (blocking). Returns "" when Discord took it,
+    // else a short reason for the menu row.
+    std::string SendLogs(const std::string& text);
+
     // A player name for a message: Discord markdown escaped, "Someone" if empty.
     std::string Name(const std::string& s);
 

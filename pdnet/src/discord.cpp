@@ -324,6 +324,95 @@ namespace pdnet::discord
         return status >= 200 && status < 300;
     }
 
+    namespace
+    {
+        // The last `max` bytes of a file (read while the game still writes it), from the start of a line.
+        std::string Tail(const std::wstring& path, size_t max)
+        {
+            HANDLE f = CreateFileW(path.c_str(), GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr, OPEN_EXISTING, 0, nullptr);
+            if (f == INVALID_HANDLE_VALUE) return {};
+            LARGE_INTEGER size{};
+            GetFileSizeEx(f, &size);
+            LARGE_INTEGER from{};
+            from.QuadPart = size.QuadPart > static_cast<LONGLONG>(max) ? size.QuadPart - static_cast<LONGLONG>(max) : 0;
+            SetFilePointerEx(f, from, nullptr, FILE_BEGIN);
+            std::string data(static_cast<size_t>(size.QuadPart - from.QuadPart), '\0');
+            DWORD got = 0;
+            if (!ReadFile(f, data.data(), static_cast<DWORD>(data.size()), &got, nullptr)) got = 0;
+            CloseHandle(f);
+            data.resize(got);
+            if (from.QuadPart > 0)
+                if (size_t line = data.find('\n'); line != std::string::npos) data.erase(0, line + 1);
+            return data;
+        }
+    }
+
+    std::string SendLogs(const std::string& text)
+    {
+        const std::wstring& url = GetConfig().logWebhook;
+        if (url.empty()) return "not set up (log_webhook)";
+        HMODULE self = nullptr;
+        GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT, reinterpret_cast<LPCWSTR>(&SendLogs), &self);
+        wchar_t module[MAX_PATH];
+        GetModuleFileNameW(self, module, MAX_PATH);
+        std::wstring kitDir = module;
+        kitDir = kitDir.substr(0, kitDir.find_last_of(L'\\') + 1);
+
+        wchar_t pc[MAX_COMPUTERNAME_LENGTH + 1] = L"PC";
+        DWORD pcLen = _countof(pc);
+        GetComputerNameW(pc, &pcLen);
+        SYSTEMTIME now;
+        GetLocalTime(&now);
+        char stamp[64];
+        sprintf_s(stamp, "%S-%04u%02u%02u-%02u%02u", pc, now.wYear, now.wMonth, now.wDay, now.wHour, now.wMinute);
+        // Discord takes 10 MB per message without a server boost.
+        std::pair<std::string, std::string> files[] = { { std::string("pdnet-log-") + stamp + ".txt", Tail(LocalStatePath() + L"\\pdnet.log", 8u << 20) },
+                                                        { std::string("pdlaunch-log-") + stamp + ".txt", Tail(kitDir + L"pdlaunch.log", 1u << 20) } };
+        if (files[0].second.empty()) return "no log yet";
+
+        const std::string boundary = "pdnet-log-boundary-7f3a9c";
+        std::string body = "--" + boundary + "\r\nContent-Disposition: form-data; name=\"payload_json\"\r\nContent-Type: application/json\r\n\r\n"
+                           "{\"content\":\"" + JsonEscape(text) + "\",\"allowed_mentions\":{\"parse\":[]}}\r\n";
+        int n = 0;
+        for (auto& [name, data] : files)
+        {
+            if (data.empty()) continue;
+            body += "--" + boundary + "\r\nContent-Disposition: form-data; name=\"files[" + std::to_string(n++) + "]\"; filename=\"" + name +
+                    "\"\r\nContent-Type: text/plain\r\n\r\n" + data + "\r\n";
+        }
+        body += "--" + boundary + "--\r\n";
+
+        URL_COMPONENTS parts{ sizeof(parts) };
+        wchar_t host[256], path[2048], extra[1024];
+        parts.lpszHostName = host;
+        parts.dwHostNameLength = _countof(host);
+        parts.lpszUrlPath = path;
+        parts.dwUrlPathLength = _countof(path);
+        parts.lpszExtraInfo = extra;
+        parts.dwExtraInfoLength = _countof(extra);
+        if (!WinHttpCrackUrl(url.c_str(), 0, 0, &parts)) return "log_webhook is not a valid URL";
+        std::wstring target = std::wstring(path) + extra;
+        std::wstring header = L"Content-Type: multipart/form-data; boundary=" + std::wstring(boundary.begin(), boundary.end()) + L"\r\n";
+        DWORD status = 0;
+        HINTERNET session = WinHttpOpen(L"pdnet/1", WINHTTP_ACCESS_TYPE_AUTOMATIC_PROXY, nullptr, nullptr, 0);
+        HINTERNET connect = session ? WinHttpConnect(session, host, parts.nPort, 0) : nullptr;
+        HINTERNET request = connect ? WinHttpOpenRequest(connect, L"POST", target.c_str(), nullptr, nullptr, nullptr, WINHTTP_FLAG_SECURE) : nullptr;
+        if (request && WinHttpSendRequest(request, header.c_str(), static_cast<DWORD>(-1), body.data(), static_cast<DWORD>(body.size()), static_cast<DWORD>(body.size()), 0) &&
+            WinHttpReceiveResponse(request, nullptr))
+        {
+            DWORD size = sizeof(status);
+            WinHttpQueryHeaders(request, WINHTTP_QUERY_STATUS_CODE | WINHTTP_QUERY_FLAG_NUMBER, nullptr, &status, &size, nullptr);
+        }
+        DWORD error = status ? 0 : GetLastError();
+        if (request) WinHttpCloseHandle(request);
+        if (connect) WinHttpCloseHandle(connect);
+        if (session) WinHttpCloseHandle(session);
+        Log(L"discord: log upload (%zu KB) -> %s", body.size() / 1024, status ? (L"HTTP " + std::to_wstring(status)).c_str() : (L"Discord not reached, error " + std::to_wstring(error)).c_str());
+        if (!status) return "Discord not reached";
+        if (status < 200 || status >= 300) return "Discord said HTTP " + std::to_string(status);
+        return "";
+    }
+
     std::string Name(const std::string& s)
     {
         std::string out;

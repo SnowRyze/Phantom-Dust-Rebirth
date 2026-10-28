@@ -3,6 +3,7 @@
 #include "config.h"
 #include "lobbies.h"
 #include "scores.h"
+#include "discord.h"
 #include "log.h"
 #include "rebirth_word.h"
 #include <fstream>
@@ -1259,6 +1260,7 @@ namespace pdnet::gamepatches
 
         bool SettingsItems(const char* added); // the in-game Settings rows (below)
         bool SoundItems(const char* added, int64_t* args, int64_t& result); // the Options > Sound rows (below)
+        bool LogItems(const char* added, int64_t* args, int64_t& result);   // Options > Send Log (below)
 
         int64_t HookedAddItem(int64_t* args)
         {
@@ -1279,6 +1281,7 @@ namespace pdnet::gamepatches
                         }
                     if (SettingsItems(text)) return 0; // replaced by the in-game Settings rows
                     if (int64_t result = 0; SoundItems(text, args, result)) return result; // followed by the Options > Sound rows
+                    if (int64_t result = 0; LogItems(text, args, result)) return result;   // followed by Send Log
                     return g_addItem(args);
                 }
             }
@@ -2105,6 +2108,62 @@ namespace pdnet::gamepatches
             return true;
         }
 
+        // Options > Send Log (main menu, menu 4): a seventh item in the OPTIONS list, after Keyboard, with its hint after
+        // Keyboard's. Picking an item runs the script's label "aMAIN_S<item>" (FUN_1402ab6b0 looks the name up, hashed
+        // by FUN_1402847c0, in the script's label table); the script has no aMAIN_S6, so the game itself does nothing,
+        // and HookedScriptEvent uploads the logs to log_webhook (discord::SendLogs) instead. The item's text says how
+        // it went.
+        char g_logRowText[96] = "Send Log";
+        const char* kLogHint = "Send this PC's game logs to the developers on Discord.";
+        std::atomic<bool> g_sendingLog{ false };
+        using ScriptEventFn = void (*)(const char* name);
+        ScriptEventFn g_scriptEvent = nullptr;
+
+        bool LogItems(const char* added, int64_t* args, int64_t& result)
+        {
+            if (!g_scriptEvent || CurrentMenu(MenuManager()) != kOptionsMenu) return false; // no item that can't work
+            bool row = strcmp(added, "$KEYBOARD") == 0, hint = strcmp(added, "$KEYBOARD_HINT") == 0;
+            if (!row && !hint) return false;
+            result = g_addItem(args);
+            int64_t item[8] = { reinterpret_cast<int64_t>(row ? g_logRowText : kLogHint) };
+            g_addItem(item);
+            return true;
+        }
+
+        void SendLog()
+        {
+            if (g_sendingLog.exchange(true)) return;
+            strcpy_s(g_logRowText, "Sending Log...");
+            Log(L"gamepatch: Options > Send Log picked");
+            std::thread([]
+            {
+                std::string text = "Log from **" + discord::Name(winrt::to_string(GetConfig().displayName)) + "** - " + BuildLabel();
+                std::string why = discord::SendLogs(text);
+                if (why.empty()) strcpy_s(g_logRowText, "Log Sent");
+                else sprintf_s(g_logRowText, "Log Not Sent: %s", why.c_str());
+                Log(L"gamepatch: Options > Send Log: %S", why.empty() ? "sent" : why.c_str());
+                g_sendingLog = false;
+            }).detach();
+        }
+
+        void HookedScriptEvent(const char* name)
+        {
+            using HashFn = void (*)(int32_t*, const char*);
+            static const HashFn hash = reinterpret_cast<HashFn>(At(0x1402847c0));
+            static const auto sendLog = [] { int32_t h[2]; hash(h, "aMAIN_S6"); return std::make_pair(h[0], h[1]); }();
+            int32_t h[2] = { -1, -1 };
+            if (name && CurrentMenu(MenuManager()) == kOptionsMenu)
+            {
+                hash(h, name);
+                if (h[0] == sendLog.first && h[1] == sendLog.second)
+                {
+                    SendLog();
+                    return;
+                }
+            }
+            g_scriptEvent(name);
+        }
+
         MenuCommandFn g_getOption = nullptr, g_setOption = nullptr, g_setState = nullptr, g_setState12 = nullptr;
         int64_t HookedGetOption(int64_t* args)
         {
@@ -2206,6 +2265,14 @@ namespace pdnet::gamepatches
                         WrapCommand<MenuCommandFn>(0x1403eefe0 + 12 * 8, 0x140207220, &HookedSetState12, g_setState12, L"Options > Sound state (12)");
             Log(L"gamepatch: Options > Sound: row %s, sounds %s (aura beeps %s%s)", rows ? L"ready" : L"not added",
                 g_sound2D && g_sound3D ? L"hooked" : L"NOT hooked", GetConfig().auraBeeps ? L"on" : L"off", GetConfig().soundLog ? L", sound_log on" : L"");
+
+            // FUN_1402ab6b0 starts with push rbx / sub rsp,40h / mov rax,[rip+...] (the stack cookie): replayed with
+            // the cookie's absolute address.
+            std::vector<uint8_t> startEvent = { 0x40, 0x53, 0x48, 0x83, 0xEC, 0x40, 0x48, 0x8B, 0x05, 0x3B, 0x8A, 0x12, 0x00 };
+            std::vector<uint8_t> replayEvent = { 0x40, 0x53, 0x48, 0x83, 0xEC, 0x40, 0x48, 0xA1 };
+            Put64(replayEvent, reinterpret_cast<uint64_t>(At(0x1403d40f8)));
+            g_scriptEvent = reinterpret_cast<ScriptEventFn>(InlineHookBytes(0x1402ab6b0, startEvent, replayEvent, reinterpret_cast<void*>(&HookedScriptEvent), L"script events"));
+            Log(L"gamepatch: Options > Send Log %s (log_webhook %s)", g_scriptEvent ? L"ready" : L"NOT added", GetConfig().logWebhook.empty() ? L"not set" : L"set");
         }
 
         // pdlaunch keeps the game at splash_volume while the title screen or intro is on (menu 7 playdatasel, 80, or no

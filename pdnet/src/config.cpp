@@ -85,6 +85,7 @@ namespace pdnet
                 else if (key == "nametag_debug") c.nametagDebug = _stricmp(value.c_str(), "deep") == 0 ? 2 : _stricmp(value.c_str(), "on") == 0 ? 1 : 0;
                 else if (key == "name_trace") c.nameTrace = _stricmp(value.c_str(), "memory") == 0 ? 1 : (_stricmp(value.c_str(), "draw") == 0 || _stricmp(value.c_str(), "on") == 0) ? 2 : 0;
                 else if (key == "discord_webhook") c.discordWebhook = std::wstring(value.begin(), value.end());
+                else if (key == "log_webhook") c.logWebhook = std::wstring(value.begin(), value.end());
                 else if (key == "discord_lobby_messages") c.discordLobbyMessages = _stricmp(value.c_str(), "off") != 0;
                 else if (key == "discord_player_messages") c.discordPlayerMessages = _stricmp(value.c_str(), "off") != 0;
                 else if (key == "splash_volume" && !value.empty()) c.splashVolume = (std::clamp)(std::stoi(value), 0, 100);
