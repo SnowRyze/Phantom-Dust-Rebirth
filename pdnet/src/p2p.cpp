@@ -13,6 +13,7 @@ namespace pdnet::p2p
     void SendControl(const std::string&, net::MsgType, uint32_t, const std::vector<uint8_t>&) {}
     bool Request(const std::string&, net::MsgType, const std::vector<uint8_t>&, uint32_t, net::Message&) { return false; }
     int Ping(const std::string&, uint32_t, std::vector<uint8_t>*) { return -1; }
+    void Expect(const std::string&) {}
     uint16_t OpenLink(const std::string&) { return 0; }
     void CloseLink(const std::string&) {}
 }
@@ -82,6 +83,7 @@ namespace pdnet::p2p
 
         std::mutex g_outLock;
         std::deque<Outgoing> g_out;
+        std::vector<std::string> g_accept; // players to accept connections from ahead of their request (Expect; under g_outLock)
 
         std::mutex g_dispatchLock;
         std::condition_variable g_dispatchWake;
@@ -294,11 +296,19 @@ namespace pdnet::p2p
                 initialized = true;
             }
 
-            // Send everything queued.
+            // Send everything queued (after accepting the players Expect named).
             std::deque<Outgoing> out;
+            std::vector<std::string> accept;
             {
                 std::lock_guard guard(g_outLock);
                 out.swap(g_out);
+                accept.swap(g_accept);
+            }
+            for (auto& peer : accept)
+            {
+                EOS_P2P_AcceptConnectionOptions a{ EOS_P2P_ACCEPTCONNECTION_API_LATEST, me, api.EOS_ProductUserId_FromString(peer.c_str()), Socket() };
+                EOS_EResult r = api.EOS_P2P_AcceptConnection(p2p, &a);
+                Log(L"p2p: %S is in the lobby - connection accepted ahead of its request%s", peer.substr(0, 8).c_str(), r == EOS_EResult::EOS_Success ? L"" : (L" (" + Result(api, r) + L")").c_str());
             }
             for (auto& o : out)
             {
@@ -504,6 +514,32 @@ namespace pdnet::p2p
             reply = pending->reply;
         }
         return ok;
+    }
+
+    // A player now in this PC's lobby: EOS only connects once the other side's "wants to connect" notice arrives
+    // through Epic, and when that is late or lost a join hangs (2026-10-28, joins between some PCs took 50 s or never
+    // came). So the connection is accepted ahead of the notice, and opened from this side too (a ping): either side's
+    // notice is then enough. Once per player per minute.
+    void Expect(const std::string& peer)
+    {
+        if (!Enabled() || peer.empty() || peer == winrt::to_string(eos::LocalUserId())) return;
+        static std::mutex lock;
+        static std::map<std::string, ULONGLONG> last;
+        {
+            std::lock_guard guard(lock);
+            ULONGLONG& at = last[peer];
+            if (at && GetTickCount64() - at < 60000) return;
+            at = GetTickCount64();
+        }
+        {
+            std::lock_guard guard(g_outLock);
+            g_accept.push_back(peer);
+        }
+        std::thread([peer]
+        {
+            int ms = Ping(peer, 20000);
+            Log(L"p2p: %S reached from this side %s", peer.substr(0, 8).c_str(), ms >= 0 ? (L"(ping " + std::to_wstring(ms) + L" ms)").c_str() : L"- no answer in 20 s");
+        }).detach();
     }
 
     int Ping(const std::string& peer, uint32_t timeoutMs, std::vector<uint8_t>* payload)
