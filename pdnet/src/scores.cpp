@@ -6,6 +6,7 @@
 #include "log.h"
 #include <future>
 #include <mutex>
+#include <set>
 
 #ifdef PDNET_NO_EOS
 
@@ -226,6 +227,7 @@ namespace pdnet::scores
         // Leaderboard records carry no names for device-id accounts: each player's display_name is kept in the
         // PlayerName stats (sent every session), so a renamed player shows their new name on the same entry.
         std::vector<std::string> unnamed;
+        std::set<std::string> nameless; // no PlayerName stats at all
         for (auto& r : ranks) if (r.name.empty()) unnamed.push_back(r.userId);
         if (!unnamed.empty())
         {
@@ -235,17 +237,20 @@ namespace pdnet::scores
                 if (r.name.empty())
                 {
                     auto it = names.find(r.userId);
+                    if (it == names.end() || it->second.empty()) nameless.insert(r.userId);
                     r.name = it != names.end() && !it->second.empty() ? it->second : "Player " + r.userId.substr(0, 6);
                 }
         }
-        // Entries taken off the boards (a game client can't delete another player's stats on EOS): by name, matched
-        // without case; the ranks below one move up.
+        // Entries taken off the boards; the ranks below one move up:
+        // - removed with the admin tool: all their stats zeroed, the name included (EOS keeps a 0 entry on the board).
+        //   They show up again, named, once they play again (pdnet sends the name every session).
+        // - by name, matched without case (before the admin tool existed).
         static const char* kHidden[] = { "phantomdust.online" };
         uint32_t hidden = 0;
         std::vector<Record> shown;
         for (auto& r : ranks)
         {
-            bool hide = false;
+            bool hide = r.score == 0 && nameless.count(r.userId);
             for (const char* name : kHidden) hide = hide || _stricmp(r.name.c_str(), name) == 0;
             if (hide && !r.me)
             {
