@@ -4,6 +4,7 @@
 #include "lobbies.h"
 #include "scores.h"
 #include "log.h"
+#include "rebirth_word.h"
 #include <fstream>
 #include <winrt/Windows.ApplicationModel.Core.h>
 #include <winrt/Windows.UI.Core.h>
@@ -2426,102 +2427,24 @@ namespace pdnet::gamepatches
         // then 13 textures; the "Phantom Dust" logo is the second (logo_02, 560x96 BGRA, rows of 560 pixels, at 0x4000)
         // and its glow the third (logo_03, 576x112 8-bit). When the game opens the file (CreateFile2, imported by
         // PDUWP.exe) it gets a copy instead, made once per start in LocalState\pdnet: both textures get kSubH rows below
-        // for the word, and as many empty rows on top (they are drawn centred, so the logo stays put); the header grows
-        // with them (heights at 0x60 / 0x7c, 0x38a / 0x39e and 0x4b0 / 0x4ec, later textures' offsets, the data size at
-        // 0x14). The word is pieced together from the logo's own letters (kRebirthPieces), shrunk to 3/4.
+        // for the word, and as many empty rows on top; the header grows with them (heights at 0x60 / 0x7c, 0x38a / 0x39e
+        // and 0x4b0 / 0x4ec, later textures' offsets, the data size at 0x14). The title draws both into fixed boxes
+        // (logo: y 153..249 in FUN_140279640, glow: y 139..251 in FUN_140278360, one texture row per pixel; each edge
+        // a float constant read only there), so those boxes grow by kSubH up and down too (TallerTitleBoxes), else the
+        // taller textures come out squashed. The word is the supplied lettering artwork (rebirth_word.h).
         using CreateFile2Fn = HANDLE(WINAPI*)(LPCWSTR, DWORD, DWORD, DWORD, LPCREATEFILE2_EXTENDED_PARAMETERS);
         CreateFile2Fn g_createFile2 = nullptr;
 
-        constexpr int kSubH = 48;
-        // Each letter is drawn on its own 72-row canvas from rectangles of the logo (logo rows; shear: pixels to the right
-        // per 10 rows), then loses its erase rectangles (inclusive), then goes next to the previous letter.
-        struct LetterPiece { int letter, sx0, sy0, sx1, sy1, dx, dy, shear; };
-        struct LetterErase { int letter, x0, y0, x1, y1; };
-        constexpr int kRebirthWidths[] = { 40, 16, 22, 9, 16, 22, 29 }, kLetterGap = 7;
-        constexpr LetterPiece kRebirthPieces[] = {
-            { 0, 340, 11, 352, 71, 0, 11, 0 }, { 0, 350, 11, 377, 21, 10, 11, 0 }, // R: the D's stem and top,
-            { 0, 365, 11, 378, 40, 25, 11, 0 }, { 0, 345, 62, 378, 71, 5, 35, 0 }, //    its right side closed by its foot,
-            { 0, 396, 40, 405, 68, 22, 42, 4 },                                     //    the u's right stem as the leg
-            { 1, 257, 36, 274, 69, 0, 36, 0 }, { 1, 240, 37, 253, 41, 2, 47, 0 },   // e: the o with the t's crossbar
-            { 2, 238, 44, 246, 62, 0, 17, 0 }, { 2, 152, 40, 161, 69, 0, 35, 0 },   // b: a tall stem (t above h)
-            { 2, 257, 36, 274, 69, 6, 36, 0 },                                      //    and the o
-            { 3, 386, 35, 395, 68, 0, 35, 0 }, { 3, 233, 37, 238, 42, 2, 27, 0 },   // i: the u's stem, a dot of crossbar
-            { 4, 205, 33, 227, 69, 0, 33, 0 },                                      // r: the n
-            { 5, 232, 29, 256, 69, 0, 29, 0 },                                      // t
-            { 6, 141, 15, 171, 70, 0, 15, 0 },                                      // h
-        };
-        constexpr LetterErase kRebirthErase[] = { { 1, 11, 52, 17, 60 }, { 4, 13, 45, 22, 69 } }; // e's opening, r without its stem
+        constexpr int kSubH = 64;
 
-        // straight-alpha BGRA "over"
-        void Over(uint8_t* p, const uint8_t* s)
+        // The word in kLogoW x kSubH BGRA rows, centred: the finished lettering from rebirth_word.h (the logo's glow
+        // animation lights it through RebirthGlow).
+        std::vector<uint8_t> RebirthRows(const uint8_t*, int logoW)
         {
-            int a = s[3];
-            if (!a) return;
-            int under = p[3] * (255 - a) / 255, out = a + under;
-            for (int c = 0; c < 3; ++c) p[c] = static_cast<uint8_t>((s[c] * a + p[c] * under) / out);
-            p[3] = static_cast<uint8_t>(out);
-        }
-
-        // The word in kLogoW x kSubH BGRA rows, centred.
-        std::vector<uint8_t> RebirthRows(const uint8_t* logo, int logoW)
-        {
-            constexpr int kH = 72;
-            int width = 4 + 12;
-            for (int w : kRebirthWidths) width += w + kLetterGap;
-            std::vector<uint8_t> canvas(width * kH * 4, 0);
-            int x = 2;
-            for (int letter = 0; letter < static_cast<int>(std::size(kRebirthWidths)); ++letter)
-            {
-                int gw = kRebirthWidths[letter] + 12;
-                std::vector<uint8_t> g(gw * kH * 4, 0);
-                for (const LetterPiece& p : kRebirthPieces)
-                {
-                    if (p.letter != letter) continue;
-                    for (int yy = 0; yy < p.sy1 - p.sy0; ++yy)
-                        for (int xx = 0; xx < p.sx1 - p.sx0; ++xx)
-                        {
-                            int dx = p.dx + xx + p.shear * yy / 10, dy = p.dy + yy;
-                            if (dx >= 0 && dx < gw && dy >= 0 && dy < kH)
-                                Over(&g[(dy * gw + dx) * 4], logo + ((p.sy0 + yy) * logoW + p.sx0 + xx) * 4);
-                        }
-                }
-                for (const LetterErase& e : kRebirthErase)
-                    if (e.letter == letter)
-                        for (int yy = e.y0; yy <= e.y1 && yy < kH; ++yy)
-                            for (int xx = e.x0; xx <= e.x1 && xx < gw; ++xx) memset(&g[(yy * gw + xx) * 4], 0, 4);
-                for (int yy = 0; yy < kH; ++yy)
-                    for (int xx = 0; xx < gw && x + xx < width; ++xx) Over(&canvas[(yy * width + x + xx) * 4], &g[(yy * gw + xx) * 4]);
-                x += kRebirthWidths[letter] + kLetterGap;
-            }
-            int x0 = width, y0 = kH, x1 = -1, y1 = -1; // what was drawn
-            for (int yy = 0; yy < kH; ++yy)
-                for (int xx = 0; xx < width; ++xx)
-                    if (canvas[(yy * width + xx) * 4 + 3])
-                        x0 = (std::min)(x0, xx), x1 = (std::max)(x1, xx), y0 = (std::min)(y0, yy), y1 = (std::max)(y1, yy);
             std::vector<uint8_t> rows(logoW * kSubH * 4, 0);
-            if (x1 < 0) return rows;
-            // 3/4 size, each pixel the average of the source area it covers (premultiplied by alpha).
-            int bw = x1 - x0 + 1, bh = y1 - y0 + 1, sw = bw * 3 / 4, sh = (std::min)(bh * 3 / 4, kSubH);
-            int ox = (logoW - sw) / 2, oy = (kSubH - sh) / 2;
-            for (int ty = 0; ty < sh; ++ty)
-                for (int tx = 0; tx < sw; ++tx)
-                {
-                    double fx0 = tx * 4.0 / 3, fx1 = fx0 + 4.0 / 3, fy0 = ty * 4.0 / 3, fy1 = fy0 + 4.0 / 3, sum[4] = {}, area = 0;
-                    for (int sy = static_cast<int>(fy0); sy < fy1 && sy < bh; ++sy)
-                        for (int sx = static_cast<int>(fx0); sx < fx1 && sx < bw; ++sx)
-                        {
-                            double cover = ((std::min)(fx1, sx + 1.0) - (std::max)(fx0, static_cast<double>(sx))) *
-                                           ((std::min)(fy1, sy + 1.0) - (std::max)(fy0, static_cast<double>(sy)));
-                            const uint8_t* s = &canvas[((y0 + sy) * width + x0 + sx) * 4];
-                            for (int c = 0; c < 3; ++c) sum[c] += s[c] * s[3] / 255.0 * cover;
-                            sum[3] += s[3] * cover;
-                            area += cover;
-                        }
-                    if (area <= 0 || sum[3] <= 0) continue;
-                    uint8_t* t = &rows[((oy + ty) * logoW + ox + tx) * 4];
-                    for (int c = 0; c < 3; ++c) t[c] = static_cast<uint8_t>((std::min)(255.0, sum[c] * 255.0 / sum[3]));
-                    t[3] = static_cast<uint8_t>((std::min)(255.0, sum[3] / area));
-                }
+            int ox = (logoW - kRebirthWordW) / 2, oy = (kSubH - kRebirthWordH) / 2;
+            for (int y = 0; y < kRebirthWordH; ++y)
+                memcpy(&rows[((oy + y) * logoW + ox) * 4], &kRebirthWord[y * kRebirthWordW * 4], kRebirthWordW * 4);
             return rows;
         }
 
@@ -2589,10 +2512,12 @@ namespace pdnet::gamepatches
             std::vector<uint8_t> glow(kGlowExtra, 0);
             glow.insert(glow.end(), &data[kHeader + kGlow], &data[kHeader + kGlowEnd]);
             glow.resize(glow.size() + kGlowExtra, 0);
-            for (int y = 0; y < kSubH + 16; ++y) // the word's rows start at logo row kSubH + 96, glow row kSubH + 104
+            // The glow box starts 14 rows above the logo's, so the word (logo row kSubH + 96) is glow row kSubH + 110,
+            // and its glow (the word at row 8 of wordGlow) starts at kSubH + 102; what passes the texture's end is cut.
+            for (int y = 0; y < kSubH + 16 && kSubH + 102 + y < kGlowTexH + 2 * kSubH; ++y)
                 for (int x = 0; x < kGlowTexW; ++x)
                 {
-                    uint8_t& p = glow[(kSubH + 96 + y) * kGlowTexW + x];
+                    uint8_t& p = glow[(kSubH + 102 + y) * kGlowTexW + x];
                     p = (std::max)(p, wordGlow[y * kGlowTexW + x]);
                 }
 
@@ -2618,6 +2543,24 @@ namespace pdnet::gamepatches
             CloseHandle(file);
             return ok;
         }
+
+        // The logo and glow boxes' top and bottom edges (see above), moved out by kSubH; only if all four are as expected.
+        bool TallerTitleBoxes()
+        {
+            struct Edge { uint64_t at; float was, now; };
+            constexpr Edge kEdges[] = { { 0x1402f80a8, 153.03125f, 153.03125f - kSubH }, { 0x1402f810c, 249.03125f, 249.03125f + kSubH },
+                                        { 0x1402f8090, 139.03125f, 139.03125f - kSubH }, { 0x1402f8114, 251.03125f, 251.03125f + kSubH } };
+            for (const Edge& e : kEdges)
+                if (*reinterpret_cast<const float*>(At(e.at)) != e.was) return false;
+            for (const Edge& e : kEdges)
+            {
+                std::vector<uint8_t> bytes(4);
+                memcpy(bytes.data(), &e.now, 4);
+                if (!Write(At(e.at), bytes)) return false;
+            }
+            return true;
+        }
+
         HANDLE WINAPI HookedCreateFile2(LPCWSTR name, DWORD access, DWORD share, DWORD disposition, LPCREATEFILE2_EXTENDED_PARAMETERS params)
         {
             size_t n = name ? wcslen(name) : 0;
@@ -2628,7 +2571,7 @@ namespace pdnet::gamepatches
                 std::call_once(once, [name]
                 {
                     std::wstring path = LocalStatePath() + L"\\pdnet\\FDLogo.alr";
-                    if (MakeTitleCopy(name, path)) copy = path;
+                    if (MakeTitleCopy(name, path) && TallerTitleBoxes()) copy = path;
                     Log(L"gamepatch: title screen %s", copy.empty() ? L"left as it is (logo file not as expected)" : L"reads \"Rebirth\"");
                 });
                 if (!copy.empty()) return g_createFile2(copy.c_str(), access, share, disposition, params);
