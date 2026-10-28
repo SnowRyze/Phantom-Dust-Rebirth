@@ -347,6 +347,8 @@ Controllers (2026-10-27, Experimental 40, untested beyond Xbox): the game reads 
 
 Kit layout (2026-10-27, from Experimental 39): Setup.bat alone at the top of the zip, everything else in a pdnet\ folder (README, the other .bat/.ps1 files, pdlaunch.exe, pdnet.dll, pdnet.ini, eos.ini, EOS SDK, xaudio2_9redist.dll, kit-version.txt). Setup.bat runs pdnet\setup.ps1; every script uses its own folder ($PSScriptRoot / %~dp0) and pdlaunch / pdnet look next to themselves, so the debugger command line and the icacls grant point at the pdnet folder. make-testkit.ps1 writes the zip entry by entry with forward-slash names (Compress-Archive and ZipFile.CreateFromDirectory on .NET Framework write backslashes), reads kit-version.txt from pdnet/ (or the top, older kits), and takes -Commit <kit27 commit> for the Source line. The active kit folder (pdnet.log "config: reading") is now <kit>\pdnet.
 
+Stable 8 (2026-10-28): Experimental 54 promoted by the user; tag stable-8 = kit27 d27fc7d (pdnet C7AB4121), on GitHub. Since Stable 7: Rated / Unrated in the lobby's SESSION INFO box, no Nametag Colours on/off row.
+
 Nametag colours toggle removed (2026-10-28, Experimental 54): the Settings row "Tag Colours" (nametag_colors on/off) is gone, from the config, the kit ini and the README too; nametags always use the three colour settings (White is one of the choices). An old nametag_colors line in an ini is ignored.
 
 Lobby SESSION INFO rating (2026-10-28, Experimental 53): in the lobby (menu 44) the SESSION INFO box's "Game Rule: <rule>" line now reads "<rule> (Rated)" / "(Unrated)", like the Lobby Browser's (HookedDrawText / RatedRuleText; the lobby's value from scores::RatedMatch, the browser's from the search results).
