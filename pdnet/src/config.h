@@ -47,6 +47,7 @@ namespace pdnet
         std::wstring discordWebhook;        // discord_webhook=<URL>: announce lobbies this PC hosts in a Discord channel (see discord.h)
         bool discordLobbyMessages = true;   // discord_lobby_messages=on|off: "opened" / "closed" messages
         bool discordPlayerMessages = true;  // discord_player_messages=on|off: "<name> joined / left" (and "full") messages
+        std::wstring logWebhook;            // log_webhook=<URL>: where Options > Send Log uploads this PC's logs (see discord.h)
         int splashVolume = 40;              // splash_volume=: % of the remembered volume from the start-up logos until the main menu (pdlaunch; the Settings menu shows it)
         bool auraBeeps = true;              // aura_beeps=on|off: the aura particles' beeping (Options > Sound shows it)
         bool moreControllers = true;        // more_controllers=on|off: PlayStation, Nintendo and other controllers, read by pdlaunch with SDL3 (see gamepads.cpp)
