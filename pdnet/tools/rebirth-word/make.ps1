@@ -1,6 +1,6 @@
 ﻿# Rebuilds pdnet\src\rebirth_word.h from rebirth-art.png (lettering on a painted checkerboard): keys the checker out,
 # trims, shrinks to -Height rows. Writes preview.png (the result over black, 3x) next to this script.
-param([int]$Height = 60)
+param([int]$Height = 80)
 $d = $PSScriptRoot
 Add-Type -AssemblyName System.Drawing
 Add-Type -Path "$d\Key.cs" -ReferencedAssemblies System.Drawing

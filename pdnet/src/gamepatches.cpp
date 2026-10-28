@@ -2435,7 +2435,8 @@ namespace pdnet::gamepatches
         using CreateFile2Fn = HANDLE(WINAPI*)(LPCWSTR, DWORD, DWORD, DWORD, LPCREATEFILE2_EXTENDED_PARAMETERS);
         CreateFile2Fn g_createFile2 = nullptr;
 
-        constexpr int kSubH = 64;
+        constexpr int kSubH = 84;
+        constexpr float kPressDown = 36; // "PRESS ENTER TO START" (y 379..395, FUN_140279410) moves down to clear the word
 
         // The word in kLogoW x kSubH BGRA rows, centred: the finished lettering from rebirth_word.h (the logo's glow
         // animation lights it through RebirthGlow).
@@ -2544,12 +2545,14 @@ namespace pdnet::gamepatches
             return ok;
         }
 
-        // The logo and glow boxes' top and bottom edges (see above), moved out by kSubH; only if all four are as expected.
+        // The logo and glow boxes' top and bottom edges (see above), moved out by kSubH, and "PRESS ENTER TO START"
+        // moved down (its edges also read only there); only if all are as expected.
         bool TallerTitleBoxes()
         {
             struct Edge { uint64_t at; float was, now; };
             constexpr Edge kEdges[] = { { 0x1402f80a8, 153.03125f, 153.03125f - kSubH }, { 0x1402f810c, 249.03125f, 249.03125f + kSubH },
-                                        { 0x1402f8090, 139.03125f, 139.03125f - kSubH }, { 0x1402f8114, 251.03125f, 251.03125f + kSubH } };
+                                        { 0x1402f8090, 139.03125f, 139.03125f - kSubH }, { 0x1402f8114, 251.03125f, 251.03125f + kSubH },
+                                        { 0x1402f8168, 379.03125f, 379.03125f + kPressDown }, { 0x1402f8170, 395.03125f, 395.03125f + kPressDown } };
             for (const Edge& e : kEdges)
                 if (*reinterpret_cast<const float*>(At(e.at)) != e.was) return false;
             for (const Edge& e : kEdges)
