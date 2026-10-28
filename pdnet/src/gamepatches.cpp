@@ -1046,6 +1046,48 @@ namespace pdnet::gamepatches
             }
         }
 
+        // "Xbox Live" -> "Online" in every text a menu script shows (pdnet replaces Xbox Live): screen headers, the main
+        // menu item and hint, pause-menu prompts, connection messages. Phrases first, so sentences still read; every
+        // replacement is shorter than what it replaces, so it is written in place. Returns how many texts changed.
+        int RenameXboxLive(uint8_t* script)
+        {
+            static const std::pair<const char*, const char*> kPhrases[] = {
+                { "Connection to Xbox Live", "Connection" }, { "go to\nXbox Live?", "go online?" }, { "new Xbox Live message", "new message" },
+                { "The Xbox Live service", "The service" },
+                { "Use Xbox Live to connect", "Connect" }, { " to Xbox Live", " online" }, { " on Xbox Live", " online" },
+                { " from Xbox Live", "" }, { " of Xbox Live", "" }, { "Xbox Live", "Online" }, { "XBOX LIVE", "ONLINE" },
+            };
+            __try
+            {
+                auto code = reinterpret_cast<uint32_t*>(script);
+                uint32_t labelsAt = code[1], strings = code[3];
+                if (code[0] != 0x20) labelsAt += 4, strings += 12; // loaded: offsets relative to their own field
+                if (labelsAt <= 0x20 || labelsAt > 0x40000 || strings < labelsAt || strings > 0x80000) return -1;
+                char* pool = reinterpret_cast<char*>(script + strings);
+                int done = 0;
+                for (uint32_t* w = code + 0x20 / 4; w < code + labelsAt / 4; ++w)
+                {
+                    if ((*w & 0xffff) != 0x0011) continue; // push string
+                    char* text = pool + (*w >> 16);
+                    bool changed = false;
+                    for (auto& [find, replace] : kPhrases)
+                        for (char* at; (at = strstr(text, find)) != nullptr;)
+                        {
+                            size_t f = strlen(find), r = strlen(replace);
+                            memcpy(at, replace, r);
+                            memmove(at + r, at + f, strlen(at + f) + 1);
+                            changed = true;
+                        }
+                    done += changed;
+                }
+                return done;
+            }
+            __except (EXCEPTION_EXECUTE_HANDLER)
+            {
+                return -1;
+            }
+        }
+
         // A new label longer than the old one ("OptiMatch" -> "Lobby Browser") can't be written in place. It is stored
         // in a longer text that gets a shorter replacement (`donor`: the item's description), right after that text's
         // new end, and the label's push-string instruction is pointed there. Returns 1 when the label shows `label`.
@@ -1190,6 +1232,7 @@ namespace pdnet::gamepatches
             { "Search for a game session with the Quick game rule.", "Join the first open game session you can play in." },
             { "Select game attributes, and then search for a game session.", "Choose search options, then pick a session." },
             { "Xbox Live Options", "Settings" },
+            { "Online Options", "Settings" }, // the script's text once RenameXboxLive got to it
             { "Display the Options menu.", "Your name, nametags, start-up volume and Discord posts." },
         };
 
@@ -1223,7 +1266,7 @@ namespace pdnet::gamepatches
         void SettingsScriptPatch(int menu, uint8_t* script, bool fresh); // the in-game Settings menu (below)
         void SettingsTick();
 
-        // Every menu script as it loads (menu table, 87 entries): the Rated texts, and the scoreboard list.
+        // Every menu script as it loads (menu table, 87 entries): the Rated texts, the scoreboard list, Xbox Live -> Online.
         void MenuTextPatches(bool rated, bool scoreboard)
         {
             std::thread([rated, scoreboard]
@@ -1247,6 +1290,7 @@ namespace pdnet::gamepatches
                             if (fresh && (texts > 0 || official > 0)) Log(L"gamepatch: menu %d: %d Rated text(s), %d Official Battle line(s) removed", m, texts, official);
                         }
                         SettingsScriptPatch(m, script, fresh);
+                        if (int renamed = RenameXboxLive(script); fresh && renamed > 0) Log(L"gamepatch: menu %d: %d Xbox Live text(s) now say Online", m, renamed);
                         if (scoreboard && m == kRankingMenu)
                         {
                             int patched = PatchScoreboardMenu(script);
@@ -1608,7 +1652,7 @@ namespace pdnet::gamepatches
             switch (row)
             {
             case kName: return "Left / right, then type a new name: Enter keeps it, Esc drops it.";
-            case kVoiceMode: return "Modern: the lobby's Mic option mutes only your mic. Classic: Voice Chat Off = no talking, no hearing.";
+            case kVoiceMode: return "Modern: Mic mutes only you. Classic: Off mutes everyone.";
             case kBodyTags: return "Defeated players keep their nametag (Tag Team; the host's applies).";
             case kTagColours: return "Off: every nametag in the game's white.";
             case kDeadColour: return "Nametag colour of a defeated player.";
@@ -1736,6 +1780,7 @@ namespace pdnet::gamepatches
 
         constexpr Relabel kSettingsTexts[] = {
             { "XBOX LIVE OPTIONS", "SETTINGS" },
+            { "ONLINE OPTIONS", "SETTINGS" }, // once RenameXboxLive got to it
         };
 
         int PatchSettingsScript(uint8_t* script)
@@ -1838,7 +1883,7 @@ namespace pdnet::gamepatches
         // A saves everything (a name being typed counts as entered), B cancels, and no other button reaches the screen.
         // The buttons come from g1 #37 (0x1402168a0, wrapped: the script reads them there; A is 0x1010, B 0x2020).
         // The kit's name on the main menu, under the game's own "Skill Update 1.40 applied" in the bottom-right corner:
-        // the first line of kit-version.txt next to pdnet ("PhantomDust-pdnet Experimental 29" -> "pdnet Experimental 29"),
+        // the first line of kit-version.txt next to pdnet ("PhantomDust-pdnet Experimental 29" -> "pdrebirth Experimental 29"),
         // drawn by HookedDrawText right after that line, one line lower and right-aligned the same way (\a580r).
         const char* BuildLabel()
         {
@@ -1857,7 +1902,7 @@ namespace pdnet::gamepatches
                 if (first.rfind("\xEF\xBB\xBF", 0) == 0) first.erase(0, 3);
                 constexpr const char* kPrefix = "PhantomDust-pdnet ";
                 if (first.rfind(kPrefix, 0) == 0) first.erase(0, strlen(kPrefix));
-                return "pdnet " + (first.empty() ? std::string("development build") : first);
+                return "pdrebirth " + (first.empty() ? std::string("development build") : first);
             }();
             return label.c_str();
         }
@@ -2370,7 +2415,7 @@ namespace pdnet::gamepatches
             if (GetConfig().shopMaxOut) ShopMaxOut();
             if (GetConfig().ratedLobbies) RatedLobbies();
             if (GetConfig().ratedLobbies && !g_drawText) WrapCommand<MenuCommandFn>(0x1403eefe0 + 23 * 8, 0x140207840, &HookedDrawText, g_drawText, L"session info rated text");
-            if (GetConfig().ratedLobbies || GetConfig().scoreboard) MenuTextPatches(GetConfig().ratedLobbies, GetConfig().scoreboard);
+            MenuTextPatches(GetConfig().ratedLobbies, GetConfig().scoreboard); // also "Xbox Live" -> "Online" everywhere
             // The in-game Settings menu (what was Xbox Live Options): left / right on pdnet's rows.
             WrapCommand<NativeFn>(0x1403ddde0 + 3 * 8, 0x1400bde50, &HookedSettingFlag, g_settingFlag, L"no Cross Play option");
             WrapCommand<MenuCommandFn>(0x1403eefe0 + 37 * 8, 0x140207d50, &HookedPlaceWindow, g_placeWindow, L"settings window position");
