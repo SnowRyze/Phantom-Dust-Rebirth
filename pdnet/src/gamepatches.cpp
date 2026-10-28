@@ -2108,20 +2108,20 @@ namespace pdnet::gamepatches
         }
 
         // Options > Send Log (main menu, menu 4): a seventh item in the OPTIONS list, after Keyboard, with its hint after
-        // Keyboard's (added as the list is built, before menu 4 counts as current). Picking an item runs the script's label "aMAIN_S<item>" (FUN_1402ab6b0 looks the name up, hashed
-        // by FUN_1402847c0, in the script's label table); the script has no aMAIN_S6, so the game itself does nothing,
-        // and HookedScriptEvent uploads the logs to log_webhook (discord::SendLogs) instead. The item's text says how
-        // it went.
+        // Keyboard's (added as the list is built, before menu 4 counts as current). Each frame the script hands its state
+        // to menu command 6 ("aMAIN"), which writes the name of the label to run for that frame's input at manager
+        // +0x1062c (FUN_140245f00: state + "_S<item>" when an item is picked). The script has no aMAIN_S6, so the game
+        // itself does nothing; HookedSetState sees that name and uploads the logs to log_webhook (discord::SendLogs).
+        // The item's text says how it went.
         char g_logRowText[96] = "Send Log";
         const char* kLogHint = "Send this PC's game logs to the developers on Discord.";
         std::atomic<bool> g_sendingLog{ false };
-        using ScriptEventFn = void (*)(const char* name);
-        ScriptEventFn g_scriptEvent = nullptr;
+        bool g_logItemReady = false; // menu command 6 is wrapped (SoundOptions)
 
         bool LogItems(const char* added, int64_t* args, int64_t& result)
         {
             // Only the Options scripts add $KEYBOARD items. No menu check: the list is built before menu 4 is current.
-            if (!g_scriptEvent) return false; // no item that can't work
+            if (!g_logItemReady) return false; // no item that can't work
             bool row = strcmp(added, "$KEYBOARD") == 0, hint = strcmp(added, "$KEYBOARD_HINT") == 0;
             if (!row && !hint) return false;
             result = g_addItem(args);
@@ -2147,22 +2147,19 @@ namespace pdnet::gamepatches
             }).detach();
         }
 
-        void HookedScriptEvent(const char* name)
+        // After menu command 6: the label this frame's input runs. `event` is that input (manager +0x10414, read before
+        // command 6; 100 + item for a pick), since the name stays from an earlier frame when there is none. No script
+        // has an aMAIN_S6 label (checked 2026-10-29).
+        void CheckSendLogPick(int32_t event)
         {
-            using HashFn = void (*)(int32_t*, const char*);
-            static const HashFn hash = reinterpret_cast<HashFn>(At(0x1402847c0));
-            static const auto sendLog = [] { int32_t h[2]; hash(h, "aMAIN_S6"); return std::make_pair(h[0], h[1]); }();
-            int32_t h[2] = { -1, -1 };
-            if (name) // no script has a label of that name (checked 2026-10-29), so no menu check either
-            {
-                hash(h, name);
-                if (h[0] == sendLog.first && h[1] == sendLog.second)
-                {
-                    SendLog();
-                    return;
-                }
-            }
-            g_scriptEvent(name);
+            int64_t manager = MenuManager();
+            if (event != 106 || !manager || CurrentMenu(manager) != kOptionsMenu) return;
+            char label[16];
+            if (!CopyString(reinterpret_cast<const char*>(manager + 0x1062c), label, sizeof(label)) || _stricmp(label, "aMAIN_S6") != 0) return;
+            static ULONGLONG last = 0;
+            if (GetTickCount64() - last < 3000) return;
+            last = GetTickCount64();
+            SendLog();
         }
 
         MenuCommandFn g_getOption = nullptr, g_setOption = nullptr, g_setState = nullptr, g_setState12 = nullptr;
@@ -2191,7 +2188,15 @@ namespace pdnet::gamepatches
             size_t n = strlen(state);
             g_soundWindow = n >= 4 && strcmp(state + n - 4, "SOUN") == 0;
         }
-        int64_t HookedSetState(int64_t* args) { NoteState(args); return g_setState(args); }
+        int64_t HookedSetState(int64_t* args)
+        {
+            NoteState(args);
+            int64_t manager = MenuManager();
+            int32_t event = manager ? *reinterpret_cast<int32_t*>(manager + 0x10414) : 0;
+            int64_t result = g_setState(args);
+            CheckSendLogPick(event);
+            return result;
+        }
         int64_t HookedSetState12(int64_t* args) { NoteState(args); return g_setState12(args); }
 
         // Every game sound starts in FUN_140240870 (2D) or FUN_140240a00 (3D, at a position): bank (edx), cue (r8d),
@@ -2266,14 +2271,8 @@ namespace pdnet::gamepatches
                         WrapCommand<MenuCommandFn>(0x1403eefe0 + 12 * 8, 0x140207220, &HookedSetState12, g_setState12, L"Options > Sound state (12)");
             Log(L"gamepatch: Options > Sound: row %s, sounds %s (aura beeps %s%s)", rows ? L"ready" : L"not added",
                 g_sound2D && g_sound3D ? L"hooked" : L"NOT hooked", GetConfig().auraBeeps ? L"on" : L"off", GetConfig().soundLog ? L", sound_log on" : L"");
-
-            // FUN_1402ab6b0 starts with push rbx / sub rsp,40h / mov rax,[rip+...] (the stack cookie): replayed with
-            // the cookie's absolute address.
-            std::vector<uint8_t> startEvent = { 0x40, 0x53, 0x48, 0x83, 0xEC, 0x40, 0x48, 0x8B, 0x05, 0x3B, 0x8A, 0x12, 0x00 };
-            std::vector<uint8_t> replayEvent = { 0x40, 0x53, 0x48, 0x83, 0xEC, 0x40, 0x48, 0xA1 };
-            Put64(replayEvent, reinterpret_cast<uint64_t>(At(0x1403d40f8)));
-            g_scriptEvent = reinterpret_cast<ScriptEventFn>(InlineHookBytes(0x1402ab6b0, startEvent, replayEvent, reinterpret_cast<void*>(&HookedScriptEvent), L"script events"));
-            Log(L"gamepatch: Options > Send Log %s (log_webhook %s)", g_scriptEvent ? L"ready" : L"NOT added", GetConfig().logWebhook.empty() ? L"not set" : L"set");
+            g_logItemReady = g_setState != nullptr;
+            Log(L"gamepatch: Options > Send Log %s (log_webhook %s)", g_logItemReady ? L"ready" : L"NOT added", GetConfig().logWebhook.empty() ? L"not set" : L"set");
         }
 
         // pdlaunch keeps the game at splash_volume while the title screen or intro is on (menu 7 playdatasel, 80, or no
