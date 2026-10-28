@@ -136,7 +136,14 @@ if ($Stage -ne 'B') {
         if ($line) { $Webhook = $line.Matches[0].Groups[1].Value.Trim() }
     }
     if ($Webhook -eq 'none') { $Webhook = '' }
+    # Options > Send Log's channel: log_webhook_url= in the same (untracked) lobbywatch.ini.
+    $logWebhook = ''
+    if (Test-Path $watchIni) {
+        $line = Select-String -Path $watchIni -Pattern '^log_webhook_url=(.+)$' | Select-Object -First 1
+        if ($line) { $logWebhook = $line.Matches[0].Groups[1].Value.Trim() }
+    }
     $ini = (Get-Content "$files\pdnet.ini" -Raw -Encoding UTF8) -replace '(?m)^discord_webhook=.*$', "discord_webhook=$Webhook"
+    $ini = $ini -replace '(?m)^log_webhook=.*$', "log_webhook=$logWebhook"
     foreach ($pair in $Set) {
         $key, $value = $pair -split '=', 2
         if ($ini -match "(?m)^$([regex]::Escape($key))=") { $ini = $ini -replace "(?m)^$([regex]::Escape($key))=.*$", "$key=$value" }
