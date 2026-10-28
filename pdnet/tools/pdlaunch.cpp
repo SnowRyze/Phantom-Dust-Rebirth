@@ -605,12 +605,8 @@ namespace
         size_t newline = note.find('\n');
         std::wstring url = Setting(L"discord_webhook", L"");
         if (newline == std::string::npos || url.empty()) return;
-        // Discord lobby posts turned off (in-game Settings or pdnet.ini): no "closed" edit either.
-        if (_wcsicmp(Setting(L"discord_lobby_messages", L"on").c_str(), L"off") == 0)
-        {
-            Log(L"discord: lobby posts are off - the lobby's message was left as it is");
-            return;
-        }
+        // The note exists only for a lobby whose host posted it (lobby posts on), so this edit follows that choice,
+        // not this PC's own setting: this PC may have taken the lobby over from that host.
         std::string message = note.substr(0, newline), text = note.substr(newline + 1);
 
         std::string body = "{\"content\":\"";

@@ -159,9 +159,9 @@ namespace pdnet::discord
                 std::lock_guard guard(g_queueLock);
                 g_messages.erase(job.lobbyId);
             }
-            // No note while Discord lobby posts are off: "closed" is a lobby post (a message can still exist when only
-            // player posts are on, since those edit the lobby's message).
-            ExitNote(job.closing || !job.alone || !GetConfig().discordLobbyMessages ? std::string() : message, job.closedText);
+            // A message exists only if the lobby's host posted "opened" (lobby posts on): its "closed" edit follows that
+            // choice, not this PC's own setting (this PC may have taken the lobby over).
+            ExitNote(job.closing || !job.alone ? std::string() : message, job.closedText);
         }
 
         // Queues the lobby's message as it should now read. A newer state replaces a queued one for the same lobby,
@@ -501,7 +501,8 @@ namespace pdnet::discord
             std::lock_guard guard(g_lock);
             auto it = g_lobbies.find(id);
             if (it == g_lobbies.end()) return;
-            if (lastMember && it->second.opened && GetConfig().discordLobbyMessages) text = Card(it->second, true);
+            // "closed" only edits the lobby's message if it has one (Send): whoever owns the lobby last marks it closed.
+            if (lastMember && it->second.opened) text = Card(it->second, true);
             g_lobbies.erase(it);
         }
         // Leaving with others still in: EOS hands the lobby to one of them, whose game edits the message from now on.
@@ -528,7 +529,7 @@ namespace pdnet::discord
             auto it = g_lobbies.find(l.id);
             Announced a = it != g_lobbies.end() ? it->second : Announced{ HostName(l), Members(l), true, Roster(l), ShortMatch(l), l.maxMembers };
             if (it != g_lobbies.end()) g_lobbies.erase(it);
-            if (!a.opened || !GetConfig().discordLobbyMessages) return;
+            if (!a.opened) return; // (an edit only: nothing is posted for a lobby without a message)
             text = Card(a, true);
         }
         // The message may have been posted by the old host: its id is in the lobby (PD_DISCORD).
