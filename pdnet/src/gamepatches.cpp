@@ -1904,7 +1904,7 @@ namespace pdnet::gamepatches
         // A saves everything (a name being typed counts as entered), B cancels, and no other button reaches the screen.
         // The buttons come from g1 #37 (0x1402168a0, wrapped: the script reads them there; A is 0x1010, B 0x2020).
         // The kit's name on the main menu, under the game's own "Skill Update 1.40 applied" in the bottom-right corner:
-        // the first line of kit-version.txt next to pdnet ("PhantomDust-pdnet Experimental 29" -> "pdrebirth Experimental 29"),
+        // the first line of kit-version.txt next to pdnet ("PhantomDust-pdnet Experimental 29" -> "Rebirth Experimental 29"),
         // drawn by HookedDrawText right after that line, one line lower and right-aligned the same way (\a580r).
         const char* BuildLabel()
         {
@@ -1923,7 +1923,7 @@ namespace pdnet::gamepatches
                 if (first.rfind("\xEF\xBB\xBF", 0) == 0) first.erase(0, 3);
                 constexpr const char* kPrefix = "PhantomDust-pdnet ";
                 if (first.rfind(kPrefix, 0) == 0) first.erase(0, strlen(kPrefix));
-                return "pdrebirth " + (first.empty() ? std::string("development build") : first);
+                return "Rebirth " + (first.empty() ? std::string("development build") : first);
             }();
             return label.c_str();
         }
