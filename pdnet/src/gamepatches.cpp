@@ -364,10 +364,9 @@ namespace pdnet::gamepatches
                 for (;;)
                 {
                     Sleep(100);
-                    // Read every pass: the in-game Settings menu can change them (nametag_colors=off: white for everyone).
-                    bool colours = GetConfig().nametagColors;
-                    uint64_t ally = twice(colours ? GetConfig().allyNametagColor : 0xffffffff), enemy = twice(colours ? GetConfig().enemyNametagColor : 0xffffffff);
-                    g_deadColour = twice(colours ? GetConfig().deadNametagColor : 0xffffffff);
+                    // Read every pass: the in-game Settings menu can change them (White is one of the colours).
+                    uint64_t ally = twice(GetConfig().allyNametagColor), enemy = twice(GetConfig().enemyNametagColor);
+                    g_deadColour = twice(GetConfig().deadNametagColor);
                     TeamView v{};
                     if (!ReadTeamView(v)) continue;
                     UpdateLeftPlayers(v);
@@ -1609,12 +1608,12 @@ namespace pdnet::gamepatches
         constexpr Colour kColours[] = { { "Yellow", 0xFFE600 }, { "Red", 0xFF5A5A }, { "Blue", 0x4FB4FF }, { "Green", 0x5AFF6E },
                                         { "Purple", 0xB46EFF }, { "Orange", 0xFFA03C }, { "Cyan", 0x3CF0FF }, { "Pink", 0xFF78C8 },
                                         { "White", 0xFFFFFF } };
-        enum SettingRow { kName, kVoiceMode, kBodyTags, kTagColours, kDeadColour, kAllyColour, kEnemyColour, kSplashVolume,
+        enum SettingRow { kName, kVoiceMode, kBodyTags, kDeadColour, kAllyColour, kEnemyColour, kSplashVolume,
                           kDiscordLobby, kDiscordPlayers, kSettingRows };
         char g_rowText[kSettingRows][80];
         char g_optionText[kSettingRows][96]; // the rows as the Options screen shows them (RefreshSettingRows)
         constexpr int kFirstOptionRow = 3;   // after Cross Play (1) and Voice Chat (2)
-        const char* kOptionLabels[kSettingRows] = { "Name", "Voice Mode", "Body Tags", "Tag Colours", "Dead Colour", "Ally Colour", "Foe Colour",
+        const char* kOptionLabels[kSettingRows] = { "Name", "Voice Mode", "Body Tags", "Dead Colour", "Ally Colour", "Foe Colour",
                                                     "Logo Volume", "Discord Lobby", "Discord Join" };
         std::atomic<bool> g_typingName{ false };
         std::atomic<bool> g_settingsDirty{ false }; // changed in the Settings screen since it opened or was last saved
@@ -1654,7 +1653,6 @@ namespace pdnet::gamepatches
             sprintf_s(g_rowText[kName], "Name: %s", name.c_str());
             sprintf_s(g_rowText[kVoiceMode], "Voice mode: %s", c.voiceClassic ? "Classic" : "Modern");
             sprintf_s(g_rowText[kBodyTags], "Nametags on bodies: %s", onOff(c.nametagsOnBodies));
-            sprintf_s(g_rowText[kTagColours], "Nametag colours: %s", onOff(c.nametagColors));
             sprintf_s(g_rowText[kDeadColour], "Dead colour: %s", ColourName(c.deadNametagColor).c_str());
             sprintf_s(g_rowText[kAllyColour], "Teammate colour: %s", ColourName(c.allyNametagColor).c_str());
             sprintf_s(g_rowText[kEnemyColour], "Opponent colour: %s", ColourName(c.enemyNametagColor).c_str());
@@ -1675,7 +1673,6 @@ namespace pdnet::gamepatches
             case kName: return "Left / right, then type a new name: Enter keeps it, Esc drops it.";
             case kVoiceMode: return "Modern: Mic mutes only you. Classic: Off mutes everyone.";
             case kBodyTags: return "Defeated players keep their nametag (Tag Team; the host's applies).";
-            case kTagColours: return "Off: every nametag in the game's white.";
             case kDeadColour: return "Nametag colour of a defeated player.";
             case kAllyColour: return "Nametag colour of your teammates (Tag Team).";
             case kEnemyColour: return "Nametag colour of your opponents.";
@@ -1761,7 +1758,6 @@ namespace pdnet::gamepatches
                 break;
             case kVoiceMode: c.voiceClassic = !c.voiceClassic; break;
             case kBodyTags: c.nametagsOnBodies = !c.nametagsOnBodies; UseOwnSettings(); break;
-            case kTagColours: c.nametagColors = !c.nametagColors; break;
             case kDeadColour: c.deadNametagColor = NextColour(c.deadNametagColor, direction); break;
             case kAllyColour: c.allyNametagColor = NextColour(c.allyNametagColor, direction); break;
             case kEnemyColour: c.enemyNametagColor = NextColour(c.enemyNametagColor, direction); break;
@@ -1867,7 +1863,7 @@ namespace pdnet::gamepatches
             auto onOff = [](bool on) { return std::string(on ? "on" : "off"); };
             auto hex = [](uint32_t argb) { char s[8]; sprintf_s(s, "%06X", argb & 0xFFFFFF); return std::string(s); };
             SaveSettings({ { "display_name", winrt::to_string(c.displayName) }, { "voice_mode", c.voiceClassic ? "classic" : "mic" },
-                           { "nametags_on_bodies", onOff(c.nametagsOnBodies) }, { "nametag_colors", onOff(c.nametagColors) },
+                           { "nametags_on_bodies", onOff(c.nametagsOnBodies) },
                            { "dead_nametag_color", hex(c.deadNametagColor) }, { "ally_nametag_color", hex(c.allyNametagColor) },
                            { "enemy_nametag_color", hex(c.enemyNametagColor) }, { "splash_volume", std::to_string(c.splashVolume) },
                            { "discord_lobby_messages", onOff(c.discordLobbyMessages) },
@@ -1880,7 +1876,7 @@ namespace pdnet::gamepatches
         {
             Config& c = EditableConfig();
             const Config& s = g_settingsSaved;
-            c.displayName = s.displayName; c.voiceClassic = s.voiceClassic; c.nametagsOnBodies = s.nametagsOnBodies; c.nametagColors = s.nametagColors;
+            c.displayName = s.displayName; c.voiceClassic = s.voiceClassic; c.nametagsOnBodies = s.nametagsOnBodies;
             c.deadNametagColor = s.deadNametagColor; c.allyNametagColor = s.allyNametagColor; c.enemyNametagColor = s.enemyNametagColor;
             c.splashVolume = s.splashVolume;
             c.discordLobbyMessages = s.discordLobbyMessages; c.discordPlayerMessages = s.discordPlayerMessages;
@@ -2687,7 +2683,7 @@ namespace pdnet::gamepatches
             g_bodyTags = GetConfig().nametagsOnBodies ? 1 : 0;
             if (NametagsOnBodies())
             {
-                DeadNametagColor(GetConfig().nametagColors ? GetConfig().deadNametagColor : 0xffffffff);
+                DeadNametagColor(GetConfig().deadNametagColor);
                 NametagColours();
                 TrackPlayDead();
             }
