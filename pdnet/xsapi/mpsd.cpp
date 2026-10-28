@@ -5,6 +5,7 @@
 #include "../src/config.h"
 #include "../src/gamepatches.h"
 #include "../src/scores.h"
+#include "../src/p2p.h"
 #include "nametrace.h"
 #include <winrt/Windows.Data.Json.h>
 #include <bcrypt.h>
@@ -973,6 +974,8 @@ namespace pdnet::mpsd
             {
                 discord::LobbyChanged(*lobby);
                 ApplyHostRules(*lobby);
+                for (auto& m : lobby->members) p2p::Expect(m.userId); // their connection is accepted before they ask
+
                 doc = FromLobby(*lobby, &*old);
             }
             if (lost || !doc.hostPresent) gamepatches::LobbyEnded();

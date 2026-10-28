@@ -32,6 +32,8 @@ namespace pdnet::p2p
     bool Request(const std::string& peer, net::MsgType type, const std::vector<uint8_t>& body, uint32_t timeoutMs, net::Message& reply);
     // Round trip in ms over the ping channel, or -1 on timeout. `payload` receives the peer's published QoS payload.
     int Ping(const std::string& peer, uint32_t timeoutMs, std::vector<uint8_t>* payload = nullptr);
+    // A player now in this PC's lobby: accept their connection ahead of Epic's notice and open it from this side too.
+    void Expect(const std::string& peer);
 
     // The local UDP port the game sends to for `peer` (opens the link if needed); 0 on failure.
     uint16_t OpenLink(const std::string& peer);
