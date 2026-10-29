@@ -134,52 +134,15 @@ public static class PdPlm
 $hr = [PdPlm]::Enable($pkg.PackageFullName, "`"$kit\pdlaunch.exe`"")
 if ($hr -ne 0) { Fail ('Windows refused to attach pdlaunch to Phantom Dust (HRESULT 0x{0:X8}).' -f $hr) }
 
-# Two things need administrator rights, asked for once:
-# - pdnet passes match traffic between the game and itself through sockets on this PC, which Windows blocks for
-#   Store-style apps unless they are exempted.
-# - The scheduled task "Phantom Dust clock": PCs whose clocks are a day or more apart can't connect in a match, so
-#   pdlaunch starts this task when the clock is an hour or more off. It runs as SYSTEM (which may set the clock) and
-#   sets it from the Date header of Epic's server, over HTTPS: the certificate is checked as usual, except that one
-#   outside its dates is accepted (a clock that far off makes every certificate look expired or not yet valid). The
-#   script is written to "C:\Program Files\Phantom Dust pdnet\clock.ps1", which only administrators can change (a
-#   file in the kit folder could be swapped by anyone, and would then run as SYSTEM). It can't be an -EncodedCommand
-#   in the task: Windows never starts an encoded command that makes a web request (2026-10-29, the task hung).
-#   Every signed-in user may start the task (read + execute in its security descriptor). Remove.bat deletes both.
-$clockFix = @'
-Add-Type -TypeDefinition 'using System.Net; using System.Net.Security; using System.Security.Cryptography.X509Certificates; public static class PdClockCert { public static bool Check(object s, X509Certificate c, X509Chain chain, SslPolicyErrors e) { if (e == SslPolicyErrors.None) return true; if (e != SslPolicyErrors.RemoteCertificateChainErrors) return false; foreach (var st in chain.ChainStatus) if (st.Status != X509ChainStatusFlags.NotTimeValid) return false; return true; } public static void Use() { ServicePointManager.ServerCertificateValidationCallback = Check; } }'
-[PdClockCert]::Use()
-[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
-$r = [Net.HttpWebRequest]::Create('https://api.epicgames.dev/'); $r.Proxy = $null; $r.Method = 'HEAD'; $r.AllowAutoRedirect = $false; $r.Timeout = 5000
-try { $resp = $r.GetResponse() } catch [Net.WebException] { $resp = $_.Exception.Response }
-$epic = [DateTime]::Parse($resp.Headers['Date']).ToUniversalTime()
-if ([Math]::Abs(([DateTime]::UtcNow - $epic).TotalSeconds) -gt 60) { Set-Date -Date $epic.ToLocalTime() | Out-Null }
-'@
-$admin = @"
-`$exempt = (Start-Process CheckNetIsolation.exe -Wait -PassThru -WindowStyle Hidden -ArgumentList 'LoopbackExempt -a -n=$($pkg.PackageFamilyName)').ExitCode
+# pdnet passes match traffic between the game and itself through sockets on this PC, which Windows blocks for
+# Store-style apps unless they are exempted. This needs administrator rights once.
+Write-Host "`nWindows will now ask for administrator permission, to let Phantom Dust use connections on this PC (needed for matches)."
 try {
-    `$dir = Join-Path `$env:ProgramFiles 'Phantom Dust pdnet'
-    New-Item -ItemType Directory -Force `$dir -ErrorAction Stop | Out-Null
-    [IO.File]::WriteAllText("`$dir\clock.ps1", [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('$([Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($clockFix)))')))
-    `$ps = "`$env:SystemRoot\System32\WindowsPowerShell\v1.0\powershell.exe"
-    `$action = New-ScheduledTaskAction -Execute `$ps -Argument "-NoProfile -NonInteractive -ExecutionPolicy Bypass -WindowStyle Hidden -File ```"`$dir\clock.ps1```""
-    `$principal = New-ScheduledTaskPrincipal -UserId 'SYSTEM' -LogonType ServiceAccount -RunLevel Highest
-    `$settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -ExecutionTimeLimit (New-TimeSpan -Minutes 2)
-    Register-ScheduledTask -TaskName 'Phantom Dust clock' -Action `$action -Principal `$principal -Settings `$settings -Force -ErrorAction Stop | Out-Null
-    `$service = New-Object -ComObject Schedule.Service; `$service.Connect()
-    `$service.GetFolder('\').GetTask('Phantom Dust clock').SetSecurityDescriptor('D:(A;;FA;;;BA)(A;;FA;;;SY)(A;;GRGX;;;AU)', 0)
-    `$clock = 0
-} catch { `$clock = 1 }
-exit (`$exempt -bor (`$clock -shl 8))
-"@
-Write-Host "`nWindows will now ask for administrator permission, to let Phantom Dust use connections on this PC (needed for matches)"
-Write-Host "and to let it set this PC's clock right when it is off (players whose clocks are far apart can't connect)."
-try {
-    $p = Start-Process powershell.exe -Verb RunAs -Wait -PassThru -WindowStyle Hidden -ArgumentList "-NoProfile -ExecutionPolicy Bypass -EncodedCommand $([Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($admin)))"
-    if ($p.ExitCode -band 0xff) { Write-Host "Warning: the local-connection exemption was not set (exit code $($p.ExitCode -band 0xff)). Lobbies will work, but matches may not connect; run Setup.bat again and allow it." -ForegroundColor Yellow }
-    if ($p.ExitCode -shr 8) { Write-Host 'Warning: the clock task was not set up; a wrong clock will not be fixed at game start.' -ForegroundColor Yellow }
-    if (-not $p.ExitCode) { Write-Host 'Done.' }
+    $p = Start-Process CheckNetIsolation.exe -Verb RunAs -Wait -PassThru -WindowStyle Hidden -ArgumentList "LoopbackExempt -a -n=$($pkg.PackageFamilyName)"
+    if ($p.ExitCode -ne 0) { throw "exit code $($p.ExitCode)" }
+    Write-Host 'Done.'
 }
-catch { Write-Host "Warning: administrator permission was not given ($_). Lobbies will work, but matches may not connect; run Setup.bat again and allow it." -ForegroundColor Yellow }
+catch { Write-Host "Warning: the local-connection exemption was not set ($_). Lobbies will work, but matches may not connect; run Setup.bat again and allow it." -ForegroundColor Yellow }
 
 # --- microphone (voice chat) ----------------------------------------------------------------------
 # Windows asks each Store-style app once before it may use the microphone (desktop programs, like games from other

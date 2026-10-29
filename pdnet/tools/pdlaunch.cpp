@@ -677,55 +677,31 @@ namespace
 
     // Two PCs whose clocks are more than about a day apart can't connect: EOS makes the connection, then nothing
     // passes through it, even over Epic's relay (2026-10-29: a tester PC 31 h ahead never reached one player and
-    // worked with others). So before pdnet (and EOS) start, a clock an hour or more off is set right by starting the
-    // scheduled task "Phantom Dust clock" (made by Setup.bat: it runs as SYSTEM and sets the clock from Epic's time;
-    // any user may start it). No question is asked: pdlaunch is a background process, so its own message box and any
-    // admin prompt it asks for open behind the full-screen game (Experimental 59-61). clock_check=off skips this.
-    void CheckClock()
+    // worked with others). Before pdnet (and EOS) start, this measures how far this PC's clock is from Epic's and
+    // leaves the seconds to add in LocalState\pdnet\clock-offset.txt; pdnet makes the EOS SDK see the corrected time
+    // (src\eosclock.h). The Windows clock is not changed: that needs administrator rights, and from here neither a
+    // message box nor an admin prompt shows over the full-screen game (Experimental 59-63 tried). clock_check=off: no
+    // offset, EOS uses the clock as it is.
+    void CheckClock(const std::wstring& localState)
     {
+        if (localState.empty()) return;
+        std::wstring dir = localState + L"\\pdnet", file = dir + L"\\clock-offset.txt";
+        DeleteFileW(file.c_str()); // from the last start
         if (_wcsicmp(Setting(L"clock_check", L"on").c_str(), L"off") == 0) return;
         long long behind = 0;
         if (!ClockBehind(behind))
         {
-            Log(L"clock: Epic's time not reached - not checked");
+            Log(L"clock: Epic's time not reached - EOS uses this PC's clock as it is");
             return;
+        }
+        CreateDirectoryW(dir.c_str(), nullptr);
+        if (FILE* f = nullptr; !_wfopen_s(&f, file.c_str(), L"wb") && f)
+        {
+            fprintf(f, "%lld\n", behind);
+            fclose(f);
         }
         long long off = behind < 0 ? -behind : behind;
-        if (off < 3600)
-        {
-            Log(L"clock: within %lld s of Epic's", off);
-            return;
-        }
-        Log(L"clock: %lld s %s Epic's - starting the \"Phantom Dust clock\" task", off, behind < 0 ? L"ahead of" : L"behind");
-        wchar_t command[] = L"schtasks.exe /run /tn \"Phantom Dust clock\"";
-        STARTUPINFOW si{ sizeof(si) };
-        si.dwFlags = STARTF_USESHOWWINDOW;
-        si.wShowWindow = SW_HIDE;
-        PROCESS_INFORMATION pi{};
-        DWORD exit = 1;
-        if (CreateProcessW(nullptr, command, nullptr, nullptr, FALSE, CREATE_NO_WINDOW, nullptr, nullptr, &si, &pi))
-        {
-            WaitForSingleObject(pi.hProcess, 10000);
-            GetExitCodeProcess(pi.hProcess, &exit);
-            CloseHandle(pi.hProcess);
-            CloseHandle(pi.hThread);
-        }
-        if (exit != 0)
-        {
-            Log(L"clock: the task didn't start (%lu) - run Setup.bat again to make it; the clock stays as it is", exit);
-            return;
-        }
-        for (int i = 0; i < 10; ++i) // the task takes a moment
-        {
-            Sleep(1000);
-            long long now = 0;
-            if (ClockBehind(now) && (now < 0 ? -now : now) < 60)
-            {
-                Log(L"clock: set right (now %lld s from Epic's)", now < 0 ? -now : now);
-                return;
-            }
-        }
-        Log(L"clock: still off after the task ran");
+        Log(L"clock: %lld s %s Epic's%s", off, behind < 0 ? L"ahead of" : L"behind", off >= 60 ? L" - pdnet gives EOS the corrected time" : L"");
     }
 
     // The game's LocalState folder (pdnet builds the same path, src\log.cpp).
@@ -783,10 +759,10 @@ int wmain(int argc, wchar_t** argv)
     }
 
     Log(L"game started (pid %lu, main thread %lu)", pid, tid);
-    CheckClock(); // before pdnet starts EOS: a fixed clock counts from this game run
     HANDLE game = OpenProcess(SYNCHRONIZE | PROCESS_QUERY_LIMITED_INFORMATION, FALSE, pid);
     std::wstring localState = game ? GameLocalState(game) : std::wstring();
     if (!localState.empty()) DeleteFileW(PastTitleFile(localState).c_str()); // from the last start: pdnet writes it again
+    CheckClock(localState); // before pdnet starts EOS, which reads the offset
     KeepIdentity(localState, true); // before the game runs: the same player as always
     std::thread controllers(ReadControllers, pid, localState); // until the game exits
     bool injected = Inject(pid);
