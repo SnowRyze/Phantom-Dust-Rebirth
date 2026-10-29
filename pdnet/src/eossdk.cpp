@@ -2,6 +2,7 @@
 #ifndef PDNET_NO_EOS
 #include "eossdk.h"
 #include "credstore.h"
+#include "eosclock.h"
 #include "config.h"
 #include "log.h"
 #include <fstream>
@@ -65,6 +66,7 @@ namespace pdnet::eossdk
         std::wstring eosDir = LocalStatePath() + L"\\eos";
         CreateDirectoryW(eosDir.c_str(), nullptr);
         RedirectCredentialStore(api.module, eosDir + L"\\credentials");
+        CorrectEosClock(api.module); // before EOS_Initialize: a PC clock far off breaks P2P links (eosclock.h)
         return &api;
     }
 
