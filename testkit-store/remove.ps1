@@ -23,7 +23,8 @@ $hr = [PdPlmOff]::Disable($pkg.PackageFullName)
 if ($hr -ne 0) { Write-Host ('Windows reported 0x{0:X8}.' -f $hr) -ForegroundColor Yellow }
 Write-Host 'Windows will ask for administrator permission to remove the local-connection exemption and the clock task Setup.bat added.'
 $admin = "Start-Process CheckNetIsolation.exe -Wait -WindowStyle Hidden -ArgumentList 'LoopbackExempt -d -n=$($pkg.PackageFamilyName)'; " +
-         "Unregister-ScheduledTask -TaskName 'Phantom Dust clock' -Confirm:`$false -ErrorAction SilentlyContinue"
+         "Unregister-ScheduledTask -TaskName 'Phantom Dust clock' -Confirm:`$false -ErrorAction SilentlyContinue; " +
+         "Remove-Item (Join-Path `$env:ProgramFiles 'Phantom Dust pdnet') -Recurse -Force -ErrorAction SilentlyContinue"
 try { Start-Process powershell.exe -Verb RunAs -Wait -WindowStyle Hidden -ArgumentList "-NoProfile -ExecutionPolicy Bypass -EncodedCommand $([Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($admin)))" }
 catch { Write-Host "Skipped ($_). It is harmless to leave." }
 # Microphone permission: back to what it was before Setup.bat allowed it.

@@ -140,9 +140,11 @@ if ($hr -ne 0) { Fail ('Windows refused to attach pdlaunch to Phantom Dust (HRES
 # - The scheduled task "Phantom Dust clock": PCs whose clocks are a day or more apart can't connect in a match, so
 #   pdlaunch starts this task when the clock is an hour or more off. It runs as SYSTEM (which may set the clock) and
 #   sets it from the Date header of Epic's server, over HTTPS: the certificate is checked as usual, except that one
-#   outside its dates is accepted (a clock that far off makes every certificate look expired or not yet valid). Its
-#   commands are inside the task itself, not a file in the kit folder, which anyone could change. Every signed-in
-#   user may start it (read + execute in the task's security descriptor). Remove.bat deletes it.
+#   outside its dates is accepted (a clock that far off makes every certificate look expired or not yet valid). The
+#   script is written to "C:\Program Files\Phantom Dust pdnet\clock.ps1", which only administrators can change (a
+#   file in the kit folder could be swapped by anyone, and would then run as SYSTEM). It can't be an -EncodedCommand
+#   in the task: Windows never starts an encoded command that makes a web request (2026-10-29, the task hung).
+#   Every signed-in user may start the task (read + execute in its security descriptor). Remove.bat deletes both.
 $clockFix = @'
 Add-Type -TypeDefinition 'using System.Net; using System.Net.Security; using System.Security.Cryptography.X509Certificates; public static class PdClockCert { public static bool Check(object s, X509Certificate c, X509Chain chain, SslPolicyErrors e) { if (e == SslPolicyErrors.None) return true; if (e != SslPolicyErrors.RemoteCertificateChainErrors) return false; foreach (var st in chain.ChainStatus) if (st.Status != X509ChainStatusFlags.NotTimeValid) return false; return true; } public static void Use() { ServicePointManager.ServerCertificateValidationCallback = Check; } }'
 [PdClockCert]::Use()
@@ -155,8 +157,11 @@ if ([Math]::Abs(([DateTime]::UtcNow - $epic).TotalSeconds) -gt 60) { Set-Date -D
 $admin = @"
 `$exempt = (Start-Process CheckNetIsolation.exe -Wait -PassThru -WindowStyle Hidden -ArgumentList 'LoopbackExempt -a -n=$($pkg.PackageFamilyName)').ExitCode
 try {
+    `$dir = Join-Path `$env:ProgramFiles 'Phantom Dust pdnet'
+    New-Item -ItemType Directory -Force `$dir -ErrorAction Stop | Out-Null
+    [IO.File]::WriteAllText("`$dir\clock.ps1", [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('$([Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($clockFix)))')))
     `$ps = "`$env:SystemRoot\System32\WindowsPowerShell\v1.0\powershell.exe"
-    `$action = New-ScheduledTaskAction -Execute `$ps -Argument '-NoProfile -NonInteractive -WindowStyle Hidden -EncodedCommand $([Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($clockFix)))'
+    `$action = New-ScheduledTaskAction -Execute `$ps -Argument "-NoProfile -NonInteractive -ExecutionPolicy Bypass -WindowStyle Hidden -File ```"`$dir\clock.ps1```""
     `$principal = New-ScheduledTaskPrincipal -UserId 'SYSTEM' -LogonType ServiceAccount -RunLevel Highest
     `$settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -ExecutionTimeLimit (New-TimeSpan -Minutes 2)
     Register-ScheduledTask -TaskName 'Phantom Dust clock' -Action `$action -Principal `$principal -Settings `$settings -Force -ErrorAction Stop | Out-Null
