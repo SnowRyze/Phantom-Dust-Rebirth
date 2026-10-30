@@ -2345,15 +2345,22 @@ namespace pdnet::gamepatches
                 }
                 if (menu == kSessionListMenu) return g_drawText(args); // the lobby's other texts go on below (talking icons)
             }
-            int64_t result = g_drawText(args);
             char format[24];
             if (args && CopyString(reinterpret_cast<const char*>(args[2]), format, sizeof(format)) && strncmp(format, "\a580rSkill Update", 17) == 0)
             {
+                // Both lines kRaise px higher than the game's own spot: the version line under it ran into the main
+                // menu's hint line (the item descriptions, left of it on the same row; 2026-10-29).
+                constexpr int64_t kRaise = 24;
+                int64_t skill[8];
+                memcpy(skill, args, sizeof(skill));
+                skill[1] -= kRaise;
+                int64_t result = g_drawText(skill);
                 static std::string line = std::string("\a580r") + BuildLabel();
-                int64_t label[8] = { args[0], args[1] + 20, reinterpret_cast<int64_t>(line.c_str()) };
+                int64_t label[8] = { args[0], skill[1] + 20, reinterpret_cast<int64_t>(line.c_str()) };
                 g_drawText(label);
                 return result;
             }
+            int64_t result = g_drawText(args);
             int icon = GetConfig().voiceTalkIcon;
             if (!args || icon < 0 || icon >= kMnetSprites || !g_drawSprite || CurrentMenu(MenuManager()) != kLobbyMenu) return result;
             int indent = NameIndent(reinterpret_cast<const char*>(args[2]));
