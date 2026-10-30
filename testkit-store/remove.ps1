@@ -21,8 +21,10 @@ if (-not $pkg) { Write-Host 'Phantom Dust is not installed; nothing to undo.'; R
 if (Get-Process PDUWP -ErrorAction SilentlyContinue) { Write-Host 'Close Phantom Dust first.' -ForegroundColor Red; Read-Host 'Press Enter to close'; exit 1 }
 $hr = [PdPlmOff]::Disable($pkg.PackageFullName)
 if ($hr -ne 0) { Write-Host ('Windows reported 0x{0:X8}.' -f $hr) -ForegroundColor Yellow }
-Write-Host 'Windows will ask for administrator permission to remove the local-connection exemption store-setup added.'
-try { Start-Process CheckNetIsolation.exe -Verb RunAs -Wait -WindowStyle Hidden -ArgumentList "LoopbackExempt -d -n=$($pkg.PackageFamilyName)" }
+Write-Host 'Windows will ask for administrator permission to remove the local-connection exemption and the clock task Setup.bat added.'
+$admin = "Start-Process CheckNetIsolation.exe -Wait -WindowStyle Hidden -ArgumentList 'LoopbackExempt -d -n=$($pkg.PackageFamilyName)'; " +
+         "Unregister-ScheduledTask -TaskName 'Phantom Dust clock' -Confirm:`$false -ErrorAction SilentlyContinue"
+try { Start-Process powershell.exe -Verb RunAs -Wait -WindowStyle Hidden -ArgumentList "-NoProfile -ExecutionPolicy Bypass -EncodedCommand $([Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($admin)))" }
 catch { Write-Host "Skipped ($_). It is harmless to leave." }
 # Microphone permission: back to what it was before Setup.bat allowed it.
 $before = Join-Path $PSScriptRoot 'mic-permission-before.txt'
