@@ -30,6 +30,11 @@ For online play the kit also needs the EOS client settings and, optionally, the 
 
 Without them `build.bat` still builds and says what is missing.
 
+### Linux
+
+`build-linux.sh` builds pdnet.dll on Linux with clang-cl and lld-link, for running the game under wine-uwp. Its header
+lists what it needs (xwin's Windows SDK, a C++/WinRT projection, Epic's SDK). Contributed by DeadMan009.
+
 ### Numbered kits
 
 - `build.bat experimental "what changed"` also saves the kit as the next `PhantomDust-pdnet Experimental <N>.zip`
@@ -45,6 +50,7 @@ Without them `build.bat` still builds and says what is missing.
 | `launcher\` | `pdlaunch.exe`, which loads pdnet into the game and handles volume, controllers and the clock check |
 | `kit\` | everything in a kit besides the built files: `Setup.bat`, the scripts, `README.txt`, `pdnet.ini` |
 | `deps\` | SDL3 (controllers, in the repository) and Epic's SDK (you add it) |
+| `build-linux.sh` | the Linux build (see above) |
 | `tools\` | `build.ps1` (what `build.bat` runs), `rebirth-word\` (the title lettering), `old\` (earlier scripts and test kits) |
 | `docs\` | early planning notes |
 | `HANDOFF.md` | the full development log: how everything works and why |
