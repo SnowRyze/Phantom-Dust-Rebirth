@@ -2504,6 +2504,7 @@ namespace pdnet::gamepatches
         CreateFile2Fn g_createFile2 = nullptr;
 
         constexpr int kSubH = 82, kLift = 10; // the word starts kLift rows up, over the logo's own bottom rows
+        constexpr float kLogoUp = 24; // the logo, its glow and the word move up together, for room above PRESS ENTER (2026-10-30)
         constexpr float kPressDown = 60; // "PRESS ENTER TO START" (y 379..395, FUN_140279410) moves down to clear the word
                                          // (no further: the title's offscreen target is 456 rows)
 
@@ -2633,8 +2634,8 @@ namespace pdnet::gamepatches
         bool TallerTitleBoxes()
         {
             struct Edge { uint64_t at; float was, now; };
-            constexpr Edge kEdges[] = { { 0x1402f80a8, 153.03125f, 153.03125f - kSubH }, { 0x1402f810c, 249.03125f, 249.03125f + kSubH },
-                                        { 0x1402f8090, 139.03125f, 139.03125f - kSubH }, { 0x1402f8114, 251.03125f, 251.03125f + kSubH },
+            constexpr Edge kEdges[] = { { 0x1402f80a8, 153.03125f, 153.03125f - kSubH - kLogoUp }, { 0x1402f810c, 249.03125f, 249.03125f + kSubH - kLogoUp },
+                                        { 0x1402f8090, 139.03125f, 139.03125f - kSubH - kLogoUp }, { 0x1402f8114, 251.03125f, 251.03125f + kSubH - kLogoUp },
                                         { 0x1402f8168, 379.03125f, 379.03125f + kPressDown }, { 0x1402f8170, 395.03125f, 395.03125f + kPressDown } };
             for (const Edge& e : kEdges)
                 if (*reinterpret_cast<const float*>(At(e.at)) != e.was) return false;
