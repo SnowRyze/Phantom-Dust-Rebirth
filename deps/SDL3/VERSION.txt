@@ -1,0 +1,1 @@
+﻿SDL 3.4.18 (official Windows release, include + x64 DLL). pdlaunch loads SDL3.dll at run time; only the headers are used to build.

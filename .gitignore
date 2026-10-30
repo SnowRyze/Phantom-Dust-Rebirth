@@ -1,16 +1,21 @@
-original/
+# What build.bat makes
+out/
+
+# Your own files: never in git
+private/
+deps/eos-sdk/
 backup/
-pdnet/build/
-pdnet/build-*/
+original/
+
+# Secrets, wherever they end up
+eos.ini
+eos.local.ini
+eos.tester.ini
+links.ini
+
+# Compiler leftovers
 *.obj
 *.pdb
 *.ilk
 *.exp
 *.lib
-pdnet/build*/
-eos.local.ini
-pdnet/xsapi/gen/
-pdnet/xsapi/gen-component/
-pdnet/build-*.log
-pdnet/tools/out/
-eos.tester.ini

@@ -2,7 +2,22 @@
 
 Written 2026-10-17 by the first Claude Code session, updated by a second session (source repair and test peer),
 and updated again on 2026-10-18 and 2026-10-19 (EOS, Xbox-free mode). See Â§10 and `git log` in `_netmod`.
-Read next: [`EOS_PLAN.md`](EOS_PLAN.md) (the current direction, with detailed progress) and [`MODDING_PLAN.md`](MODDING_PLAN.md) (original design and research).
+Read next: [`docs/EOS_PLAN.md`](docs/EOS_PLAN.md) (the current direction, with detailed progress) and [`docs/MODDING_PLAN.md`](docs/MODDING_PLAN.md) (original design and research).
+
+**Repository layout and building (from 2026-10-30; older notes below use the old paths).** The user couldn't build a
+fresh clone (it needed Python, files from the game install and folders on the developer's PC), so the repository was
+reorganised. Old path -> new path: `pdnet\src` -> `src\`, `pdnet\xsapi` -> `xsapi\` (with `gen\` now committed, so
+`generate.py` never has to run), `pdnet\tools\pdlaunch.cpp` -> `launcher\`, `testkit-store\` -> `kit\` (Setup.bat at
+the top, the rest in `kit\pdnet\`) plus `testkit-stagec\pdnet.ini` -> `kit\pdnet\pdnet.ini`, `pdnet\tools\rebirth-word`
+-> `tools\rebirth-word`, `kit-counter.txt` -> `tools\`, the old notes -> `docs\`, and everything outdated
+(`pdnet\build.cmd`, `build-pdlaunch.cmd`, `make-testkit.ps1`, lobbytool, the stage A-C test kits, the top-level dev
+scripts) -> `tools\old\`. **One `build.bat`** (running `tools\build.ps1`) builds pdnet.dll and pdlaunch.exe into `out\`
+and makes `out\kit` and `out\PhantomDust-pdnet.zip`. `build.bat experimental "notes"` also saves the next numbered
+Experimental zip, and `build.bat promote N` makes a Stable. It needs Visual Studio's C++ tools and Epic's SDK in
+`deps\eos-sdk` (each user downloads that, because of its license; on the developer PC it is a junction to the SDK
+download). SDL3 is in `deps\SDL3`. Secrets live in `private\` (git-ignored): `eos.tester.ini` (the kit's eos.ini),
+`eos.local.ini` and `links.ini` (discord_webhook / log_webhook / discord_invite for the kit's pdnet.ini). The kit27
+branch is retired: kits are built from master (they had become identical, title included).
 
 ## 1. Goal
 
