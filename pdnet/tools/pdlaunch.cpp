@@ -677,6 +677,38 @@ namespace
         return true;
     }
 
+    // A message box in front of the game. pdlaunch runs in the background, and Windows doesn't let a background
+    // process take the foreground, so a plain (even topmost) box opened behind the game's window (2026-10-29). The box
+    // gets a topmost owner window, which is pulled to the front by joining the foreground window's input queue for a
+    // moment (and, if that isn't enough, after a synthetic Alt press, which Windows counts as user input).
+    int FrontMessageBox(const wchar_t* text, const wchar_t* title, UINT type)
+    {
+        HWND owner = CreateWindowExW(WS_EX_TOPMOST | WS_EX_TOOLWINDOW, L"STATIC", title, WS_POPUP, 0, 0, 0, 0, nullptr, nullptr, nullptr, nullptr);
+        if (owner)
+        {
+            ShowWindow(owner, SW_SHOWNORMAL);
+            HWND front = GetForegroundWindow();
+            DWORD frontThread = front ? GetWindowThreadProcessId(front, nullptr) : 0, self = GetCurrentThreadId();
+            bool attached = frontThread && frontThread != self && AttachThreadInput(self, frontThread, TRUE);
+            SetWindowPos(owner, HWND_TOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_SHOWWINDOW);
+            BringWindowToTop(owner);
+            SetForegroundWindow(owner);
+            if (attached) AttachThreadInput(self, frontThread, FALSE);
+            if (GetForegroundWindow() != owner)
+            {
+                INPUT alt[2] = {};
+                alt[0].type = alt[1].type = INPUT_KEYBOARD;
+                alt[0].ki.wVk = alt[1].ki.wVk = VK_MENU;
+                alt[1].ki.dwFlags = KEYEVENTF_KEYUP;
+                SendInput(2, alt, sizeof(INPUT));
+                SetForegroundWindow(owner);
+            }
+        }
+        int answer = MessageBoxW(owner, text, title, type | MB_SETFOREGROUND | MB_TOPMOST);
+        if (owner) DestroyWindow(owner);
+        return answer;
+    }
+
     // Two PCs whose clocks are more than about a day apart can't connect: EOS makes the connection, then nothing
     // passes through it, even over Epic's relay (2026-10-29: a tester PC 31 h ahead never reached one player and
     // worked with others). So before pdnet (and EOS) start, a clock more than an hour off is pointed out, with an
@@ -701,7 +733,7 @@ namespace
                          L"(the game connects, but nothing gets through).\n\nSet the clock to the right time now? Windows will ask for "
                          L"permission.", off / 3600, off % 3600 / 60, behind < 0 ? L"fast" : L"slow");
         Log(L"clock: %lld s %s Epic's - asking to fix it", off, behind < 0 ? L"ahead of" : L"behind");
-        if (MessageBoxW(nullptr, text, L"Phantom Dust - clock", MB_YESNO | MB_ICONWARNING | MB_SETFOREGROUND | MB_TOPMOST) != IDYES)
+        if (FrontMessageBox(text, L"Phantom Dust - clock", MB_YESNO | MB_ICONWARNING) != IDYES)
         {
             Log(L"clock: left as it is");
             return;
