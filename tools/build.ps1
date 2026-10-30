@@ -181,7 +181,7 @@ Write-Host "  $out\PhantomDust-pdnet.zip"
 
 if ($Mode -eq 'experimental') {
     if ($dirty) { Write-Host 'Note: there are uncommitted changes; the kit says so in kit-version.txt.' -ForegroundColor Yellow }
-    New-Item -ItemType Directory -Force $kits | Out-Null
+    if (-not (Test-Path $kits)) { New-Item -ItemType Directory -Force $kits | Out-Null }
     $zip = Join-Path $kits "$label.zip"
     Copy-Item (Join-Path $out 'PhantomDust-pdnet.zip') $zip -Force
     Set-Content $counterFile $number
