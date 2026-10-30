@@ -10,13 +10,16 @@ pdnet when the game starts.
 You need, once:
 
 1. **Visual Studio 2022** (the free Community edition, or "Build Tools for Visual Studio 2022") with the workload
-   **Desktop development with C++**: <https://visualstudio.microsoft.com/downloads/>. It also needs the
-   **Windows SDK for Windows 11 (10.0.22000.194)**. Newer SDKs don't fit the generated Xbox Live code, and current
-   Visual Studio no longer offers this one, so install it from Microsoft's
-   [SDK archive](https://learn.microsoft.com/en-us/windows/apps/windows-sdk/downloads-archive)
-   ([direct download](https://go.microsoft.com/fwlink/?linkid=2173743)). It installs next to newer SDKs. If it's
-   missing, `build.bat` offers to open the download.
-2. **Epic's EOS SDK** for C, Windows: sign in at <https://dev.epicgames.com/portal>, open *SDK & Release Notes*,
+   **Desktop development with C++**: <https://visualstudio.microsoft.com/downloads/>
+2. **Windows SDK for Windows 11 (10.0.22000.194)**, exactly this version. Installer:
+   <https://go.microsoft.com/fwlink/?linkid=2173743>
+   - Run the downloaded `winsdksetup.exe` and keep its default selection. It installs next to any newer SDK.
+   - Newer SDKs don't fit the generated Xbox Live code, and current Visual Studio no longer offers this one as a
+     checkbox.
+   - It's listed on Microsoft's [Windows SDK archive](https://learn.microsoft.com/en-us/windows/apps/windows-sdk/downloads-archive)
+     as "Windows SDK for Windows 11 (10.0.22000.194)", Installer.
+   - If it's missing, `build.bat` offers to open the download.
+3. **Epic's EOS SDK** for C, Windows: sign in at <https://dev.epicgames.com/portal>, open *SDK & Release Notes*,
    download it and unzip it into `deps\eos-sdk`. Its license doesn't allow it in this repository.
 
 Then double-click **`build.bat`**. A few minutes later you have:
