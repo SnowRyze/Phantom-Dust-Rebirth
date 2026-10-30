@@ -12,6 +12,7 @@
 #   XSAPI_WINMD      the game's Microsoft.Xbox.Services.winmd
 set -e
 ROOT=$(cd "$(dirname "$0")" && pwd)
+SCRIPT="$ROOT/$(basename "$0")"   # objects older than this script are rebuilt
 OUT=${1:-build}
 XWIN=${XWIN:-$HOME/xwin}
 CC=${CLANG_CL:-clang-cl}
@@ -49,14 +50,19 @@ cd "$ROOT/$OUT"
 # compile OBJDIR FILE...: one object per source, JOBS at a time; uses the FLAGS array; skips up-to-date objects
 FAILED=0
 compile() {
-    local objdir=$1 f o
+    local objdir=$1 f o seh
     shift
     for f in "$@"; do
         o="$objdir/$(basename "$f" .cpp).obj"
-        [ "$o" -nt "$f" ] && continue
+        [ "$o" -nt "$f" ] && [ "$o" -nt "$SCRIPT" ] && continue
         while [ "$(jobs -rp | wc -l)" -ge "$JOBS" ]; do wait -n || FAILED=1; done
         echo "  $(basename "$f")"
-        "$CC" "${FLAGS[@]}" "/Fo$o" "$f" &
+        # MSVC's __try/__except also catches faults raised by instructions inside the block (pdnet probes game
+        # memory that way); clang only does that with asynchronous SEH, /EHa. Only for the files that use __try,
+        # so catch (...) elsewhere keeps /EHsc's meaning.
+        seh=()
+        grep -q '__try' "$f" && seh=(/EHa)
+        "$CC" "${FLAGS[@]}" "${seh[@]}" "/Fo$o" "$f" &
     done
     while [ "$(jobs -rp | wc -l)" -gt 0 ]; do wait -n || FAILED=1; done
     [ "$FAILED" = 0 ] || { echo "BUILD FAILED"; exit 1; }
