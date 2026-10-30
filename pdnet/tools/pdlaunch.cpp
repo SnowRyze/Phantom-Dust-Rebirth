@@ -677,42 +677,42 @@ namespace
         return true;
     }
 
-    // A message box in front of the game. pdlaunch runs in the background, and Windows doesn't let a background
-    // process take the foreground, so a plain (even topmost) box opened behind the game's window (2026-10-29). The box
-    // gets a topmost owner window, which is pulled to the front by joining the foreground window's input queue for a
-    // moment (and, if that isn't enough, after a synthetic Alt press, which Windows counts as user input).
-    int FrontMessageBox(const wchar_t* text, const wchar_t* title, UINT type)
+    // pdlaunch -setclock (started elevated by CheckClock): sets the clock to Epic's. Windows lets an administrator set
+    // it once SeSystemtimePrivilege is switched on in the token.
+    int SetClockFromEpic()
     {
-        HWND owner = CreateWindowExW(WS_EX_TOPMOST | WS_EX_TOOLWINDOW, L"STATIC", title, WS_POPUP, 0, 0, 0, 0, nullptr, nullptr, nullptr, nullptr);
-        if (owner)
+        long long behind = 0;
+        if (!ClockBehind(behind))
         {
-            ShowWindow(owner, SW_SHOWNORMAL);
-            HWND front = GetForegroundWindow();
-            DWORD frontThread = front ? GetWindowThreadProcessId(front, nullptr) : 0, self = GetCurrentThreadId();
-            bool attached = frontThread && frontThread != self && AttachThreadInput(self, frontThread, TRUE);
-            SetWindowPos(owner, HWND_TOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_SHOWWINDOW);
-            BringWindowToTop(owner);
-            SetForegroundWindow(owner);
-            if (attached) AttachThreadInput(self, frontThread, FALSE);
-            if (GetForegroundWindow() != owner)
-            {
-                INPUT alt[2] = {};
-                alt[0].type = alt[1].type = INPUT_KEYBOARD;
-                alt[0].ki.wVk = alt[1].ki.wVk = VK_MENU;
-                alt[1].ki.dwFlags = KEYEVENTF_KEYUP;
-                SendInput(2, alt, sizeof(INPUT));
-                SetForegroundWindow(owner);
-            }
+            Log(L"clock: -setclock: Epic's time not reached");
+            return 1;
         }
-        int answer = MessageBoxW(owner, text, title, type | MB_SETFOREGROUND | MB_TOPMOST);
-        if (owner) DestroyWindow(owner);
-        return answer;
+        HANDLE token = nullptr;
+        TOKEN_PRIVILEGES privilege{ 1 };
+        privilege.Privileges[0].Attributes = SE_PRIVILEGE_ENABLED;
+        if (OpenProcessToken(GetCurrentProcess(), TOKEN_ADJUST_PRIVILEGES, &token) && LookupPrivilegeValueW(nullptr, SE_SYSTEMTIME_NAME, &privilege.Privileges[0].Luid))
+            AdjustTokenPrivileges(token, FALSE, &privilege, 0, nullptr, nullptr);
+        if (token) CloseHandle(token);
+        SYSTEMTIME now;
+        GetSystemTime(&now);
+        FILETIME file;
+        SystemTimeToFileTime(&now, &file);
+        ULARGE_INTEGER t{ file.dwLowDateTime, file.dwHighDateTime };
+        t.QuadPart += behind * 10000000LL;
+        file = { t.LowPart, t.HighPart };
+        FileTimeToSystemTime(&file, &now);
+        bool ok = SetSystemTime(&now);
+        Log(L"clock: -setclock: moved %lld s - %s", behind, ok ? L"done" : (L"failed (" + std::to_wstring(GetLastError()) + L")").c_str());
+        return ok ? 0 : 1;
     }
 
     // Two PCs whose clocks are more than about a day apart can't connect: EOS makes the connection, then nothing
     // passes through it, even over Epic's relay (2026-10-29: a tester PC 31 h ahead never reached one player and
-    // worked with others). So before pdnet (and EOS) start, a clock more than an hour off is pointed out, with an
-    // offer to set it (Set-Date in an elevated PowerShell; one Windows admin prompt). clock_check=off skips it.
+    // worked with others). So before pdnet (and EOS) start, a clock an hour or more off is set right, by pdlaunch
+    // itself started as administrator (-setclock): Windows' admin prompt is the question (Yes sets the clock, No
+    // leaves it). A message box of pdlaunch's own can't be used: a full-screen Store app stays in front of every
+    // desktop window, even topmost ones (tried in Experimental 59 and 60), while the admin prompt shows over it.
+    // clock_check=off skips the check.
     void CheckClock()
     {
         if (_wcsicmp(Setting(L"clock_check", L"on").c_str(), L"off") == 0) return;
@@ -728,33 +728,24 @@ namespace
             Log(L"clock: within %lld s of Epic's", off);
             return;
         }
-        wchar_t text[512];
-        swprintf_s(text, L"This PC's clock is %lld hours %lld minutes %s.\n\nWith a clock that far off, joining some players fails "
-                         L"(the game connects, but nothing gets through).\n\nSet the clock to the right time now? Windows will ask for "
-                         L"permission.", off / 3600, off % 3600 / 60, behind < 0 ? L"fast" : L"slow");
-        Log(L"clock: %lld s %s Epic's - asking to fix it", off, behind < 0 ? L"ahead of" : L"behind");
-        if (FrontMessageBox(text, L"Phantom Dust - clock", MB_YESNO | MB_ICONWARNING) != IDYES)
+        Log(L"clock: %lld s %s Epic's - asking Windows to let pdlaunch set it", off, behind < 0 ? L"ahead of" : L"behind");
+        wchar_t exe[MAX_PATH];
+        GetModuleFileNameW(nullptr, exe, MAX_PATH);
+        SHELLEXECUTEINFOW run{ sizeof(run) };
+        run.fMask = SEE_MASK_NOCLOSEPROCESS;
+        run.lpVerb = L"runas";
+        run.lpFile = exe;
+        run.lpParameters = L"-setclock";
+        run.nShow = SW_HIDE;
+        if (ShellExecuteExW(&run) && run.hProcess)
         {
-            Log(L"clock: left as it is");
-            return;
+            WaitForSingleObject(run.hProcess, 30000);
+            CloseHandle(run.hProcess);
         }
-        // Measured again right before the change: the prompt may have waited.
-        if (ClockBehind(behind) && (behind < 0 ? -behind : behind) >= 60)
+        else
         {
-            wchar_t args[256];
-            swprintf_s(args, L"-NoProfile -WindowStyle Hidden -Command \"Set-Date -Adjust ([TimeSpan]::FromSeconds(%lld)) | Out-Null\"", behind);
-            SHELLEXECUTEINFOW run{ sizeof(run) };
-            run.fMask = SEE_MASK_NOCLOSEPROCESS;
-            run.lpVerb = L"runas";
-            run.lpFile = L"powershell.exe";
-            run.lpParameters = args;
-            run.nShow = SW_HIDE;
-            if (ShellExecuteExW(&run) && run.hProcess)
-            {
-                WaitForSingleObject(run.hProcess, 30000);
-                CloseHandle(run.hProcess);
-            }
-            else Log(L"clock: not changed (%lu - permission refused?)", GetLastError());
+            Log(L"clock: left as it is (%lu - permission refused?)", GetLastError());
+            return;
         }
         long long now = 0;
         if (ClockBehind(now)) Log(L"clock: now %lld s from Epic's", now < 0 ? -now : now);
@@ -777,6 +768,8 @@ int wmain(int argc, wchar_t** argv)
     GetModuleFileNameW(nullptr, exe, MAX_PATH);
     g_dir = exe;
     g_dir = g_dir.substr(0, g_dir.find_last_of(L'\\') + 1);
+
+    if (argc == 2 && _wcsicmp(argv[1], L"-setclock") == 0) return SetClockFromEpic(); // started elevated by CheckClock
 
     DWORD pid = 0, tid = 0;
     for (int i = 1; i + 1 < argc; ++i)
