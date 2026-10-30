@@ -43,7 +43,9 @@ Steps
    - Unpacked copy set up with an OLDER kit (Install.bat): it puts the original game files back first.
    - Type your player name when asked.
    - Answer Y to let Phantom Dust use your microphone (voice chat). N: Windows asks the first time instead.
-   - Windows asks for administrator permission once ("CheckNetIsolation"). Click Yes: matches need it.
+   - Windows asks for administrator permission once ("Windows PowerShell"). Click Yes: matches need it. It also
+     adds a "Phantom Dust clock" task that sets your PC's clock right at game start when it is an hour or more off
+     (players whose clocks are far apart can't connect). Remove.bat deletes it.
 4. Start Phantom Dust the normal way (Start menu). Host or join a lobby.
 5. After a test, double-click pdnet\Collect-Log.bat and send the files it puts on your Desktop.
 

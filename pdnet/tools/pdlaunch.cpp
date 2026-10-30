@@ -14,7 +14,6 @@
 #include <appmodel.h>
 #include <winhttp.h>
 #include <wincred.h>
-#include <shellapi.h>
 #include <algorithm>
 #include <cstdio>
 #include <set>
@@ -25,7 +24,6 @@
 #include "padshare.h"
 #pragma comment(lib, "winhttp.lib")
 #pragma comment(lib, "advapi32.lib")
-#pragma comment(lib, "shell32.lib")
 
 namespace
 {
@@ -677,42 +675,12 @@ namespace
         return true;
     }
 
-    // pdlaunch -setclock (started elevated by CheckClock): sets the clock to Epic's. Windows lets an administrator set
-    // it once SeSystemtimePrivilege is switched on in the token.
-    int SetClockFromEpic()
-    {
-        long long behind = 0;
-        if (!ClockBehind(behind))
-        {
-            Log(L"clock: -setclock: Epic's time not reached");
-            return 1;
-        }
-        HANDLE token = nullptr;
-        TOKEN_PRIVILEGES privilege{ 1 };
-        privilege.Privileges[0].Attributes = SE_PRIVILEGE_ENABLED;
-        if (OpenProcessToken(GetCurrentProcess(), TOKEN_ADJUST_PRIVILEGES, &token) && LookupPrivilegeValueW(nullptr, SE_SYSTEMTIME_NAME, &privilege.Privileges[0].Luid))
-            AdjustTokenPrivileges(token, FALSE, &privilege, 0, nullptr, nullptr);
-        if (token) CloseHandle(token);
-        SYSTEMTIME now;
-        GetSystemTime(&now);
-        FILETIME file;
-        SystemTimeToFileTime(&now, &file);
-        ULARGE_INTEGER t{ file.dwLowDateTime, file.dwHighDateTime };
-        t.QuadPart += behind * 10000000LL;
-        file = { t.LowPart, t.HighPart };
-        FileTimeToSystemTime(&file, &now);
-        bool ok = SetSystemTime(&now);
-        Log(L"clock: -setclock: moved %lld s - %s", behind, ok ? L"done" : (L"failed (" + std::to_wstring(GetLastError()) + L")").c_str());
-        return ok ? 0 : 1;
-    }
-
     // Two PCs whose clocks are more than about a day apart can't connect: EOS makes the connection, then nothing
     // passes through it, even over Epic's relay (2026-10-29: a tester PC 31 h ahead never reached one player and
-    // worked with others). So before pdnet (and EOS) start, a clock an hour or more off is set right, by pdlaunch
-    // itself started as administrator (-setclock): Windows' admin prompt is the question (Yes sets the clock, No
-    // leaves it). A message box of pdlaunch's own can't be used: a full-screen Store app stays in front of every
-    // desktop window, even topmost ones (tried in Experimental 59 and 60), while the admin prompt shows over it.
-    // clock_check=off skips the check.
+    // worked with others). So before pdnet (and EOS) start, a clock an hour or more off is set right by starting the
+    // scheduled task "Phantom Dust clock" (made by Setup.bat: it runs as SYSTEM and sets the clock from Epic's time;
+    // any user may start it). No question is asked: pdlaunch is a background process, so its own message box and any
+    // admin prompt it asks for open behind the full-screen game (Experimental 59-61). clock_check=off skips this.
     void CheckClock()
     {
         if (_wcsicmp(Setting(L"clock_check", L"on").c_str(), L"off") == 0) return;
@@ -728,27 +696,36 @@ namespace
             Log(L"clock: within %lld s of Epic's", off);
             return;
         }
-        Log(L"clock: %lld s %s Epic's - asking Windows to let pdlaunch set it", off, behind < 0 ? L"ahead of" : L"behind");
-        wchar_t exe[MAX_PATH];
-        GetModuleFileNameW(nullptr, exe, MAX_PATH);
-        SHELLEXECUTEINFOW run{ sizeof(run) };
-        run.fMask = SEE_MASK_NOCLOSEPROCESS;
-        run.lpVerb = L"runas";
-        run.lpFile = exe;
-        run.lpParameters = L"-setclock";
-        run.nShow = SW_HIDE;
-        if (ShellExecuteExW(&run) && run.hProcess)
+        Log(L"clock: %lld s %s Epic's - starting the \"Phantom Dust clock\" task", off, behind < 0 ? L"ahead of" : L"behind");
+        wchar_t command[] = L"schtasks.exe /run /tn \"Phantom Dust clock\"";
+        STARTUPINFOW si{ sizeof(si) };
+        si.dwFlags = STARTF_USESHOWWINDOW;
+        si.wShowWindow = SW_HIDE;
+        PROCESS_INFORMATION pi{};
+        DWORD exit = 1;
+        if (CreateProcessW(nullptr, command, nullptr, nullptr, FALSE, CREATE_NO_WINDOW, nullptr, nullptr, &si, &pi))
         {
-            WaitForSingleObject(run.hProcess, 30000);
-            CloseHandle(run.hProcess);
+            WaitForSingleObject(pi.hProcess, 10000);
+            GetExitCodeProcess(pi.hProcess, &exit);
+            CloseHandle(pi.hProcess);
+            CloseHandle(pi.hThread);
         }
-        else
+        if (exit != 0)
         {
-            Log(L"clock: left as it is (%lu - permission refused?)", GetLastError());
+            Log(L"clock: the task didn't start (%lu) - run Setup.bat again to make it; the clock stays as it is", exit);
             return;
         }
-        long long now = 0;
-        if (ClockBehind(now)) Log(L"clock: now %lld s from Epic's", now < 0 ? -now : now);
+        for (int i = 0; i < 10; ++i) // the task takes a moment
+        {
+            Sleep(1000);
+            long long now = 0;
+            if (ClockBehind(now) && (now < 0 ? -now : now) < 60)
+            {
+                Log(L"clock: set right (now %lld s from Epic's)", now < 0 ? -now : now);
+                return;
+            }
+        }
+        Log(L"clock: still off after the task ran");
     }
 
     // The game's LocalState folder (pdnet builds the same path, src\log.cpp).
@@ -768,8 +745,6 @@ int wmain(int argc, wchar_t** argv)
     GetModuleFileNameW(nullptr, exe, MAX_PATH);
     g_dir = exe;
     g_dir = g_dir.substr(0, g_dir.find_last_of(L'\\') + 1);
-
-    if (argc == 2 && _wcsicmp(argv[1], L"-setclock") == 0) return SetClockFromEpic(); // started elevated by CheckClock
 
     DWORD pid = 0, tid = 0;
     for (int i = 1; i + 1 < argc; ++i)
