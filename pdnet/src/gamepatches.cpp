@@ -2509,13 +2509,17 @@ namespace pdnet::gamepatches
         constexpr float kPressDown = 60; // "PRESS ENTER TO START" (y 379..395, FUN_140279410) moves down to clear the word
                                          // (no further: the title's offscreen target is 456 rows)
 
-        // The word in kLogoW x (kLift + kSubH) BGRA rows, centred: the finished lettering from rebirth_word.h (the
-        // logo's glow animation lights it through RebirthGlow). The first kLift rows go over the logo's last ones.
+        // The word in kLogoW x (kLift + kSubH) BGRA rows, centred under the logo: the finished lettering from
+        // rebirth_word.h (the logo's glow animation lights it through RebirthGlow). The first kLift rows go over the
+        // logo's last ones. The logo's art fills columns 0..548 of its 560, so its middle is column 274, not 279.5
+        // (centred on the texture, the word sat 5 px right of the logo and of PRESS ENTER, 2026-10-30).
+        constexpr int kLogoArtRight = 548;
         std::vector<uint8_t> RebirthRows(int logoW)
         {
             constexpr int h = kLift + kSubH;
             std::vector<uint8_t> rows(logoW * h * 4, 0);
-            int ox = (logoW - kRebirthWordW) / 2, oy = (h - kRebirthWordH) / 2;
+            int ox = (kLogoArtRight + 1 - kRebirthWordW) / 2, oy = (h - kRebirthWordH) / 2;
+            if (ox < 0 || ox + kRebirthWordW > logoW) ox = (logoW - kRebirthWordW) / 2;
             for (int y = 0; y < kRebirthWordH; ++y)
                 memcpy(&rows[((oy + y) * logoW + ox) * 4], &kRebirthWord[y * kRebirthWordW * 4], kRebirthWordW * 4);
             return rows;
