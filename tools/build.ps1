@@ -85,24 +85,21 @@ if (-not $vs) {
 }
 # Windows SDK 10.0.22000.0 is required: the committed Xbox Live headers (xsapi\gen) were made by its C++/WinRT, and
 # C++/WinRT refuses to mix versions ("Mismatched C++/WinRT headers", 2026-10-30 on a PC with only SDK 10.0.26100).
-# Visual Studio's installer adds it; offered here, with one Windows admin prompt.
+# Current Visual Studio 2022 (17.14) no longer offers it as a component (its installer answered "Cannot find package
+# Microsoft.VisualStudio.Component.Windows11SDK.22000"), so this opens Microsoft's standalone installer for it in the
+# browser: "Windows SDK for Windows 11 (10.0.22000.194)" on the Windows SDK archive page.
 $sdkDir = Join-Path ${env:ProgramFiles(x86)} 'Windows Kits\10\Include\10.0.22000.0\cppwinrt'
+$sdkDownload = 'https://go.microsoft.com/fwlink/?linkid=2173743'
+$sdkArchive = 'https://learn.microsoft.com/en-us/windows/apps/windows-sdk/downloads-archive'
 if (-not (Test-Path $sdkDir)) {
-    Write-Host "`nThe Windows 11 SDK 10.0.22000.0 is not installed. pdnet needs exactly that version (other SDK versions don't fit" -ForegroundColor Yellow
-    Write-Host "the generated Xbox Live code). Visual Studio's installer can add it now (about 2 GB to download; Windows asks for permission)." -ForegroundColor Yellow
-    $answer = Read-Host 'Install it now? (Y/N)'
-    if ($answer -match '^\s*y') {
-        $installer = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio\Installer\setup.exe'
-        try {
-            $p = Start-Process $installer -Verb RunAs -Wait -PassThru -ArgumentList "modify --installPath `"$vs`" --add Microsoft.VisualStudio.Component.Windows11SDK.22000 --passive --norestart"
-            Write-Host "Visual Studio's installer finished (exit code $($p.ExitCode))."
-        }
-        catch { Write-Host "The installer didn't start: $_" -ForegroundColor Red }
-    }
-    if (-not (Test-Path $sdkDir)) {
-        Fail ("Windows SDK 10.0.22000.0 is still missing. Add it yourself: open the Visual Studio Installer, click Modify,`n" +
-              "go to Individual components, tick 'Windows 11 SDK (10.0.22000.0)', and click Modify. Then run build.bat again.")
-    }
+    Write-Host "`nThe Windows 11 SDK 10.0.22000 is not installed. pdnet needs exactly that version: newer SDKs don't fit the" -ForegroundColor Yellow
+    Write-Host "generated Xbox Live code, and Visual Studio's installer no longer offers it. Microsoft's own installer for it:" -ForegroundColor Yellow
+    Write-Host "  $sdkDownload"
+    Write-Host "  (on $sdkArchive : 'Windows SDK for Windows 11 (10.0.22000.194)', Installer)"
+    $answer = Read-Host 'Open that download in your browser now? (Y/N)'
+    if ($answer -match '^\s*y') { Start-Process $sdkDownload }
+    Fail ("Run the downloaded winsdksetup.exe, keep its default selection, and let it install (Windows asks for permission).`n" +
+          "It installs next to any newer SDK; nothing else changes. Then run build.bat again.")
 }
 $winSdk = '10.0.22000.0'
 $vcvars = Join-Path $vs 'VC\Auxiliary\Build\vcvarsall.bat'

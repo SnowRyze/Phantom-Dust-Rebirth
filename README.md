@@ -11,8 +11,11 @@ You need, once:
 
 1. **Visual Studio 2022** (the free Community edition, or "Build Tools for Visual Studio 2022") with the workload
    **Desktop development with C++**: <https://visualstudio.microsoft.com/downloads/>. It also needs the
-   **Windows 11 SDK (10.0.22000.0)** (Individual components in the Visual Studio Installer). Newer SDKs don't fit
-   the generated Xbox Live code. If it's missing, `build.bat` offers to install it.
+   **Windows SDK for Windows 11 (10.0.22000.194)**. Newer SDKs don't fit the generated Xbox Live code, and current
+   Visual Studio no longer offers this one, so install it from Microsoft's
+   [SDK archive](https://learn.microsoft.com/en-us/windows/apps/windows-sdk/downloads-archive)
+   ([direct download](https://go.microsoft.com/fwlink/?linkid=2173743)). It installs next to newer SDKs. If it's
+   missing, `build.bat` offers to open the download.
 2. **Epic's EOS SDK** for C, Windows: sign in at <https://dev.epicgames.com/portal>, open *SDK & Release Notes*,
    download it and unzip it into `deps\eos-sdk`. Its license doesn't allow it in this repository.
 
