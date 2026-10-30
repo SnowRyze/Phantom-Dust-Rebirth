@@ -2504,7 +2504,8 @@ namespace pdnet::gamepatches
         CreateFile2Fn g_createFile2 = nullptr;
 
         constexpr int kSubH = 82, kLift = 10; // the word starts kLift rows up, over the logo's own bottom rows
-        constexpr float kLogoUp = 24; // the logo, its glow and the word move up together, for room above PRESS ENTER (2026-10-30)
+        constexpr float kLogoUp = 48; // the logo, its glow and the word move up together, for room above PRESS ENTER (2026-10-30);
+                                      // at most 57: the glow box (139 - kSubH - kLogoUp) has to start inside the target
         constexpr float kPressDown = 60; // "PRESS ENTER TO START" (y 379..395, FUN_140279410) moves down to clear the word
                                          // (no further: the title's offscreen target is 456 rows)
 
