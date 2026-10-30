@@ -4,7 +4,7 @@ Written 2026-10-17 by the first Claude Code session, updated by a second session
 and updated again on 2026-10-18 and 2026-10-19 (EOS, Xbox-free mode). See Â§10 and `git log` in `_netmod`.
 Read next: [`docs/EOS_PLAN.md`](docs/EOS_PLAN.md) (the current direction, with detailed progress) and [`docs/MODDING_PLAN.md`](docs/MODDING_PLAN.md) (original design and research).
 
-**Repository layout and building (from 2026-10-30; older notes below use the old paths).** The user couldn't build a
+**Repository layout and building (from 2026-10-30; older notes below use the old paths).** The user couldn't build a Windows SDK 10.0.22000.0 is required: `xsapigen` was made by its C++/WinRT (2.0.210806.1), and on a PC with only SDK 10.0.26100 the build failed with "Mismatched C++/WinRT headers"; build.ps1 now checks for it and offers to add it through the Visual Studio Installer (component Microsoft.VisualStudio.Component.Windows11SDK.22000).
 fresh clone (it needed Python, files from the game install and folders on the developer's PC), so the repository was
 reorganised. Old path -> new path: `pdnet\src` -> `src\`, `pdnet\xsapi` -> `xsapi\` (with `gen\` now committed, so
 `generate.py` never has to run), `pdnet\tools\pdlaunch.cpp` -> `launcher\`, `testkit-store\` -> `kit\` (Setup.bat at

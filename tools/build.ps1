@@ -83,8 +83,28 @@ if (-not $vs) {
           "Install Visual Studio 2022 Community (or 'Build Tools for Visual Studio 2022') from https://visualstudio.microsoft.com/downloads/`n" +
           "and tick the workload 'Desktop development with C++'. Then run build.bat again.")
 }
-# The SDK the code was written against, when it is there; else Visual Studio's default.
-$winSdk = if (Test-Path (Join-Path ${env:ProgramFiles(x86)} 'Windows Kits\10\Include\10.0.22000.0\cppwinrt')) { '10.0.22000.0' } else { '' }
+# Windows SDK 10.0.22000.0 is required: the committed Xbox Live headers (xsapi\gen) were made by its C++/WinRT, and
+# C++/WinRT refuses to mix versions ("Mismatched C++/WinRT headers", 2026-10-30 on a PC with only SDK 10.0.26100).
+# Visual Studio's installer adds it; offered here, with one Windows admin prompt.
+$sdkDir = Join-Path ${env:ProgramFiles(x86)} 'Windows Kits\10\Include\10.0.22000.0\cppwinrt'
+if (-not (Test-Path $sdkDir)) {
+    Write-Host "`nThe Windows 11 SDK 10.0.22000.0 is not installed. pdnet needs exactly that version (other SDK versions don't fit" -ForegroundColor Yellow
+    Write-Host "the generated Xbox Live code). Visual Studio's installer can add it now (about 2 GB to download; Windows asks for permission)." -ForegroundColor Yellow
+    $answer = Read-Host 'Install it now? (Y/N)'
+    if ($answer -match '^\s*y') {
+        $installer = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio\Installer\setup.exe'
+        try {
+            $p = Start-Process $installer -Verb RunAs -Wait -PassThru -ArgumentList "modify --installPath `"$vs`" --add Microsoft.VisualStudio.Component.Windows11SDK.22000 --passive --norestart"
+            Write-Host "Visual Studio's installer finished (exit code $($p.ExitCode))."
+        }
+        catch { Write-Host "The installer didn't start: $_" -ForegroundColor Red }
+    }
+    if (-not (Test-Path $sdkDir)) {
+        Fail ("Windows SDK 10.0.22000.0 is still missing. Add it yourself: open the Visual Studio Installer, click Modify,`n" +
+              "go to Individual components, tick 'Windows 11 SDK (10.0.22000.0)', and click Modify. Then run build.bat again.")
+    }
+}
+$winSdk = '10.0.22000.0'
 $vcvars = Join-Path $vs 'VC\Auxiliary\Build\vcvarsall.bat'
 foreach ($line in (cmd /c "`"$vcvars`" x64 $winSdk >nul 2>&1 && set")) { if ($line -match '^([^=]+)=(.*)$') { Set-Item "env:$($Matches[1])" $Matches[2] } }
 if (-not (Get-Command cl.exe -ErrorAction SilentlyContinue)) { Fail "Visual Studio was found at $vs, but its C++ compiler didn't start. Repair the 'Desktop development with C++' workload." }
