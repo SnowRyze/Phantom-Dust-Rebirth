@@ -14,6 +14,7 @@
 #include <appmodel.h>
 #include <winhttp.h>
 #include <wincred.h>
+#include <shellapi.h>
 #include <algorithm>
 #include <cstdio>
 #include <set>
@@ -24,6 +25,7 @@
 #include "padshare.h"
 #pragma comment(lib, "winhttp.lib")
 #pragma comment(lib, "advapi32.lib")
+#pragma comment(lib, "shell32.lib")
 
 namespace
 {
@@ -642,6 +644,90 @@ namespace
         if (session) WinHttpCloseHandle(session);
     }
 
+    // Seconds this PC's clock is behind Epic's (the Date header of any answer from api.epicgames.dev; negative: ahead),
+    // or false if Epic wasn't reached in a few seconds.
+    bool ClockBehind(long long& seconds)
+    {
+        SYSTEMTIME server{};
+        DWORD size = sizeof(server);
+        bool ok = false;
+        HINTERNET session = WinHttpOpen(L"pdlaunch/1", WINHTTP_ACCESS_TYPE_AUTOMATIC_PROXY, nullptr, nullptr, 0);
+        if (session) WinHttpSetTimeouts(session, 3000, 3000, 3000, 3000);
+        HINTERNET connect = session ? WinHttpConnect(session, L"api.epicgames.dev", INTERNET_DEFAULT_HTTPS_PORT, 0) : nullptr;
+        HINTERNET request = connect ? WinHttpOpenRequest(connect, L"HEAD", L"/", nullptr, nullptr, nullptr, WINHTTP_FLAG_SECURE) : nullptr;
+        if (request)
+        {
+            // A clock far enough off can make the server's certificate look expired or not yet valid; only the time is read.
+            DWORD flags = SECURITY_FLAG_IGNORE_CERT_DATE_INVALID;
+            WinHttpSetOption(request, WINHTTP_OPTION_SECURITY_FLAGS, &flags, sizeof(flags));
+            ok = WinHttpSendRequest(request, WINHTTP_NO_ADDITIONAL_HEADERS, 0, nullptr, 0, 0, 0) && WinHttpReceiveResponse(request, nullptr) &&
+                 WinHttpQueryHeaders(request, WINHTTP_QUERY_DATE | WINHTTP_QUERY_FLAG_SYSTEMTIME, nullptr, &server, &size, nullptr);
+        }
+        if (request) WinHttpCloseHandle(request);
+        if (connect) WinHttpCloseHandle(connect);
+        if (session) WinHttpCloseHandle(session);
+        if (!ok) return false;
+        SYSTEMTIME local;
+        GetSystemTime(&local);
+        FILETIME a, b;
+        SystemTimeToFileTime(&server, &a);
+        SystemTimeToFileTime(&local, &b);
+        auto ticks = [](FILETIME t) { return static_cast<long long>((static_cast<unsigned long long>(t.dwHighDateTime) << 32) | t.dwLowDateTime); };
+        seconds = (ticks(a) - ticks(b)) / 10000000;
+        return true;
+    }
+
+    // Two PCs whose clocks are more than about a day apart can't connect: EOS makes the connection, then nothing
+    // passes through it, even over Epic's relay (2026-10-29: a tester PC 31 h ahead never reached one player and
+    // worked with others). So before pdnet (and EOS) start, a clock more than an hour off is pointed out, with an
+    // offer to set it (Set-Date in an elevated PowerShell; one Windows admin prompt). clock_check=off skips it.
+    void CheckClock()
+    {
+        if (_wcsicmp(Setting(L"clock_check", L"on").c_str(), L"off") == 0) return;
+        long long behind = 0;
+        if (!ClockBehind(behind))
+        {
+            Log(L"clock: Epic's time not reached - not checked");
+            return;
+        }
+        long long off = behind < 0 ? -behind : behind;
+        if (off < 3600)
+        {
+            Log(L"clock: within %lld s of Epic's", off);
+            return;
+        }
+        wchar_t text[512];
+        swprintf_s(text, L"This PC's clock is %lld hours %lld minutes %s.\n\nWith a clock that far off, joining some players fails "
+                         L"(the game connects, but nothing gets through).\n\nSet the clock to the right time now? Windows will ask for "
+                         L"permission.", off / 3600, off % 3600 / 60, behind < 0 ? L"fast" : L"slow");
+        Log(L"clock: %lld s %s Epic's - asking to fix it", off, behind < 0 ? L"ahead of" : L"behind");
+        if (MessageBoxW(nullptr, text, L"Phantom Dust - clock", MB_YESNO | MB_ICONWARNING | MB_SETFOREGROUND | MB_TOPMOST) != IDYES)
+        {
+            Log(L"clock: left as it is");
+            return;
+        }
+        // Measured again right before the change: the prompt may have waited.
+        if (ClockBehind(behind) && (behind < 0 ? -behind : behind) >= 60)
+        {
+            wchar_t args[256];
+            swprintf_s(args, L"-NoProfile -WindowStyle Hidden -Command \"Set-Date -Adjust ([TimeSpan]::FromSeconds(%lld)) | Out-Null\"", behind);
+            SHELLEXECUTEINFOW run{ sizeof(run) };
+            run.fMask = SEE_MASK_NOCLOSEPROCESS;
+            run.lpVerb = L"runas";
+            run.lpFile = L"powershell.exe";
+            run.lpParameters = args;
+            run.nShow = SW_HIDE;
+            if (ShellExecuteExW(&run) && run.hProcess)
+            {
+                WaitForSingleObject(run.hProcess, 30000);
+                CloseHandle(run.hProcess);
+            }
+            else Log(L"clock: not changed (%lu - permission refused?)", GetLastError());
+        }
+        long long now = 0;
+        if (ClockBehind(now)) Log(L"clock: now %lld s from Epic's", now < 0 ? -now : now);
+    }
+
     // The game's LocalState folder (pdnet builds the same path, src\log.cpp).
     std::wstring GameLocalState(HANDLE process)
     {
@@ -697,6 +783,7 @@ int wmain(int argc, wchar_t** argv)
     }
 
     Log(L"game started (pid %lu, main thread %lu)", pid, tid);
+    CheckClock(); // before pdnet starts EOS: a fixed clock counts from this game run
     HANDLE game = OpenProcess(SYNCHRONIZE | PROCESS_QUERY_LIMITED_INFORMATION, FALSE, pid);
     std::wstring localState = game ? GameLocalState(game) : std::wstring();
     if (!localState.empty()) DeleteFileW(PastTitleFile(localState).c_str()); // from the last start: pdnet writes it again
