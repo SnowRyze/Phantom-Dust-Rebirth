@@ -5,6 +5,7 @@
 #include "scores.h"
 #include "discord.h"
 #include "log.h"
+#include "rebirth_word.h"
 #include <fstream>
 #include <winrt/Windows.ApplicationModel.Core.h>
 #include <winrt/Windows.UI.Core.h>
@@ -2488,11 +2489,232 @@ namespace pdnet::gamepatches
         return true;
     }
 
+    namespace
+    {
+        // "Rebirth" under the title screen logo. The title screen is Assets\Data\menu\FDLogo.alr: a header page,
+        // then 13 textures; the "Phantom Dust" logo is the second (logo_02, 560x96 BGRA, rows of 560 pixels, at 0x4000)
+        // and its glow the third (logo_03, 576x112 8-bit). When the game opens the file (CreateFile2, imported by
+        // PDUWP.exe) it gets a copy instead, made once per start in LocalState\pdnet: both textures get kSubH rows below
+        // for the word, and as many empty rows on top; the header grows with them (heights at 0x60 / 0x7c, 0x38a / 0x39e
+        // and 0x4b0 / 0x4ec, later textures' offsets, the data size at 0x14). The title draws both into fixed boxes
+        // (logo: y 153..249 in FUN_140279640, glow: y 139..251 in FUN_140278360, one texture row per pixel; each edge
+        // a float constant read only there), so those boxes grow by kSubH up and down too (TallerTitleBoxes), else the
+        // taller textures come out squashed. The word is the supplied lettering artwork (rebirth_word.h).
+        using CreateFile2Fn = HANDLE(WINAPI*)(LPCWSTR, DWORD, DWORD, DWORD, LPCREATEFILE2_EXTENDED_PARAMETERS);
+        CreateFile2Fn g_createFile2 = nullptr;
+
+        constexpr int kSubH = 82, kLift = 10; // the word starts kLift rows up, over the logo's own bottom rows
+        constexpr float kLogoUp = 48; // the logo, its glow and the word move up together, for room above PRESS ENTER (2026-10-30);
+                                      // at most 57: the glow box (139 - kSubH - kLogoUp) has to start inside the target
+        constexpr float kPressDown = 60; // "PRESS ENTER TO START" (y 379..395, FUN_140279410) moves down to clear the word
+                                         // (no further: the title's offscreen target is 456 rows)
+
+        // The word in kLogoW x (kLift + kSubH) BGRA rows, centred under the logo: the finished lettering from
+        // rebirth_word.h (the logo's glow animation lights it through RebirthGlow). The first kLift rows go over the
+        // logo's last ones. The logo's art fills columns 0..548 of its 560, so its middle is column 274, not 279.5
+        // (centred on the texture, the word sat 5 px right of the logo and of PRESS ENTER, 2026-10-30).
+        constexpr int kLogoArtRight = 548;
+        std::vector<uint8_t> RebirthRows(int logoW)
+        {
+            constexpr int h = kLift + kSubH;
+            std::vector<uint8_t> rows(logoW * h * 4, 0);
+            int ox = (kLogoArtRight + 1 - kRebirthWordW) / 2, oy = (h - kRebirthWordH) / 2;
+            if (ox < 0 || ox + kRebirthWordW > logoW) ox = (logoW - kRebirthWordW) / 2;
+            for (int y = 0; y < kRebirthWordH; ++y)
+                memcpy(&rows[((oy + y) * logoW + ox) * 4], &kRebirthWord[y * kRebirthWordW * 4], kRebirthWordW * 4);
+            return rows;
+        }
+
+        // The word's glow, like the logo's own: its silhouette widened by 2 px and softened, kGlowW x (word rows + 16)
+        // with the word's rows at (8, 8).
+        std::vector<uint8_t> RebirthGlow(const std::vector<uint8_t>& rows, int logoW, int glowW)
+        {
+            int wordH = static_cast<int>(rows.size() / (logoW * 4)), gh = wordH + 16;
+            std::vector<uint8_t> a(glowW * gh, 0), b(glowW * gh, 0);
+            for (int y = 0; y < wordH; ++y)
+                for (int x = 0; x < logoW; ++x) a[(y + 8) * glowW + x + 8] = rows[(y * logoW + x) * 4 + 3];
+            for (int y = 0; y < gh; ++y) // widen
+                for (int x = 0; x < glowW; ++x)
+                {
+                    int m = 0;
+                    for (int dy = -2; dy <= 2; ++dy)
+                        for (int dx = -2; dx <= 2; ++dx)
+                        {
+                            int yy = y + dy, xx = x + dx;
+                            if (yy >= 0 && yy < gh && xx >= 0 && xx < glowW) m = (std::max)(m, static_cast<int>(a[yy * glowW + xx]));
+                        }
+                    b[y * glowW + x] = static_cast<uint8_t>(m);
+                }
+            for (int pass = 0; pass < 2; ++pass) // soften: 5x5 box, twice
+            {
+                for (int y = 0; y < gh; ++y)
+                    for (int x = 0; x < glowW; ++x)
+                    {
+                        int sum = 0;
+                        for (int dy = -2; dy <= 2; ++dy)
+                            for (int dx = -2; dx <= 2; ++dx)
+                            {
+                                int yy = y + dy, xx = x + dx;
+                                if (yy >= 0 && yy < gh && xx >= 0 && xx < glowW) sum += b[yy * glowW + xx];
+                            }
+                        a[y * glowW + x] = static_cast<uint8_t>(sum / 25);
+                    }
+                b.swap(a);
+            }
+            for (uint8_t& v : b) v = static_cast<uint8_t>(v * 235 / 255);
+            return b;
+        }
+
+        bool MakeTitleCopy(const wchar_t* original, const std::wstring& copy)
+        {
+            constexpr DWORD kHeader = 0x1000, kDataSize = 0x27bc80, kSize = kHeader + kDataSize, kLogo = 0x4000, kGlow = 0x38800, kGlowEnd = 0x48400;
+            constexpr int kLogoW = 560, kLogoH = 96, kGlowTexW = 576, kGlowTexH = 112;
+            constexpr DWORD kExtra = kLogoW * kSubH * 4, kGlowExtra = kGlowTexW * kSubH;
+            HANDLE file = g_createFile2(original, GENERIC_READ, FILE_SHARE_READ, OPEN_EXISTING, nullptr);
+            if (file == INVALID_HANDLE_VALUE) return false;
+            std::vector<uint8_t> data(kSize + 1);
+            DWORD got = 0;
+            BOOL read = ReadFile(file, data.data(), kSize + 1, &got, nullptr);
+            CloseHandle(file);
+            auto u32 = [&](size_t at) -> uint32_t& { return *reinterpret_cast<uint32_t*>(&data[at]); };
+            auto u16 = [&](size_t at) -> uint16_t& { return *reinterpret_cast<uint16_t*>(&data[at]); };
+            if (!read || got != kSize || u32(0x14) != kDataSize || u32(0x54) != kLogo || u32(0x70) != kGlow || u32(0x8c) != kGlowEnd ||
+                u32(0x60) != 0x2205f22f || u32(0x7c) != 0x0806f23f || u16(0x38a) != kLogoH || u16(0x4b0) != kLogoH ||
+                u16(0x39e) != kGlowTexH || u16(0x4ec) != kGlowTexH || memcmp(&data[0x47c], "logo_02.dds", 11) != 0 ||
+                memcmp(&data[0x4b8], "logo_03.dds", 11) != 0)
+                return false;
+
+            std::vector<uint8_t> rows = RebirthRows(kLogoW);
+            std::vector<uint8_t> wordGlow = RebirthGlow(rows, kLogoW, kGlowTexW);
+            std::vector<uint8_t> glow(kGlowExtra, 0);
+            glow.insert(glow.end(), &data[kHeader + kGlow], &data[kHeader + kGlowEnd]);
+            glow.resize(glow.size() + kGlowExtra, 0);
+            // The glow box starts 14 rows above the logo's, so the word (logo row kSubH + 96 - kLift) is glow row
+            // kSubH + 110 - kLift, and its glow (the word at row 8 of wordGlow) starts 8 above; past the end is cut.
+            const int glowAt = kSubH + 102 - kLift, glowRows = static_cast<int>(wordGlow.size() / kGlowTexW);
+            for (int y = 0; y < glowRows && glowAt + y < kGlowTexH + 2 * kSubH; ++y)
+                for (int x = 0; x < kGlowTexW; ++x)
+                {
+                    uint8_t& p = glow[(glowAt + y) * kGlowTexW + x];
+                    p = (std::max)(p, wordGlow[y * kGlowTexW + x]);
+                }
+            // The word's first kLift rows over the logo's last ones (straight-alpha "over").
+            for (int y = 0; y < kLift; ++y)
+                for (int x = 0; x < kLogoW; ++x)
+                {
+                    const uint8_t* s = &rows[(y * kLogoW + x) * 4];
+                    uint8_t* p = &data[kHeader + kLogo + ((kLogoH - kLift + y) * kLogoW + x) * 4];
+                    int a = s[3], under = p[3] * (255 - a) / 255, all = a + under;
+                    if (!a) continue;
+                    for (int c = 0; c < 3; ++c) p[c] = static_cast<uint8_t>((s[c] * a + p[c] * under) / all);
+                    p[3] = static_cast<uint8_t>(all);
+                }
+            rows.erase(rows.begin(), rows.begin() + kLift * kLogoW * 4);
+
+            std::vector<uint8_t> out(data.begin(), data.begin() + kHeader + kLogo);
+            out.resize(out.size() + kExtra, 0);
+            out.insert(out.end(), data.begin() + kHeader + kLogo, data.begin() + kHeader + kGlow);
+            out.insert(out.end(), rows.begin(), rows.end());
+            out.insert(out.end(), glow.begin(), glow.end());
+            out.insert(out.end(), data.begin() + kHeader + kGlowEnd, data.begin() + kSize);
+            data.swap(out);
+            u32(0x14) += 2 * (kExtra + kGlowExtra);
+            u32(0x60) = (u32(0x60) & ~0xfff000u) | ((kLogoH + 2 * kSubH - 1) << 12);
+            u32(0x7c) = (u32(0x7c) & ~0xfff000u) | ((kGlowTexH + 2 * kSubH - 1) << 12);
+            u32(0x70) += 2 * kExtra; // where each later texture starts
+            for (int k = 3; k < 13; ++k) u32(0x38 + k * 0x1c) += 2 * (kExtra + kGlowExtra);
+            u16(0x38a) = u16(0x4b0) = kLogoH + 2 * kSubH;
+            u16(0x39e) = u16(0x4ec) = kGlowTexH + 2 * kSubH;
+            CreateDirectoryW((LocalStatePath() + L"\\pdnet").c_str(), nullptr);
+            file = g_createFile2(copy.c_str(), GENERIC_WRITE, 0, CREATE_ALWAYS, nullptr);
+            if (file == INVALID_HANDLE_VALUE) return false;
+            DWORD written = 0;
+            BOOL ok = WriteFile(file, data.data(), static_cast<DWORD>(data.size()), &written, nullptr) && written == data.size();
+            CloseHandle(file);
+            return ok;
+        }
+
+        // The logo and glow boxes' top and bottom edges (see above), moved out by kSubH, and "PRESS ENTER TO START"
+        // moved down (its edges also read only there); only if all are as expected.
+        bool TallerTitleBoxes()
+        {
+            struct Edge { uint64_t at; float was, now; };
+            constexpr Edge kEdges[] = { { 0x1402f80a8, 153.03125f, 153.03125f - kSubH - kLogoUp }, { 0x1402f810c, 249.03125f, 249.03125f + kSubH - kLogoUp },
+                                        { 0x1402f8090, 139.03125f, 139.03125f - kSubH - kLogoUp }, { 0x1402f8114, 251.03125f, 251.03125f + kSubH - kLogoUp },
+                                        { 0x1402f8168, 379.03125f, 379.03125f + kPressDown }, { 0x1402f8170, 395.03125f, 395.03125f + kPressDown } };
+            for (const Edge& e : kEdges)
+                if (*reinterpret_cast<const float*>(At(e.at)) != e.was) return false;
+            for (const Edge& e : kEdges)
+            {
+                std::vector<uint8_t> bytes(4);
+                memcpy(bytes.data(), &e.now, 4);
+                if (!Write(At(e.at), bytes)) return false;
+            }
+            return true;
+        }
+
+        HANDLE WINAPI HookedCreateFile2(LPCWSTR name, DWORD access, DWORD share, DWORD disposition, LPCREATEFILE2_EXTENDED_PARAMETERS params)
+        {
+            size_t n = name ? wcslen(name) : 0;
+            if (n > 16 && _wcsicmp(name + n - 15, L"menu\\FDLogo.alr") == 0 && (name[n - 16] == L'/' || name[n - 16] == L'\\')) // "Assets/Data/menu\FDLogo.alr"
+            {
+                static std::once_flag once;
+                static std::wstring copy;
+                std::call_once(once, [name]
+                {
+                    std::wstring path = LocalStatePath() + L"\\pdnet\\FDLogo.alr";
+                    if (MakeTitleCopy(name, path) && TallerTitleBoxes()) copy = path;
+                    Log(L"gamepatch: title screen %s", copy.empty() ? L"left as it is (logo file not as expected)" : L"reads \"Rebirth\"");
+                });
+                if (!copy.empty()) return g_createFile2(copy.c_str(), access, share, disposition, params);
+            }
+            return g_createFile2(name, access, share, disposition, params);
+        }
+        // Returns false until Windows has filled in PDUWP.exe's imports (pdlaunch injects pdnet before that).
+        bool PatchCreateFile2()
+        {
+            auto base = Image();
+            auto nt = reinterpret_cast<IMAGE_NT_HEADERS*>(base + reinterpret_cast<IMAGE_DOS_HEADER*>(base)->e_lfanew);
+            auto& dir = nt->OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_IMPORT];
+            for (auto desc = reinterpret_cast<IMAGE_IMPORT_DESCRIPTOR*>(base + dir.VirtualAddress); dir.VirtualAddress && desc->Name; ++desc)
+            {
+                if (!desc->OriginalFirstThunk) continue;
+                auto names = reinterpret_cast<IMAGE_THUNK_DATA*>(base + desc->OriginalFirstThunk);
+                auto slots = reinterpret_cast<IMAGE_THUNK_DATA*>(base + desc->FirstThunk);
+                for (; names->u1.AddressOfData; ++names, ++slots)
+                {
+                    if (IMAGE_SNAP_BY_ORDINAL(names->u1.Ordinal) ||
+                        strcmp(reinterpret_cast<IMAGE_IMPORT_BY_NAME*>(base + names->u1.AddressOfData)->Name, "CreateFile2") != 0)
+                        continue;
+                    if (slots->u1.Function == names->u1.AddressOfData) return false; // not filled in yet
+                    g_createFile2 = reinterpret_cast<CreateFile2Fn>(slots->u1.Function);
+                    DWORD old;
+                    VirtualProtect(&slots->u1.Function, sizeof(ULONG_PTR), PAGE_READWRITE, &old);
+                    slots->u1.Function = reinterpret_cast<ULONG_PTR>(&HookedCreateFile2);
+                    VirtualProtect(&slots->u1.Function, sizeof(ULONG_PTR), old, &old);
+                    return true;
+                }
+            }
+            return false;
+        }
+    }
+
+    bool HookFileOpens()
+    {
+        static std::atomic<bool> done{ false };
+        static std::mutex lock;
+        if (done) return true;
+        std::lock_guard guard(lock);
+        if (!done && PatchCreateFile2()) done = true;
+        return done;
+    }
+
     void Apply()
     {
         static std::once_flag once;
         std::call_once(once, []
         {
+            if (!HookFileOpens()) Log(L"gamepatch: title screen: CreateFile2 import not found");
             g_bodyTags = GetConfig().nametagsOnBodies ? 1 : 0;
             if (NametagsOnBodies())
             {
