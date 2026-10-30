@@ -2503,7 +2503,7 @@ namespace pdnet::gamepatches
         using CreateFile2Fn = HANDLE(WINAPI*)(LPCWSTR, DWORD, DWORD, DWORD, LPCREATEFILE2_EXTENDED_PARAMETERS);
         CreateFile2Fn g_createFile2 = nullptr;
 
-        constexpr int kSubH = 74, kLift = 10; // the word starts kLift rows up, over the logo's own bottom rows
+        constexpr int kSubH = 82, kLift = 10; // the word starts kLift rows up, over the logo's own bottom rows
         constexpr float kPressDown = 60; // "PRESS ENTER TO START" (y 379..395, FUN_140279410) moves down to clear the word
                                          // (no further: the title's offscreen target is 456 rows)
 

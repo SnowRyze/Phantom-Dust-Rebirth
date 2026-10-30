@@ -81,7 +81,7 @@ public static class Key
         var sb = new System.Text.StringBuilder();
         sb.AppendLine("#pragma once");
         sb.AppendLine("// \"Rebirth\" for the title screen (gamepatches.cpp, RebirthRows): straight-alpha BGRA, made by pdnet\\tools\\rebirth-word\\make.ps1 from the");
-        sb.AppendLine("// supplied lettering artwork (rebirth-art.png, its painted checkerboard keyed out, shrunk to fit). Do not edit.");
+        sb.AppendLine("// supplied lettering artwork (rebirth-art.png, cropped to what is visible). Do not edit.");
         sb.AppendLine("#include <cstdint>");
         sb.AppendFormat("constexpr int kRebirthWordW = {0}, kRebirthWordH = {1};\n", word.Width, word.Height);
         sb.Append("constexpr uint8_t kRebirthWord[] = {");
