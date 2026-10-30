@@ -68,6 +68,21 @@ namespace pdnet::discord
         bool g_threadStarted = false;
         std::map<std::string, std::string> g_messages; // lobby id -> Discord message id (under g_queueLock)
 
+        // The exit note for a lobby this PC owns, kept as its member count changes, whatever the message settings:
+        // until 2026-10-31 it was only written when an edit went out, so a PC that took a lobby over (it gets the
+        // message id but sends nothing) or had player messages off (no edit when others leave) had no note, and the
+        // last player closing the game left the message saying "Open".
+        void KeepExitNote(const std::string& lobbyId, bool alone, const std::string& closedText)
+        {
+            std::string message;
+            {
+                std::lock_guard guard(g_queueLock);
+                auto it = g_messages.find(lobbyId);
+                if (it != g_messages.end()) message = it->second;
+            }
+            if (!message.empty()) ExitNote(alone ? message : std::string(), closedText);
+        }
+
         // Sends one request; returns the HTTP status (0 if Discord wasn't reached) and the response body.
         DWORD Request(const std::wstring& url, const wchar_t* method, const std::wstring& suffix, const std::string& text, std::string* response)
         {
@@ -154,6 +169,7 @@ namespace pdnet::discord
                     lobbies::Update(job.lobbyId, lobbies::Changes{ { { "PD_DISCORD", message } }, {} }, lobbies::Changes{});
                 }
             }
+            Log(L"discord: lobby %S message %s (HTTP %lu)", job.lobbyId.c_str(), job.closing ? L"marked closed" : job.opening && !message.empty() ? L"posted / updated" : L"updated", status);
             if (job.closing)
             {
                 std::lock_guard guard(g_queueLock);
@@ -517,8 +533,8 @@ namespace pdnet::discord
         if (GetConfig().discordWebhook.empty() || !Public(l)) return;
         bool mine = l.joined && l.ownerId == lobbies::LocalUserId();
         uint32_t members = Members(l);
-        std::string text, closed;
-        bool alone = false, opening = false;
+        std::string text, closed, noteText;
+        bool alone = false, opening = false, note = false;
         {
             std::lock_guard guard(g_lock);
             if (g_gone.count(l.id)) return; // already shown as closed (LobbyGone)
@@ -532,6 +548,7 @@ namespace pdnet::discord
             {
                 // Handed to this PC (host migration): keep editing the message the old host posted.
                 Announced a{ HostName(l), members, true, Roster(l), ShortMatch(l), l.maxMembers };
+                for (auto& [id, name] : a.players) if (!name.empty()) a.known[id] = name;
                 g_lobbies[l.id] = a;
                 auto posted = l.attributes.find("PD_DISCORD");
                 if (posted != l.attributes.end() && !posted->second.empty())
@@ -539,48 +556,55 @@ namespace pdnet::discord
                     std::lock_guard queue(g_queueLock);
                     g_messages[l.id] = posted->second;
                 }
-                return;
+                note = true;
+                noteText = Card(a, true);
+                alone = members <= 1;
             }
-            Announced& a = it->second;
-            if (!a.opened)
+            else
             {
-                if (Open(l, a)) text = Card(a);
-                opening = !text.empty();
-            }
-            else if (members > 0)
-            {
-                auto now = Roster(l);
-                bool named = false; // a member's name arrived since the message was last drawn
-                for (auto& [id, name] : now)
-                    if (!name.empty() && a.known[id] != name)
-                    {
-                        a.known[id] = name;
-                        named = true;
-                    }
-                if (a.members != members)
+                Announced& a = it->second;
+                if (!a.opened)
                 {
-                    a.joined.clear();
-                    a.left.clear();
-                    for (auto& [id, name] : now) if (!a.players.count(id)) a.joined.push_back(id);
-                    for (auto& [id, name] : a.players) if (!now.count(id)) a.left.push_back(id);
-                    for (auto& id : a.joined) a.order.push_back(id);
-                    // The first line names the latest event: a join if there is one, else a leave.
-                    if (!a.joined.empty()) { a.eventId = a.joined.back(); a.event = "joined the lobby"; }
-                    else if (!a.left.empty()) { a.eventId = a.left.back(); a.event = "left the lobby"; }
-                    a.members = members;
-                    a.players = std::move(now);
-                    a.maxMembers = l.maxMembers;
+                    if (Open(l, a)) text = Card(a);
+                    opening = !text.empty();
                 }
-                else if (!named) return;
-                if (GetConfig().discordPlayerMessages) text = Card(a);
-            }
-            if (!text.empty())
-            {
-                closed = Card(a, true);
-                alone = a.members <= 1;
+                else if (members > 0)
+                {
+                    auto now = Roster(l);
+                    bool named = false; // a member's name arrived since the message was last drawn
+                    for (auto& [id, name] : now)
+                        if (!name.empty() && a.known[id] != name)
+                        {
+                            a.known[id] = name;
+                            named = true;
+                        }
+                    if (a.members != members)
+                    {
+                        a.joined.clear();
+                        a.left.clear();
+                        for (auto& [id, name] : now) if (!a.players.count(id)) a.joined.push_back(id);
+                        for (auto& [id, name] : a.players) if (!now.count(id)) a.left.push_back(id);
+                        for (auto& id : a.joined) a.order.push_back(id);
+                        // The first line names the latest event: a join if there is one, else a leave.
+                        if (!a.joined.empty()) { a.eventId = a.joined.back(); a.event = "joined the lobby"; }
+                        else if (!a.left.empty()) { a.eventId = a.left.back(); a.event = "left the lobby"; }
+                        a.members = members;
+                        a.players = std::move(now);
+                        a.maxMembers = l.maxMembers;
+                        note = true; // the exit note follows the member count even with player messages off
+                    }
+                    else if (!named) return;
+                    if (GetConfig().discordPlayerMessages) text = Card(a);
+                }
+                if (!text.empty() || note)
+                {
+                    closed = noteText = Card(a, true);
+                    alone = a.members <= 1;
+                }
             }
         }
         if (!text.empty()) Show(l.id, text, false, closed, alone, opening);
+        else if (note) KeepExitNote(l.id, alone, noteText); // no edit going out: keep the note here
     }
 
     void LobbyLeft(const std::string& id, bool lastMember)
