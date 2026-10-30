@@ -8,6 +8,6 @@ namespace pdnet
     winrt::Windows::Foundation::IActivationFactory CreateGameSaveProviderFactory();
 
     // Activation factory standing in for Windows.System.Launcher: opening the xbox.com page (the old Help & Support
-    // button) imports the player's Xbox cloud save into the local saves instead; everything else goes to Windows.
+    // button, now "Community") opens the community Discord (discord_invite) instead; everything else goes to Windows.
     winrt::Windows::Foundation::IActivationFactory CreateLauncherFactory();
 }

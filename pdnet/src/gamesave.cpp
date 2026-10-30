@@ -1,5 +1,6 @@
 #include "pch.h"
 #include "gamesave.h"
+#include "config.h"
 #include "log.h"
 #include <fstream>
 #include <condition_variable>
@@ -781,8 +782,10 @@ namespace pdnet
             }).detach();
         }
 
-        // Stands in for Windows.System.Launcher: the old Help & Support button opens the Phantom Dust page on
-        // xbox.com; that request starts the Xbox save import instead. Everything else goes to the real Launcher.
+        // Stands in for Windows.System.Launcher: the old Help & Support button (now "Community") opens the Phantom
+        // Dust page on xbox.com; that request opens discord_invite in the browser instead. Everything else goes to the
+        // real Launcher. (Until 2026-10-29 it started the Xbox save import, ImportCloudSave; the user found it of
+        // little use.)
         struct LauncherFactory : winrt::implements<LauncherFactory, wf::IActivationFactory, winrt::Windows::System::ILauncherStatics>
         {
             winrt::Windows::System::ILauncherStatics m_real{ winrt::get_activation_factory<winrt::Windows::System::Launcher, winrt::Windows::System::ILauncherStatics>() };
@@ -802,9 +805,19 @@ namespace pdnet
             wf::IAsyncOperation<bool> LaunchUriAsync(wf::Uri const& uri) const
             {
                 if (!IsHelpPage(uri)) return m_real.LaunchUriAsync(uri);
-                Log(L"GameSave: Help button (%s) -> importing the Xbox save", uri.AbsoluteUri().c_str());
-                ImportCloudSave();
-                return Done();
+                const std::wstring& invite = GetConfig().discordInvite;
+                if (invite.empty())
+                {
+                    Log(L"GameSave: Community button - discord_invite is not set, nothing to open");
+                    return Done();
+                }
+                Log(L"GameSave: Community button -> opening %s", invite.c_str());
+                try { return m_real.LaunchUriAsync(wf::Uri{ invite }); }
+                catch (...)
+                {
+                    Log(L"GameSave: discord_invite is not a valid link (0x%08X)", winrt::to_hresult());
+                    return Done();
+                }
             }
 
             wf::IAsyncOperation<bool> LaunchUriAsync(wf::Uri const& uri, winrt::Windows::System::LauncherOptions const& options) const

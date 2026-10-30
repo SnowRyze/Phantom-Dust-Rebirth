@@ -638,10 +638,10 @@ namespace pdnet::gamepatches
             { "lobby_normal", "#Invite", "#Arsenal Lab" },
             { "lobby_team", "#Invite", "#Arsenal Lab" },
             { "lobby_locked_out", "#Invite", "#Arsenal Lab" },
-            // The Help & Support button (the Phantom Dust page on xbox.com) imports the Xbox save (gamesave.cpp).
-            { "help_main", "HELP & SUPPORT", "IMPORT XBOX SAVE" },
-            { "help", "Help & Support", "Import Xbox Save" },
-            { "help_hint", "Go to the Phantom Dust page on Xbox.com.", "Copy your Xbox Live save (progress, arsenals, play time) into this game. Restart the game afterwards." },
+            // The Help & Support button (the Phantom Dust page on xbox.com) opens the community Discord (gamesave.cpp).
+            { "help_main", "HELP & SUPPORT", "COMMUNITY" },
+            { "help", "Help & Support", "Community" },
+            { "help_hint", "Go to the Phantom Dust page on Xbox.com.", "Join the Phantom Dust Rebirth community on Discord." },
             // Quick Join finds nothing: no lobby this player can play (QuickJoinLabels).
             { "quick_match_hint", "No Quick Matches found", "No game sessions you can join right now" },
             // The scoreboard shows only the Global boards (PatchScoreboardMenu): their names lose " - Global".
