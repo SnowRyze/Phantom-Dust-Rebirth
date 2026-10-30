@@ -181,13 +181,20 @@ foreach ($key in 'discord_webhook', 'log_webhook', 'discord_invite') {
 Set-Content (Join-Path $files 'pdnet.ini') $ini -Encoding UTF8 -NoNewline
 
 $md5 = (Get-FileHash (Join-Path $out 'pdnet.dll') -Algorithm MD5).Hash.Substring(0, 8)
-$commit = git -C $root rev-parse --short HEAD 2>$null
-$dirty = if (git -C $root status --porcelain -- src xsapi launcher kit 2>$null) { ' + uncommitted changes' } else { '' }
+# The commit it was built from, when this is a git clone with git installed: a download of the repository as a ZIP
+# has no .git folder, and in Windows PowerShell git's "not a git repository" would stop the build (2026-10-29).
+$commit = $null; $dirty = ''
+if ((Test-Path (Join-Path $root '.git')) -and (Get-Command git -ErrorAction SilentlyContinue)) {
+    $ErrorActionPreference = 'Continue'
+    $commit = git -C $root rev-parse --short HEAD 2>$null
+    if (git -C $root status --porcelain -- src xsapi launcher kit 2>$null) { $dirty = ' + uncommitted changes' }
+    $ErrorActionPreference = 'Stop'
+}
 $label = if ($Mode -eq 'experimental') {
     $number = [Math]::Max((LastNumber 'Experimental'), $(if (Test-Path $counterFile) { [int](Get-Content $counterFile -Raw).Trim() } else { 0 })) + 1
     "PhantomDust-pdnet Experimental $number"
 } else { 'PhantomDust-pdnet development build' }
-$version = "$label`r`npdnet.dll MD5 $md5`r`nSource: $(if ($commit) { $commit } else { 'unknown' })$dirty`r`n" + $(if ($Mode -eq 'experimental' -and $Arg) { "$Arg`r`n" } else { '' })
+$version = "$label`r`npdnet.dll MD5 $md5`r`nSource: $(if ($commit) { $commit } else { 'unknown (not built from a git clone)' })$dirty`r`n" + $(if ($Mode -eq 'experimental' -and $Arg) { "$Arg`r`n" } else { '' })
 [IO.File]::WriteAllText((Join-Path $files 'kit-version.txt'), $version, (New-Object Text.UTF8Encoding $false))
 Zip $kit (Join-Path $out 'PhantomDust-pdnet.zip')
 
