@@ -17,7 +17,7 @@ Experimental zip, and `build.bat promote N` makes a Stable. It needs Visual Stud
 `deps\eos-sdk` (each user downloads that, because of its license; on the developer PC it is a junction to the SDK
 download). SDL3 is in `deps\SDL3`. Secrets live in `private\` (git-ignored): `eos.tester.ini` (the kit's eos.ini),
 `eos.local.ini` and `links.ini` (discord_webhook / log_webhook / discord_invite for the kit's pdnet.ini). The kit27
-branch is retired: kits are built from master (they had become identical, title included).
+branch is retired: kits are built from master (they had become identical, title included). A Linux build from contributor DeadMan009 (pull request #2: `build-linux.sh`, clang-cl + lld-link for wine-uwp, plus Wine support in `generate.py`) was merged into this layout; it sits at the top next to `src\` and writes to `out/linux`.
 
 ## 1. Goal
 
