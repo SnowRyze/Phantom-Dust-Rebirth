@@ -136,14 +136,19 @@ if ($Stage -ne 'B') {
         if ($line) { $Webhook = $line.Matches[0].Groups[1].Value.Trim() }
     }
     if ($Webhook -eq 'none') { $Webhook = '' }
-    # Options > Send Log's channel: log_webhook_url= in the same (untracked) lobbywatch.ini.
-    $logWebhook = ''
+    # Options > Send Log's channel (log_webhook_url=) and the main menu's Community link (discord_invite_url=), from
+    # the same (untracked) lobbywatch.ini. All three links change for the first public version.
+    $logWebhook = ''; $invite = ''
     if (Test-Path $watchIni) {
         $line = Select-String -Path $watchIni -Pattern '^log_webhook_url=(.+)$' | Select-Object -First 1
         if ($line) { $logWebhook = $line.Matches[0].Groups[1].Value.Trim() }
+        $line = Select-String -Path $watchIni -Pattern '^discord_invite_url=(.+)$' | Select-Object -First 1
+        if ($line) { $invite = $line.Matches[0].Groups[1].Value.Trim() }
     }
     $ini = (Get-Content "$files\pdnet.ini" -Raw -Encoding UTF8) -replace '(?m)^discord_webhook=.*$', "discord_webhook=$Webhook"
     $ini = $ini -replace '(?m)^log_webhook=.*$', "log_webhook=$logWebhook"
+    $ini = $ini -replace '(?m)^discord_invite=.*$', "discord_invite=$invite"
+    if (-not $invite) { Write-Host 'No Discord invite in this kit (discord_invite_url= in lobbywatch.ini): the Community button opens nothing.' -ForegroundColor Yellow }
     foreach ($pair in $Set) {
         $key, $value = $pair -split '=', 2
         if ($ini -match "(?m)^$([regex]::Escape($key))=") { $ini = $ini -replace "(?m)^$([regex]::Escape($key))=.*$", "$key=$value" }
