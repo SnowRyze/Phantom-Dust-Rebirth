@@ -297,7 +297,8 @@ namespace pdnet::p2p
             EOS_ENATType type = EOS_ENATType::EOS_NAT_Unknown;
             api.EOS_P2P_GetNATType(p2p, &nat, &type);
             static const wchar_t* names[] = { L"unknown (not queried yet)", L"open", L"moderate", L"strict" };
-            Log(L"p2p: ready (relays %s, NAT %s)", relay.c_str(), names[static_cast<int>(type) & 3]);
+            Log(L"p2p: ready (relays %s, NAT %s, game packets %s)", relay.c_str(), names[static_cast<int>(type) & 3],
+                GetConfig().p2pGameReliable ? L"reliable" : L"unreliable");
         }
 
         void Pump(void* platformPtr)
@@ -372,7 +373,15 @@ namespace pdnet::p2p
                 s.DataLengthBytes = static_cast<uint32_t>(o.data.size());
                 s.Data = o.data.data();
                 s.bAllowDelayedDelivery = EOS_TRUE; // queue while the connection is being made
-                s.Reliability = o.channel == kControl ? EOS_EPacketReliability::EOS_PR_ReliableOrdered : EOS_EPacketReliability::EOS_PR_UnreliableUnordered;
+                // Game packets reliable but unordered (p2p_game_reliable, on by default): when EOS's connection is
+                // interrupted for a few seconds and restored, unreliable game packets sent meanwhile were simply lost,
+                // and the match (all players advance together) waited for them forever. 2026-10-31: a 4-player Tag
+                // Team match froze for everyone after "connection to <peer> interrupted" on one link. Reliable, EOS
+                // resends them once the connection is back: a short pause instead of a freeze. Unordered, as plain UDP
+                // was for the game: no packet waits behind a lost one. Pings stay unreliable, to measure loss.
+                s.Reliability = o.channel == kControl ? EOS_EPacketReliability::EOS_PR_ReliableOrdered
+                              : o.channel == kGame && GetConfig().p2pGameReliable ? EOS_EPacketReliability::EOS_PR_ReliableUnordered
+                                                                                  : EOS_EPacketReliability::EOS_PR_UnreliableUnordered;
                 s.bDisableAutoAcceptConnection = EOS_FALSE;
                 EOS_EResult r = api.EOS_P2P_SendPacket(p2p, &s);
                 static int failures = 0;

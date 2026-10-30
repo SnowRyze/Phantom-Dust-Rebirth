@@ -30,6 +30,7 @@ namespace pdnet
                                             // voice_mode=mic (default): it is labelled Mic and switches only this PC's microphone
         std::string voiceTalkMark = "\xE2\x99\xAA"; // voice_talk_mark=: blinks after a talking player's name in the lobby (UTF-8 text, or #N = the game's inline icon N); default a music note
         bool p2pDebug = false;              // p2p_debug=on: log every pdnet control message sent and received over EOS P2P (debug, see p2p.cpp)
+        bool p2pGameReliable = true;        // p2p_game_reliable=on|off: game packets sent reliable-unordered, so a brief EOS interruption pauses the match instead of freezing it (see p2p.cpp)
         bool voiceDebug = false;           // voice_debug=on: EOS voice logs at Info, the input devices EOS sees, and the mic level every 3 s (debug)
         int voiceTalkIcon = 36;             // voice_talk_icon=N: MNET sprite N after the name of each player whose mic is on (36 = the original game's megaphone); -1 = voice_talk_mark text after a talking player's name instead
         int voiceTalkIconX = 6;             // voice_talk_icon_x=: gap in pixels between the end of the name and the megaphone
