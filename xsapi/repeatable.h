@@ -5,6 +5,7 @@
 // lobby (PDUWP.exe+0xA7083, FUN_14009c7c0). Repeatable() wraps an operation so every GetResults returns the same value.
 #include <mutex>
 #include <optional>
+#include "weak.h"
 
 namespace pdnet::xsapi
 {
@@ -19,7 +20,7 @@ namespace pdnet::xsapi
         // Called once right after construction (needs a reference to itself).
         void Start()
         {
-            m_inner.Completed([weak = this->get_weak()](auto const&, AsyncStatus status)
+            m_inner.Completed([weak = SafeWeak<RepeatableOperation<T>>(*this)](auto const&, AsyncStatus status)
             {
                 auto self = weak.get();
                 if (!self) return;
