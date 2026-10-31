@@ -10,6 +10,7 @@
 #include <algorithm>
 #include <regex>
 #include "../repeatable.h"
+#include "../weak.h"
 #include "../../src/gamepatches.h"
 #include "../../src/scores.h"
 
@@ -20,7 +21,7 @@ namespace winrt::Microsoft::Xbox::Services::Multiplayer::implementation
     {
         // Every MultiplayerService the game made; the session store raises its events through them.
         std::mutex g_servicesLock;
-        std::vector<winrt::weak_ref<MultiplayerService>> g_services;
+        std::vector<::pdnet::xsapi::SafeWeak<MultiplayerService>> g_services;
 
         template <typename Fn>
         void ForEachService(Fn fn)
@@ -61,7 +62,7 @@ namespace winrt::Microsoft::Xbox::Services::Multiplayer::implementation
                 });
         });
         std::lock_guard guard(g_servicesLock);
-        g_services.push_back(get_weak());
+        g_services.emplace_back(*this);
     }
 
     void MultiplayerService::RaiseSessionChanged(::pdnet::mpsd::SessionPtr const& session, Microsoft::Xbox::Services::Multiplayer::MultiplayerSessionChangeTypes changes)
