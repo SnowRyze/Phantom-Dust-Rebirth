@@ -19,5 +19,68 @@ Very experimental work. This branch lives in its own folder, `D:\PhantomDust-Con
 - `deps\eos-sdk` and `private\` are links to the main repo's; never commit private\ files, eos.ini, links.ini or game
   files.
 
+## Feature assessment (2026-11-03)
+Read-only: from the code, the game's data and Ghidra. No code written, nothing tried in the game. Sizes are relative
+effort, not time.
+
+### How matches sync
+PCs don't exchange button presses. Each PC runs its own player and sends the others updates through 26 streams, table
+at 0x1403fb4d0 (0x28 bytes each: +0 size, +4 sequenced/resent, +0x10 send, +0x18 receive, +0x20 name): PlayerPos,
+CardKind, FireStartReq, FireReq, SkillActionCtrl, SkillActionEnd, Stage (2), CapsuleData, EnvCapture (2), CapsuleSteal,
+CapsuleMove, PowSteal, Condition, DrawTimer, PlayerCaptureReq, PlayerCaptureAns, PlayerRevive, NoDmgTimer, DmgEffect,
+Warp, ReadyStart, KilledCount, SkillHit (2). Per-frame send: FUN_14027abe0 (one packet per other slot, through
+FUN_140125430).
+- Each PC already gets the others' positions and hands, and pdnet carries all of it. CardKind's receive, FUN_14024dd90,
+  writes four values (the four hand slots) into that player's status record.
+- A replay is one PC's version of the match; PCs can disagree on bad connections ("cross lagging", HANDOFF section 11).
+  Custom rules that decide a winner need the host to make the call.
+- Not settled: the freeze note in HANDOFF says all players advance together. Whether the game waits for other PCs each
+  frame wasn't confirmed, and it could affect spectating.
+
+### Each idea
+| Idea | Possible? | Size | Main catch |
+|---|---|---|---|
+| Dynamic arsenal cases | Very likely | Small | Does the case's school count affect anything besides the editor limit? |
+| Lobby settings | Very likely | Small to medium | All PCs must use the same values; in-lobby rule/type changes have crashed before |
+| Dead camera | Very likely | Medium | Showing enemy hands to a dead player allows callouts over voice |
+| Draft / Sealed | Likely | Sealed medium, Draft large | Must never alter the real save; the pick screen is the most work |
+| New game modes | Depends on the mode | Small to large | Variants are easy; objective modes need host-decided scoring |
+| Theatre | Likely | Large | Viewing a match with no local player is unproven |
+| Spectator | Possible | Large | Full 2v2 matches have no free player slot |
+| 3v3 or more | Possible but unlikely | Very large | Four players are built in throughout the game |
+
+### How each would work
+- **Dynamic cases:** replace the fixed limit with a count of the schools in the arsenal. Limit: case +0x50 (arsenal
+  entries are 100 bytes, list at *(save + 0x10a*0x38)); the editor shows "You are limited to %d schools". Open: a maximum?
+  What happens to buying and selling cases?
+- **Lobby settings:** use the route of the host's nametag setting (PD_BODYTAGS, mpsd ApplyHostRules) and the spare lobby
+  window (HANDOFF backlog 4). Custom matches are Unrated. Earlier in-lobby change attempt: HANDOFF backlog 3.
+- **Dead camera:** a camera that follows any player, plus a freecam. The view is rebuilt, not their exact screen, and must
+  snap back on revive. The local slot DAT_1404bbe00 is also used by the network send code, so flipping it isn't enough.
+- **Game modes, easiest first:** rule variants (health, aura); kill-count or respawn modes (KilledCount, PlayerRevive
+  exist); objective modes or uneven teams such as 3v1; team switching mid-match.
+- **Draft / Sealed:** Quick (rule flags 0) hands out premade arsenals and Test Arsenal builds one, so the battle side is
+  mostly there. Sealed first (a shared seed gives everyone the same packs), then Draft (live picks). Packs and rarities
+  are a design job.
+- **Theatre:** pdnet saves all match traffic and the match setup to a file, then plays it back. The setup needs saving
+  because stage and rule travel in the host's 0x80-byte peer message. Forward only at first; rewind means restart and
+  fast-forward.
+- **Spectator:** Theatre fed live. Players' PCs send a copy of their traffic to the spectator, who needs no game slot and
+  sends no acks. This also gives a tournament delay. Until then, a caster can stream a dead player's camera.
+- **3v3:** the tables hold four entries and sit next to other data, so they can't grow in place. References: DAT_1404bc9d8
+  about 500, DAT_1404bc608 about 180, DAT_1404bbe00 about 125. Masks (0xf), HUD, lobby and mesh loops also assume four.
+  15 links instead of 6 makes cross lagging worse. Try uneven teams inside four players first.
+
+### Suggested order
+1. Three offline tests in Test Arsenal: follow the AI with the camera, record a match to a file, try a match with no
+   local player. The third decides whether Theatre and Spectator are realistic.
+2. Dynamic cases, lobby settings, dead camera.
+3. Game mode variants, then Sealed, then Draft.
+4. Theatre, then Spectator.
+5. 3v3, only if everything else is done and a small test looks promising.
+
+Anything that changes match behaviour needs every player on the same kit, and real tests need at least one other person.
+
 ## Log
 (Newest first: what was tried, what happened.)
+- 2026-11-03: feature assessment written (above). Read-only, no kit built.
