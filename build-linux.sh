@@ -68,8 +68,16 @@ compile() {
     [ "$FAILED" = 0 ] || { echo "BUILD FAILED"; exit 1; }
 }
 
+# The name on the main menu: this build has no kit-version.txt, so it goes into the DLL, from the last Experimental
+# number. A new number rebuilds gamepatches.cpp (compile() only looks at file dates).
+LABEL="Linux Experimental $(tr -d '\r\n ' < "$ROOT/tools/kit-counter.txt")"
+if [ "$(cat obj/label.txt 2>/dev/null)" != "$LABEL" ]; then
+    rm -f obj/gamepatches.obj
+    echo "$LABEL" > obj/label.txt
+fi
+
 echo "1. pdnet core"
-FLAGS=("${CFLAGS[@]}" "${EOSFLAGS[@]}")
+FLAGS=("${CFLAGS[@]}" "${EOSFLAGS[@]}" "-DPDNET_BUILD_LABEL=\"$LABEL\"")
 CORE=()
 for f in dllmain hooks gamesave log config net sda testpeer eostest credstore eossdk eosclock eos lobbies p2p \
          gamepatches gamepads discord scores; do

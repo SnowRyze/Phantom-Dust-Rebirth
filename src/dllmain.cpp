@@ -64,6 +64,7 @@ extern "C" DWORD WINAPI PdInjectedInit(LPVOID)
     pdnet::SetFirstXboxActivationHandler(EnsureInitialized);
     std::thread([]
     {
+        pdnet::gamepatches::InstallEarlyHooks();
         // The game's DLLs (vccorlib140_app.dll first) load within a moment of the main thread starting; its first
         // Xbox Live request comes much later. Watch for 60 s at most.
         for (int ms = 0; ms < 60000 && !pdnet::FirstXboxActivationSeen(); ++ms)

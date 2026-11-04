@@ -620,20 +620,67 @@ namespace pdnet::gamepatches
         // feedback?", Cheating...), dead without Xbox Live and removed: a Test Arsenal battle goes back to the Lab,
         // any other to the scoreboard, where the feedback screen would have gone.
         constexpr int kFeedbackMenu = 75;
-        // The Lab opened on livedbtl (74) when a test is cancelled sits on the opponent's arsenal choice: its back opens the
-        // multiplayer menu instead.
+        // A Lab opened after a test battle sits on top of the battle (menu 1), and one opened when a test is cancelled on
+        // top of the opponent's arsenal choice: a plain back would return there (a black screen, Experimental 87), so its
+        // back opens the multiplayer menu instead.
         std::atomic<bool> g_labAfterTest{ false };
-        // After a test battle: a Lab opened right on top of the battle (menu 1) crashed the game in View Stock List
-        // (Experimental 99, toaf, three times; opened from the multiplayer menu it works), and its back returned into the
-        // battle (a black screen, Experimental 87). The battle now ends in the multiplayer menu (36), as the game's own
-        // scoreboard battle did, and the Lab opens on top of it a moment later (OpenPendingLab).
-        std::atomic<ULONGLONG> g_labPendingAt{ 0 };
-        // Test Arsenal first opens livearsel (67) on its own for the opponent's arsenal. livearsel in scoreboard mode (its
-        // menu parameter 0 = 1) stores a pick with g4 #575 (0x1403de844) and sets livedbtl's parameter 0 to 1, or to 2 when
-        // cancelled, then goes back; that back (HookedPopMenu) copies the pick in as the opponent and opens livedbtl (74),
-        // where the player picks their own arsenal.
-        constexpr int kArsenalPickMenu = 67;
-        std::atomic<bool> g_testPickingOpponent{ false };
+        // The Lab's scripts read menu variables 0, 1 and 2 (command 14; DAT_140533c10, ints) as they start: variable 0 & 0xff
+        // picks the save's list (g5 #111, +0xb50), and only lists 0 and 1 exist (FUN_14015a520). The multiplayer menu sets
+        // all three to 0 just before opening the Lab (livemain_en.ssb 0x175c); when pdnet opens it, nothing did. A battle
+        // leaves variable 0 at 2 (command_en.ssb), so View Stock List copied from an empty list and crashed
+        // (PDUWP+0x15a257, FUN_14015a230 with list 2; Experimental 99 and 100; the dump shows variable 0 = 2).
+        int32_t* MenuVariables() { return reinterpret_cast<int32_t*>(At(0x140533c10)); }
+        void ResetLabVariables() { memset(MenuVariables(), 0, 3 * sizeof(int32_t)); }
+        // Test Arsenal asks, in order: the player's character and arsenal, the AI's character and arsenal, the map; then
+        // opens livedbtl (74) with its menu parameter 0 = 1, which starts the battle. Each step is on the game's own menu and
+        // ends with a back (HookedPopMenu), picked or not, so the next step opens from there:
+        // - livecharasel (46; g4 #571 stores the pick in 0x140527bc0): opened with that at -1. Its back leaves the session
+        //   unless menu variable 0 is 1, as the lobby sets it before opening it.
+        // - livearsel (67) in scoreboard mode (its menu parameter 0 = 1) stores a pick with g4 #575 (0x1403de844, the
+        //   arsenal the battle gives the player) and sets livedbtl's parameter 0 to 1, or to 2 when cancelled.
+        // - livestagesel (47; g4 #576 stores the pick in 0x14051775c, the map id in 0x140527bc8 and a random layout in
+        //   0x140527c54): opened with that at -1.
+        // The scoreboard battle (g4 #661 = FUN_140214770) has map 2, layout 0 and character 0 built in, so HookedTestStart
+        // passes the picks to its FUN_140128990 (the match setup, 0x48 per player: the character at +8; online, the same field).
+        constexpr int kArsenalPickMenu = 67, kCharacterMenu = 46, kStageMenu = 47;
+        enum TestPick { kPickingNone, kPickingCharacter, kPickingArsenal, kPickingOpponentCharacter, kPickingOpponentArsenal, kPickingStage };
+        std::atomic<int> g_testPicking{ kPickingNone };
+        std::atomic<int> g_testStage{ -1 }, g_testLayout{ 0 }, g_testCharacter{ -1 }, g_testOpponentCharacter{ -1 }, g_testArsenal{ 0 };
+        std::atomic<ULONGLONG> g_matchLoadingSince{ 0 }; // when the load into the current match began (BackButtonTick); 0: none
+        // Menu command 88, line 1: the heading. These menus set none of their own, so the last one stays on screen.
+        void SetMenuHeading(const char* text)
+        {
+            int64_t heading[8] = { 1, reinterpret_cast<int64_t>(text), 0 };
+            reinterpret_cast<int64_t (*)(int64_t*)>(At(0x140207650))(heading);
+        }
+        // Those menus draw from the multiplayer texture file: "MNET" in slot 3 (window_chara and so on), which the
+        // multiplayer menu frees right before it opens the Lab (livemain_en.ssb 0x16e4) and loads again when it comes back
+        // (0x1a84). Without it the character screen is only its text (Experimental 111). So it's loaded as the scripts do
+        // (menu command 16 until it starts, 17 until it's done; each is one try). livedbtl frees it again before the battle.
+        constexpr int kMultiplayerTextures = 3;
+        void LoadMultiplayerTextures()
+        {
+            auto load = reinterpret_cast<int64_t (*)(int64_t*)>(At(0x1402076b0));
+            auto done = reinterpret_cast<int64_t (*)(int64_t*)>(At(0x1402076d0));
+            int64_t args[8] = { kMultiplayerTextures, reinterpret_cast<int64_t>("MNET") };
+            ULONGLONG start = GetTickCount64();
+            while (!load(args))
+            {
+                if (GetTickCount64() - start > 3000) { Log(L"gamepatch: Test Arsenal: MNET textures not loaded"); return; }
+                Sleep(5);
+            }
+            while (!done(args))
+            {
+                if (GetTickCount64() - start > 3000) { Log(L"gamepatch: Test Arsenal: MNET textures not ready after 3 s"); return; }
+                Sleep(5);
+            }
+            Log(L"gamepatch: Test Arsenal: MNET textures loaded (%llu ms)", GetTickCount64() - start);
+        }
+        void FreeMultiplayerTextures()
+        {
+            int64_t args[8] = { kMultiplayerTextures };
+            reinterpret_cast<int64_t (*)(int64_t*)>(At(0x1402077d0))(args);
+        }
         int16_t& MenuParam(int menu, int slot) { return *reinterpret_cast<int16_t*>(At(0x1403fa3d8 + menu * 0x18 + slot * 2)); }
         bool CopyArsenalToOpponent(int index); // (below)
         using PushMenuFn = int (*)(int64_t manager, int menu, char force);
@@ -832,8 +879,12 @@ namespace pdnet::gamepatches
             if (menu == kFeedbackMenu)
             {
                 bool test = g_testBattle.exchange(false);
-                int to = test ? kMultiplayerMenu : kScoreboardMenu;
-                if (test) g_labPendingAt = GetTickCount64(); // the Lab follows from the multiplayer menu (OpenPendingLab)
+                int to = test ? kLabMenu : kScoreboardMenu;
+                if (test)
+                {
+                    g_labAfterTest = true;
+                    ResetLabVariables();
+                }
                 Log(L"menu: player feedback screen skipped - menu %d instead", to);
                 return g_pushMenu(manager, to, force);
             }
@@ -842,6 +893,7 @@ namespace pdnet::gamepatches
                 g_testBattle = false;
                 g_labAfterTest = true; // 74 sits on the opponent's arsenal choice: the Lab's back goes to the multiplayer menu
                 Log(L"menu: leaving Test Arsenal - back to the Lab instead of the scoreboard");
+                ResetLabVariables();
                 return g_pushMenu(manager, kLabMenu, force);
 
             }
@@ -871,17 +923,71 @@ namespace pdnet::gamepatches
             int64_t manager = MenuManager();
             int current = CurrentMenu(manager);
             Log(L"menu: back (from %d)", current);
-            if (current == kArsenalPickMenu && g_testPickingOpponent.exchange(false))
+            int step = g_testPicking;
+            if (step != kPickingNone && current == (step == kPickingStage ? kStageMenu : step == kPickingCharacter || step == kPickingOpponentCharacter ? kCharacterMenu : kArsenalPickMenu))
             {
-                if (MenuParam(kScoreBattleMenu, 0) == 1 && CopyArsenalToOpponent(*reinterpret_cast<int32_t*>(At(0x1403de844))))
+                *At(0x1404bbc34) = 0;
+                bool arsenal = current == kArsenalPickMenu;
+                int picked = arsenal ? (MenuParam(kScoreBattleMenu, 0) == 1 ? *reinterpret_cast<int32_t*>(At(0x1403de844)) : -1)
+                                     : *reinterpret_cast<int32_t*>(At(current == kStageMenu ? 0x14051775c : 0x140527bc0));
+                if (picked < 0)
                 {
-                    MenuParam(kScoreBattleMenu, 0) = 0; // livedbtl: open the arsenal choice (the player's own) first
-                    *At(0x1404bbc34) = 0;
+                    g_testPicking = kPickingNone;
+                    g_testBattle = false;
+                    ResetLabVariables();
+                    FreeMultiplayerTextures();
+                    Log(L"gamepatch: Test Arsenal: nothing picked on menu %d - back to the Lab", current);
+                    if (step == kPickingCharacter) return g_popMenu(); // right on top of the Lab
+                    g_labAfterTest = true;
+                    return g_pushMenu(manager, kLabMenu, 0);
+                }
+                auto openCharacter = [&](int next)
+                {
+                    *reinterpret_cast<int32_t*>(At(0x140527bc0)) = -1;
+                    MenuVariables()[0] = 1;
+                    g_testPicking = next;
+                    return g_pushMenu(manager, kCharacterMenu, 0);
+                };
+                auto openArsenal = [&](int next, const char* heading)
+                {
+                    MenuVariables()[0] = 0;
+                    MenuParam(kArsenalPickMenu, 0) = 1; // livearsel in scoreboard mode
+                    MenuParam(kScoreBattleMenu, 0) = 0;
+                    SetMenuHeading(heading);
+                    g_testPicking = next;
+                    return g_pushMenu(manager, kArsenalPickMenu, 0);
+                };
+                switch (step)
+                {
+                case kPickingCharacter:
+                    g_testCharacter = picked;
+                    Log(L"gamepatch: Test Arsenal: character %d", picked);
+                    return openArsenal(kPickingArsenal, "YOUR ARSENAL");
+                case kPickingArsenal:
+                    g_testArsenal = picked;
+                    Log(L"gamepatch: Test Arsenal: arsenal %d", picked);
+                    return openCharacter(kPickingOpponentCharacter);
+                case kPickingOpponentCharacter:
+                    g_testOpponentCharacter = picked;
+                    Log(L"gamepatch: Test Arsenal: opponent's character %d", picked);
+                    return openArsenal(kPickingOpponentArsenal, "AI OPPONENT'S ARSENAL");
+                case kPickingOpponentArsenal:
+                    CopyArsenalToOpponent(picked);
+                    *reinterpret_cast<int32_t*>(At(0x1403de844)) = g_testArsenal; // the battle gives the player this one
+                    *reinterpret_cast<int32_t*>(At(0x14051775c)) = -1;
+                    MenuVariables()[0] = 0;
+                    SetMenuHeading("LEVEL SELECT");
+                    g_testPicking = kPickingStage;
+                    return g_pushMenu(manager, kStageMenu, 0);
+                default: // kPickingStage
+                    g_testStage = *reinterpret_cast<int32_t*>(At(0x140527bc8));
+                    g_testLayout = *reinterpret_cast<int32_t*>(At(0x140527c54));
+                    Log(L"gamepatch: Test Arsenal: map %d, layout %d - starting", g_testStage.load(), g_testLayout.load());
+                    g_testPicking = kPickingNone;
+                    ResetLabVariables();
+                    MenuParam(kScoreBattleMenu, 0) = 1; // livedbtl: start the battle
                     return g_pushMenu(manager, kScoreBattleMenu, 0);
                 }
-                g_testBattle = false;
-                Log(L"gamepatch: Test Arsenal: no opponent arsenal picked - back to the Lab");
-                return g_popMenu();
             }
             if (current == kLabMenu && g_labAfterTest.exchange(false))
             {
@@ -1377,11 +1483,20 @@ namespace pdnet::gamepatches
                 {
                     // Only the scoreboard menu adds $LEADERBOARD_ items.
                     if (GetConfig().scoreboard && strncmp(text, "$LEADERBOARD_", 13) == 0 && atoi(text + 13) % 3 != 0) return 0; // Friends / Favorites
-                    if (g_testPickingOpponent && strcmp(text, "Select an arsenal.") == 0) // livearsel, first pick of Test Arsenal
+                    if (g_testPicking == kPickingOpponentArsenal && strcmp(text, "Select an arsenal.") == 0) // livearsel, the AI's pick in Test Arsenal
                     {
                         int64_t renamed[8];
                         memcpy(renamed, args, sizeof(renamed));
-                        renamed[0] = reinterpret_cast<int64_t>("Select the OPPONENT's arsenal.\nThe AI will fight with it; you pick yours next.");
+                        renamed[0] = reinterpret_cast<int64_t>("Choose the arsenal the AI OPPONENT fights with.");
+                        return g_addItem(renamed);
+                    }
+                    if ((g_testPicking == kPickingCharacter || g_testPicking == kPickingOpponentCharacter) && strcmp(text, "Select a character.") == 0) // livecharasel, twice in Test Arsenal
+                    {
+                        int64_t renamed[8];
+                        memcpy(renamed, args, sizeof(renamed));
+                        bool opponent = g_testPicking == kPickingOpponentCharacter;
+                        renamed[0] = reinterpret_cast<int64_t>(opponent ? "Choose the character the AI OPPONENT plays as." : "Choose the character YOU play as.");
+                        SetMenuHeading(opponent ? "AI OPPONENT'S CHARACTER" : "YOUR CHARACTER");
                         return g_addItem(renamed);
                     }
                     char previous[80];
@@ -1743,12 +1858,12 @@ namespace pdnet::gamepatches
         constexpr Colour kColours[] = { { "Yellow", 0xFFE600 }, { "Red", 0xFF5A5A }, { "Blue", 0x4FB4FF }, { "Green", 0x5AFF6E },
                                         { "Purple", 0xB46EFF }, { "Orange", 0xFFA03C }, { "Cyan", 0x3CF0FF }, { "Pink", 0xFF78C8 },
                                         { "White", 0xFFFFFF } };
-        enum SettingRow { kName, kVoiceMode, kBodyTags, kDeadColour, kAllyColour, kEnemyColour, kSplashVolume,
+        enum SettingRow { kName, kVoiceMode, kPartnerAim, kBodyTags, kDeadColour, kAllyColour, kEnemyColour, kSplashVolume,
                           kDiscordLobby, kDiscordPlayers, kSettingRows };
         char g_rowText[kSettingRows][80];
         char g_optionText[kSettingRows][96]; // the rows as the Options screen shows them (RefreshSettingRows)
         constexpr int kFirstOptionRow = 3;   // after Cross Play (1) and Voice Chat (2)
-        const char* kOptionLabels[kSettingRows] = { "Name", "Voice Mode", "Body Tags", "Dead Colour", "Ally Colour", "Foe Colour",
+        const char* kOptionLabels[kSettingRows] = { "Name", "Voice Mode", "Partner Aim", "Body Tags", "Dead Colour", "Ally Colour", "Foe Colour",
                                                     "Logo Volume", "Discord Lobby", "Discord Join" };
         std::atomic<bool> g_typingName{ false };
         std::atomic<bool> g_settingsDirty{ false }; // changed in the Settings screen since it opened or was last saved
@@ -1787,6 +1902,7 @@ namespace pdnet::gamepatches
             }
             sprintf_s(g_rowText[kName], "Name: %s", name.c_str());
             sprintf_s(g_rowText[kVoiceMode], "Voice mode: %s", c.voiceClassic ? "Classic" : "Modern");
+            sprintf_s(g_rowText[kPartnerAim], "Partner aim: %s", c.partnerClassic ? "Classic" : "Modern");
             sprintf_s(g_rowText[kBodyTags], "Nametags on bodies: %s", onOff(c.nametagsOnBodies));
             sprintf_s(g_rowText[kDeadColour], "Dead colour: %s", ColourName(c.deadNametagColor).c_str());
             sprintf_s(g_rowText[kAllyColour], "Teammate colour: %s", ColourName(c.allyNametagColor).c_str());
@@ -1807,6 +1923,7 @@ namespace pdnet::gamepatches
             {
             case kName: return "Left / right, then type a new name: Enter keeps it, Esc drops it.";
             case kVoiceMode: return "Modern: Mic mutes only you. Classic: Off mutes everyone.";
+            case kPartnerAim: return "Modern: RB locks onto partner. Classic: RB adds them to switch target.";
             case kBodyTags: return "Defeated players keep their nametag (Tag Team; the host's applies).";
             case kDeadColour: return "Nametag colour of a defeated player.";
             case kAllyColour: return "Nametag colour of your teammates (Tag Team).";
@@ -1892,6 +2009,7 @@ namespace pdnet::gamepatches
                 Log(L"gamepatch: settings: typing a new name");
                 break;
             case kVoiceMode: c.voiceClassic = !c.voiceClassic; break;
+            case kPartnerAim: c.partnerClassic = !c.partnerClassic; break;
             case kBodyTags: c.nametagsOnBodies = !c.nametagsOnBodies; UseOwnSettings(); break;
             case kDeadColour: c.deadNametagColor = NextColour(c.deadNametagColor, direction); break;
             case kAllyColour: c.allyNametagColor = NextColour(c.allyNametagColor, direction); break;
@@ -1915,8 +2033,28 @@ namespace pdnet::gamepatches
         SessionCommandFn g_optionChanged = nullptr;
         using InputFn = int64_t (*)(int64_t* args);
 
+        // B during the start-up logos. playdatasel's wait routine (0x7e8) counts its frames in a local: i += 1, then, when its
+        // second argument is set, i = g10 #17 (0). PatchLogoWait has it call this instead (arguments: that argument, i), so
+        // B can end the wait; the logo then fades out as usual.
+        constexpr int kStartMenu = 7, kLogoReturnBig = 0x7fffffff;
+        int64_t LogoWait(int32_t* args)
+        {
+            int64_t input[2] = { 0, 0 };
+            bool cancel = (reinterpret_cast<InputFn>(At(0x1402168a0))(input) & 0x2020) != 0;
+            int64_t counted = args[2];
+            if (args[0])
+            {
+                int64_t none[8] = {};
+                counted = (*reinterpret_cast<InputFn*>(At(0x1403ddde0 + 17 * 8)))(none);
+            }
+            static std::atomic<bool> told{ false };
+            if (cancel && !told.exchange(true)) Log(L"gamepatch: B: start-up logo skipped");
+            return cancel ? kLogoReturnBig : counted;
+        }
+
         int64_t HookedOptionChanged(int32_t* args)
         {
+            if (args && CurrentMenu(MenuManager()) == kStartMenu) return LogoWait(args);
             if (!InSettings() || !args) return g_optionChanged ? g_optionChanged(args) : 0;
             int64_t input[2] = { 0, 0 };
             int64_t buttons = reinterpret_cast<InputFn>(At(0x1402168a0))(input); // g1 #37 (0): the buttons, as the script reads them
@@ -1997,7 +2135,7 @@ namespace pdnet::gamepatches
             const Config& c = EditableConfig();
             auto onOff = [](bool on) { return std::string(on ? "on" : "off"); };
             auto hex = [](uint32_t argb) { char s[8]; sprintf_s(s, "%06X", argb & 0xFFFFFF); return std::string(s); };
-            SaveSettings({ { "display_name", winrt::to_string(c.displayName) }, { "voice_mode", c.voiceClassic ? "classic" : "mic" },
+            SaveSettings({ { "display_name", winrt::to_string(c.displayName) }, { "voice_mode", c.voiceClassic ? "classic" : "mic" }, { "partner_aim", c.partnerClassic ? "classic" : "modern" },
                            { "nametags_on_bodies", onOff(c.nametagsOnBodies) },
                            { "dead_nametag_color", hex(c.deadNametagColor) }, { "ally_nametag_color", hex(c.allyNametagColor) },
                            { "enemy_nametag_color", hex(c.enemyNametagColor) }, { "splash_volume", std::to_string(c.splashVolume) },
@@ -2011,7 +2149,7 @@ namespace pdnet::gamepatches
         {
             Config& c = EditableConfig();
             const Config& s = g_settingsSaved;
-            c.displayName = s.displayName; c.voiceClassic = s.voiceClassic; c.nametagsOnBodies = s.nametagsOnBodies;
+            c.displayName = s.displayName; c.voiceClassic = s.voiceClassic; c.partnerClassic = s.partnerClassic; c.nametagsOnBodies = s.nametagsOnBodies;
             c.deadNametagColor = s.deadNametagColor; c.allyNametagColor = s.allyNametagColor; c.enemyNametagColor = s.enemyNametagColor;
             c.splashVolume = s.splashVolume;
             c.discordLobbyMessages = s.discordLobbyMessages; c.discordPlayerMessages = s.discordPlayerMessages;
@@ -2054,7 +2192,11 @@ namespace pdnet::gamepatches
                 if (first.rfind("\xEF\xBB\xBF", 0) == 0) first.erase(0, 3);
                 constexpr const char* kPrefix = "PhantomDust-pdnet ";
                 if (first.rfind(kPrefix, 0) == 0) first.erase(0, strlen(kPrefix));
-                return "Rebirth " + (first.empty() ? std::string("development build") : first);
+                // No kit-version.txt: build-linux.sh makes only the DLL, which goes in the game's folder, so it names itself.
+#ifndef PDNET_BUILD_LABEL
+#define PDNET_BUILD_LABEL "development build"
+#endif
+                return "Rebirth " + (first.empty() ? std::string(PDNET_BUILD_LABEL) : first);
             }();
             return label.c_str();
         }
@@ -2158,6 +2300,9 @@ namespace pdnet::gamepatches
         {
             const char* kSave = g_confirmingSave ? kConfirmBar : kNormalBar;
             char text[64];
+            if (args && args[0] == 1 && CopyString(reinterpret_cast<const char*>(args[1]), text, sizeof(text)) && strcmp(text, "LOADING") == 0 &&
+                CurrentMenu(MenuManager()) == kLobbyMenu && !g_matchLoadingSince)
+                g_matchLoadingSince = GetTickCount64(); // the lobby's loading screen, on the way into a match
             if (args && (InSettings() || GetTickCount64() - g_settingsOpenedAt < 500) && CopyString(reinterpret_cast<const char*>(args[1]), text, sizeof(text)) &&
                 (strcmp(text, "\a7#Change \a580r\a3#Back") == 0 || strcmp(text, "\a8#Select \a7#Change \a580r\a3#Back") == 0))
             {
@@ -2260,8 +2405,9 @@ namespace pdnet::gamepatches
         std::wstring UpdateChannel()
         {
             std::wstring channel = GetConfig().updateChannel;
-            if (!channel.empty()) return channel;
-            std::string label = BuildLabel();
+            if (_wcsicmp(channel.c_str(), L"stable") == 0 || _wcsicmp(channel.c_str(), L"experimental") == 0 || _wcsicmp(channel.c_str(), L"off") == 0) return channel;
+            std::string label = BuildLabel(); // empty or a typo in settings.ini: the kit's own, as pdlaunch does
+            if (label.find("Linux") != std::string::npos) return L"off"; // no pdlaunch there, so no updates
             return label.find("Experimental") != std::string::npos ? L"experimental" : label.find("Stable") != std::string::npos ? L"stable" : L"off";
         }
 
@@ -2409,14 +2555,19 @@ namespace pdnet::gamepatches
                 return;
             }
             *reinterpret_cast<int32_t*>(At(0x1403de844)) = index; // as g4 #575
-            MenuParam(kArsenalPickMenu, 0) = 1;                   // livearsel in scoreboard mode
-            MenuParam(kScoreBattleMenu, 0) = 0;
             g_testBattle = true;
-            g_testPickingOpponent = true;
-            Log(L"gamepatch: Test Arsenal: choose the opponent's arsenal (menu %d)", kArsenalPickMenu);
+            g_testStage = -1;
+            g_testCharacter = -1;
+            g_testOpponentCharacter = -1;
+            g_testArsenal = index;
+            LoadMultiplayerTextures();
+            *reinterpret_cast<int32_t*>(At(0x140527bc0)) = -1;
+            MenuVariables()[0] = 1;
+            g_testPicking = kPickingCharacter;
+            Log(L"gamepatch: Test Arsenal: choose your character (menu %d)", kCharacterMenu);
             int64_t manager = MenuManager();
             *At(0x1404bbc34) = 0;
-            g_pushMenu(manager, kArsenalPickMenu, 0);
+            g_pushMenu(manager, kCharacterMenu, 0);
             *reinterpret_cast<char*>(manager + 0x1062c) = 0; // no picked label on the new menu (see OpenCaseMenu)
         }
 
@@ -2432,27 +2583,6 @@ namespace pdnet::gamepatches
             if (event != 0 || GetTickCount64() - at < 300) return;
             g_testPendingAt = 0;
             OpenTestArsenal();
-        }
-
-        // After a test battle, once the multiplayer menu is on screen with no input for 0.3 s: the Lab on top of it.
-        void OpenPendingLab(int32_t event)
-        {
-            ULONGLONG at = g_labPendingAt;
-            if (!at) return;
-            int64_t manager = MenuManager();
-            int current = CurrentMenu(manager);
-            if (current != kMultiplayerMenu)
-            {
-                if (current == 1 || current == kFeedbackMenu || GetTickCount64() - at < 10000) return; // still on its way
-                g_labPendingAt = 0;
-                return;
-            }
-            if (event != 0 || GetTickCount64() - at < 300) return;
-            g_labPendingAt = 0;
-            Log(L"gamepatch: Test Arsenal over - back to the Lab");
-            *At(0x1404bbc34) = 0;
-            g_pushMenu(manager, kLabMenu, 0);
-            *reinterpret_cast<char*>(manager + 0x1062c) = 0; // no picked label on the new menu (see OpenCaseMenu)
         }
 
         bool LogItems(const char* added, int64_t* args, int64_t& result)
@@ -2560,7 +2690,6 @@ namespace pdnet::gamepatches
             int64_t result = g_setState(args);
             CheckSendLogPick(event);
             OpenPendingTestArsenal(event);
-            OpenPendingLab(event);
             SubscribePartnerKeyOnce();
             return result;
         }
@@ -2643,6 +2772,118 @@ namespace pdnet::gamepatches
             bool caseRows = WrapCommand<MenuCommandFn>(0x1403eefe0 + 59 * 8, 0x140207ec0, &HookedAddIdItem, g_addIdItem, L"Arsenal Lab rows");
             Log(L"gamepatch: Arsenal Lab Buy / Sell Arsenal Case %s", caseRows && CaseItemsReady() ? L"ready" : L"NOT added");
             Log(L"gamepatch: Options > Send Log %s (log_webhook %s)", g_logItemReady ? L"ready" : L"NOT added", GetConfig().logWebhook.empty() ? L"not set" : L"set");
+        }
+
+        // B to get out of what otherwise can only be waited for. (Signing in, searching, joining and creating a session have
+        // the game's own Cancel.)
+        // - Start-up logos: LogoWait, through PatchLogoWait. Runs from pdnet's start: the logos are over by the time Apply runs.
+        // - Movies: 0x14050e123 is the game's "stop this movie" flag (FUN_1401bdb00 -> FUN_1401bde70, also used when a file
+        //   won't open; FUN_1401bcbe0 clears it); 0x1405b1790 is the playing movie.
+        // - The load into a match: only once it has hung, as leaving a load that's still going could hang the others. The
+        //   lobby's LOADING screen (HookedButtonBar) or game states 1-5 (normally 3.5 s: 2, then a 90-frame 5) for
+        //   kHungLoadMs. Still in the lobby: out through menu 84, as a lost lobby is, which leaves the session and ends
+        //   in the multiplayer menu. In the match: the pause menu's Give Up (FUN_140211940), which ends in the lobby.
+        constexpr ULONGLONG kHungLoadMs = 30000;
+        bool CancelHeld()
+        {
+            int64_t input[2] = { 0, 0 };
+            return (reinterpret_cast<InputFn>(At(0x1402168a0))(input) & 0x2020) != 0;
+        }
+
+        // Words in playdatasel_en.ssb's wait routine: `if (arg 1) i = g10 #17 (0)` -> `i = session command 154 (i, arg 1)`.
+        bool PatchLogoWait(uint8_t* script)
+        {
+            __try
+            {
+                auto code = reinterpret_cast<uint32_t*>(script);
+                if (code[0x844 / 4] == 0x42B20201) return true;
+                if (code[0x83C / 4] != 0x00010009 || code[0x840 / 4] != 0x00040207 || code[0x844 / 4] != 0x0000000E ||
+                    code[0x848 / 4] != 0xA0110101 || code[0x84C / 4] != 0x00000010 || code[0x850 / 4] != 0xFFFF000A) return false;
+                code[0x83C / 4] = 0xFFFF0009; // push i
+                code[0x840 / 4] = 0x00010009; // push arg 1
+                code[0x844 / 4] = 0x42B20201; // call session command 154, 2 arguments
+                code[0x848 / 4] = 0x00000010; // push the result
+                code[0x84C / 4] = 0xFFFF000A; // i =
+                code[0x850 / 4] = 0x00000007; // jump to the next word
+                return true;
+            }
+            __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+        }
+
+        void BackButtonTick(int64_t manager)
+        {
+            int current = CurrentMenu(manager);
+            if (current == kStartMenu && g_optionChanged)
+            {
+                static uint8_t* patched = nullptr;
+                uint8_t* script = *reinterpret_cast<uint8_t**>(At(0x1403fa3d0 + kStartMenu * 0x18 + 0x10));
+                if (script && script != patched)
+                {
+                    patched = script;
+                    Log(L"gamepatch: B: start-up logos %s", PatchLogoWait(script) ? L"can be skipped" : L"can't be skipped - script not as expected");
+                }
+            }
+            if (*reinterpret_cast<uint64_t*>(At(0x1405b1790)) && CancelHeld() && !*At(0x14050e123))
+            {
+                *At(0x14050e123) = 1;
+                Log(L"gamepatch: B: movie stopped");
+            }
+            int32_t state = *reinterpret_cast<volatile int32_t*>(At(0x1404bc950));
+            bool loading = state >= 1 && state <= 5, inLobby = current == kLobbyMenu;
+            ULONGLONG since = g_matchLoadingSince, now = GetTickCount64();
+            if (!loading && !(inLobby && since))
+            {
+                g_matchLoadingSince = 0;
+                return;
+            }
+            if (!since) { g_matchLoadingSince = now; return; }
+            if (now - since < kHungLoadMs || AiBattle()) return;
+            static ULONGLONG toldFor = 0;
+            if (toldFor != since)
+            {
+                toldFor = since;
+                Log(L"gamepatch: B: the load into the match has taken %llu s (menu %d, game state %d) - B leaves it", (now - since) / 1000, current, state);
+                if (state == 0) SetMenuHeading("STUCK LOADING? PRESS B TO LEAVE");
+            }
+            if (!CancelHeld() || !g_pushMenu) return;
+            g_matchLoadingSince = 0;
+            Log(L"gamepatch: B: leaving the hung load (menu %d, game state %d)", current, state);
+            if (loading)
+            {
+                reinterpret_cast<int64_t (*)()>(At(0x140211940))(); // Give Up
+                return;
+            }
+            *At(0x1404bbc34) = 0;
+            g_pushMenu(manager, kLobbyLostMenu, 0);
+            *reinterpret_cast<char*>(manager + 0x1062c) = 0; // no picked label on the new menu (see OpenCaseMenu)
+        }
+
+        using MenuFrameFn = void (*)(int64_t manager);
+        MenuFrameFn g_menuFrame = nullptr;
+        void HookedMenuFrame(int64_t manager)
+        {
+            g_menuFrame(manager);
+            BackButtonTick(manager);
+        }
+
+        // The menu manager's per-frame update, FUN_140248230: its vtable slot. Scripts have run when it returns.
+        void InstallBackButton()
+        {
+            static std::once_flag once;
+            std::call_once(once, []
+            {
+                if (!WrapCommand<SessionCommandFn>(0x1403f1150 + 154 * 8, 0x140214d60, &HookedOptionChanged, g_optionChanged, L"settings rows and logo skip")) return;
+                uint8_t* slot = At(0x14048e358);
+                if (*reinterpret_cast<uint8_t**>(slot) != At(0x140248230))
+                {
+                    Log(L"gamepatch: B button skipped - the game code is not what this pdnet expects");
+                    return;
+                }
+                std::vector<uint8_t> hook;
+                Put64(hook, reinterpret_cast<uint64_t>(&HookedMenuFrame));
+                g_menuFrame = reinterpret_cast<MenuFrameFn>(At(0x140248230));
+                if (!Write(slot, hook)) { g_menuFrame = nullptr; Log(L"gamepatch: B button failed (VirtualProtect error %lu)", GetLastError()); }
+            });
         }
 
         // pdlaunch keeps the game at splash_volume while the title screen or intro is on (menu 7 playdatasel, 80, or no
@@ -2860,6 +3101,13 @@ namespace pdnet::gamepatches
         g_editorFromLobby = true;
         g_lobbyEndedInEditor = false;
         SetLobbyAvailable(false); // like the lobby's own menus: the match can't start while this player is in the Lab
+        // The lobby's script uses variable 0 too (0 or 1), so only a value with no list behind it is changed (see
+        // MenuVariables): a match or liveend_en.ssb can leave 2 or 3.
+        if ((MenuVariables()[0] & 0xff) > 1)
+        {
+            Log(L"menu: menu variable 0 was %d - 0 for the Arsenal Lab", MenuVariables()[0]);
+            MenuVariables()[0] = 0;
+        }
         *At(0x1404bbc34) = 0; // as the script's own "open menu" command does (FUN_140207020)
         g_pushMenu(manager, kLabMenu, 0);
         return true;
@@ -3077,8 +3325,9 @@ namespace pdnet::gamepatches
 
     namespace
     {
-        // Lock onto partner: RB on a controller, or the partner_lock_key key, switches between the game's own target and
-        // this player's teammate (the game's Options > Lock Onto Partner only lets switch-target cycle through them).
+        // Lock onto partner: RB on a controller, or the partner_lock_key key. partner_aim=modern (Settings > Partner Aim):
+        // it switches between the game's own target and this player's teammate. partner_aim=classic: it only switches the
+        // game's own option, Options > Details > Lock Onto Partner (the byte below), which lets switch-target cycle through teammates.
         // A human player's target is the block at player object +0x13f10 (FUN_14024ec80 -> FUN_140252a20 each frame,
         // the call at 0x14024f120): +0x10 is the target, an index into the targetable objects DAT_1404bcb50 (32, each
         // with the player's status record at +0xb8), +0xc the distance band, +0x300 the player. FUN_1402531d0 inside
@@ -3151,6 +3400,19 @@ namespace pdnet::gamepatches
             if (!player || player != PlayerObject(me)) return original(target);
             static std::atomic<bool> seen{ false };
             if (!seen.exchange(true)) Log(L"gamepatch: lock onto partner: target hook running for this PC's player %d", me);
+            if (GetConfig().partnerClassic)
+            {
+                g_partnerLock = false;
+                if (g_partnerToggle.exchange(false))
+                {
+                    volatile uint8_t* option = At(0x14052dfb9);
+                    *option = *option ? 0 : 1;
+                    Log(L"gamepatch: lock onto partner (classic): the game's option is %s", *option ? L"on" : L"off");
+                    int partner = *option ? -1 : PartnerSlot(me);
+                    if (partner >= 0 && *reinterpret_cast<int32_t*>(target + 0x10) == PartnerTarget(partner)) *reinterpret_cast<int32_t*>(target + 0x10) = -1; // back to an enemy
+                }
+                return original(target);
+            }
             if (g_partnerToggle.exchange(false))
             {
                 bool on = !g_partnerLock;
@@ -3195,6 +3457,36 @@ namespace pdnet::gamepatches
             original(target);
             *allowPartner = saved;
             if (index >= 0) *reinterpret_cast<int32_t*>(target + 0x10) = index;
+        }
+
+        // The scoreboard battle's start, for Test Arsenal's map and character (see g_testPicking).
+        using MatchSetupFn = void (*)(uint64_t a, uint32_t localSlot, int mode, uint8_t* setup, uint32_t e, int stage, uint32_t layout);
+        void HookedTestStart(uint64_t a, uint32_t localSlot, int mode, uint8_t* setup, uint32_t e, int stage, uint32_t layout)
+        {
+            if (g_testBattle)
+            {
+                if (g_testStage >= 0) { stage = g_testStage; layout = g_testLayout; }
+                if (g_testCharacter >= 0) *reinterpret_cast<int32_t*>(setup + 8) = g_testCharacter;
+                if (g_testOpponentCharacter >= 0) *reinterpret_cast<int32_t*>(setup + 0x48 + 8) = g_testOpponentCharacter;
+                Log(L"gamepatch: Test Arsenal: battle on map %d, layout %u, character %d, opponent's %d", stage, layout, *reinterpret_cast<int32_t*>(setup + 8), *reinterpret_cast<int32_t*>(setup + 0x48 + 8));
+            }
+            reinterpret_cast<MatchSetupFn>(At(0x140128990))(a, localSlot, mode, setup, e, stage, layout);
+        }
+
+        void TestArsenalChoices()
+        {
+            uint8_t* site = At(0x140214a09);
+            uint8_t* cave = CodeCave(16);
+            if (site[0] != 0xe8 || site + 5 + *reinterpret_cast<int32_t*>(site + 1) != At(0x140128990) || !cave)
+            {
+                Log(L"gamepatch: Test Arsenal map and character skipped - the game code is not what this pdnet expects");
+                return;
+            }
+            std::vector<uint8_t> toHook = { 0xff, 0x25, 0x00, 0x00, 0x00, 0x00 }; // jmp [rip+0]
+            Put64(toHook, reinterpret_cast<uint64_t>(&HookedTestStart));
+            std::vector<uint8_t> call = { 0xe8 };
+            Put32(call, Rel32(site + 5, cave));
+            if (!Write(cave, toHook) || !Write(site, call)) Log(L"gamepatch: Test Arsenal map and character failed (VirtualProtect error %lu)", GetLastError());
         }
 
         // Presses: RB (GamepadButtons RightShoulder) on any controller, polled; the key from the game's window.
@@ -3274,15 +3566,20 @@ namespace pdnet::gamepatches
     namespace
     {
         // Modpacks (PD Helper's ModLoader = Skill Editor) write their skill data straight into the game's copy of
-        // gsdata_<lang>.dat in memory: the block at 0x1404c5240 (pointer DAT_1404c5228, 0x44004 bytes, loaded once at
-        // start-up by FUN_14017da90). Players saw it go back to vanilla after matches, online / lobby screens and the
-        // title screen; no game code found re-reads it after start-up, so the cause isn't pinned down. SkillDataGuard
-        // keeps the mod: it compares the block with the file on disk and with the last modded state it saw, every 200 ms.
-        // Changes that aren't a return to vanilla are taken as the new modded state (Skill Editor's live edits too); when
-        // most modded bytes return to vanilla at once, the modded state is copied back and the moment is logged.
+        // gsdata_<lang>.dat in memory: the block at 0x1404c5240 (pointer DAT_1404c5228, 0x44004 bytes). The game fills it
+        // from the file at start-up (FUN_14017da90, done flag DAT_140509b90), then once, on the first main menu or session
+        // join (g10 #0 = FUN_1400bd660), copies its stored online copy over it (buffer DAT_1403dd458, size DAT_1403dd460, done
+        // flag DAT_1403dd465; from the save's UserConfig\gsdata_<lang>.dat). So what the game runs on isn't the file: 2627
+        // bytes apart on the developer's PC with no mod, which is why Experimental 97-108 saw every player as modded and took
+        // a revert for an edit, without a word in the log. Players saw mods go back to vanilla after matches, online / lobby
+        // screens and the title screen; that one copy is the only game code found that could do it, so the cause isn't
+        // pinned down. SkillDataGuard keeps the mod: every 200 ms it compares the block with the data as the game loaded it
+        // and the last modded state. Changes that aren't a return to the game's data are the new modded state (Skill
+        // Editor's live edits too); when most modded bytes return to it at once, they are put back and the moment is logged.
+        // Each match start logs how many bytes are modded, to tell a change in the block from anything else.
         constexpr size_t kSkillDataSize = 0x44004;
 
-        std::vector<uint8_t> VanillaSkillData()
+        std::vector<uint8_t> SkillDataFile()
         {
             wchar_t exe[MAX_PATH];
             GetModuleFileNameW(nullptr, exe, MAX_PATH);
@@ -3297,57 +3594,103 @@ namespace pdnet::gamepatches
                 data.resize(fread(data.data(), 1, data.size(), f));
                 fclose(f);
             }
-            if (data.size() != kSkillDataSize) { Log(L"gamepatch: modpack guard off - %s isn't readable or isn't %zu bytes", path.c_str(), kSkillDataSize); data.clear(); }
+            if (data.size() != kSkillDataSize) data.clear();
             return data;
+        }
+
+        // The game's stored online copy, if it's there and whole (the sign-in code can free it: hence __try).
+        bool CopyStoredSkillData(uint8_t* to)
+        {
+            __try
+            {
+                const uint8_t* stored = *reinterpret_cast<uint8_t**>(At(0x1403dd458));
+                if (!stored || *reinterpret_cast<int32_t*>(At(0x1403dd460)) != kSkillDataSize || *reinterpret_cast<const int32_t*>(stored) != kSkillDataSize) return false;
+                memcpy(to, stored, kSkillDataSize);
+                return true;
+            }
+            __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
         }
 
         void SkillDataGuard()
         {
             std::thread([]
             {
-                std::vector<uint8_t> vanilla = VanillaSkillData();
-                if (vanilla.empty()) return;
                 uint8_t* block = At(0x1404c5240);
-                // The start-up load: wait until the block holds the file (it is zeroes before).
-                for (int i = 0; i < 600 && memcmp(block, vanilla.data(), kSkillDataSize) != 0; ++i) Sleep(100);
-                Log(L"gamepatch: modpack guard ready (skill data %s the game files)", memcmp(block, vanilla.data(), kSkillDataSize) == 0 ? L"matches" : L"differs from");
-                std::vector<uint8_t> modded, now(kSkillDataSize);
+                std::vector<uint8_t> file = SkillDataFile(), stock, modded, now(kSkillDataSize);
+                bool stockHasStored = false; // the stored copy is in `stock`
+                int lastMenu = -1;
                 for (;;)
                 {
                     Sleep(200);
+                    if (!*reinterpret_cast<volatile int32_t*>(At(0x140509b90))) continue; // still loading the file
                     memcpy(now.data(), block, kSkillDataSize);
-                    if (modded.empty())
+                    bool applied = *reinterpret_cast<volatile uint8_t*>(At(0x1403dd465)) != 0;
+                    if (modded.empty() && (stock.empty() || (applied && !stockHasStored)))
                     {
-                        if (memcmp(now.data(), vanilla.data(), kSkillDataSize) == 0) continue;
-                        modded = now;
-                        Log(L"gamepatch: modpack loaded - its skill data will be kept until the game closes");
+                        stock = now; // the game's own data, as far as it has got
+                        stockHasStored = applied;
+                        Log(L"gamepatch: modpack guard: skill data loaded (%s)", applied ? L"the stored copy" : L"the file");
                         continue;
                     }
+                    if (!modded.empty() && applied && !stockHasStored)
+                    {
+                        // The game's one copy landed on a modpack loaded before it (the first main menu or join).
+                        if (CopyStoredSkillData(stock.data())) Log(L"gamepatch: modpack guard: the game applied its stored copy over the modpack");
+                        stockHasStored = true;
+                    }
+                    if (modded.empty())
+                    {
+                        if (memcmp(now.data(), stock.data(), kSkillDataSize) == 0) continue;
+                        modded = now;
+                        size_t bytes = 0;
+                        for (size_t i = 0; i < kSkillDataSize; ++i) bytes += modded[i] != stock[i];
+                        Log(L"gamepatch: modpack loaded (%zu bytes) - its skill data will be kept until the game closes", bytes);
+                        continue;
+                    }
+                    int menu = CurrentMenu(MenuManager());
+                    if (menu != lastMenu && menu == 1)
+                    {
+                        size_t bytes = 0;
+                        for (size_t i = 0; i < kSkillDataSize; ++i) bytes += now[i] != stock[i];
+                        Log(L"gamepatch: modpack guard: match starting, %zu bytes of skill data are modded", bytes);
+                    }
+                    lastMenu = menu;
                     if (memcmp(now.data(), modded.data(), kSkillDataSize) == 0) continue;
-                    // Of the bytes the mod changed, how many are vanilla again; and is anything new?
+                    // Bytes back at the game's data (or the file's), how many of them the mod had changed; and anything new?
+                    auto back = [&](size_t i) { return now[i] != modded[i] && (now[i] == stock[i] || (!file.empty() && now[i] == file[i])); };
                     size_t moddedBytes = 0, reverted = 0, otherChanges = 0;
                     for (size_t i = 0; i < kSkillDataSize; ++i)
                     {
-                        bool isMod = modded[i] != vanilla[i];
-                        if (isMod) { ++moddedBytes; if (now[i] == vanilla[i]) ++reverted; }
-                        if (now[i] != modded[i] && !(isMod && now[i] == vanilla[i])) ++otherChanges;
+                        bool isMod = modded[i] != stock[i];
+                        if (isMod) ++moddedBytes;
+                        if (back(i)) { if (isMod) ++reverted; }
+                        else if (now[i] != modded[i]) ++otherChanges;
                     }
-                    // A reload: many modded bytes (or most of them) vanilla again at once, little else new. A Skill Editor edit
-                    // that sets one value back to vanilla touches a few bytes and stays an edit.
+                    // A reload: many modded bytes (or most of them) back at once, little else new. A Skill Editor edit that
+                    // sets one value back touches a few bytes and stays an edit.
                     if (reverted && (reverted >= 64 || reverted * 2 >= moddedBytes) && otherChanges * 10 <= reverted)
                     {
                         for (size_t i = 0; i < kSkillDataSize; ++i) // only what reverted: anything else the game wrote stays
-                            if (modded[i] != vanilla[i] && now[i] == vanilla[i]) block[i] = modded[i];
-                        for (size_t i = 0; i < kSkillDataSize; ++i)
-                            if (!(modded[i] != vanilla[i] && now[i] == vanilla[i])) modded[i] = now[i];
+                        {
+                            if (back(i)) block[i] = modded[i];
+                            else modded[i] = now[i];
+                        }
                         Log(L"gamepatch: skill data went back to vanilla (%zu of %zu modded bytes; menu %d, game state %d) - modpack put back",
-                            reverted, moddedBytes, CurrentMenu(MenuManager()), *reinterpret_cast<int32_t*>(At(0x1404bc950)));
+                            reverted, moddedBytes, menu, *reinterpret_cast<int32_t*>(At(0x1404bc950)));
                     }
-                    else modded = now; // an edit (Skill Editor) or another modpack: the new modded state
+                    else
+                    {
+                        static int told = 0;
+                        if (told++ < 20) Log(L"gamepatch: modpack guard: skill data edited (%zu bytes back, %zu others; menu %d, game state %d)",
+                                             reverted, otherChanges, menu, *reinterpret_cast<int32_t*>(At(0x1404bc950)));
+                        modded = now; // an edit (Skill Editor) or another modpack: the new modded state
+                    }
                 }
             }).detach();
         }
     }
+
+    void InstallEarlyHooks() { InstallBackButton(); }
 
     bool HookFileOpens()
     {
@@ -3368,6 +3711,7 @@ namespace pdnet::gamepatches
             g_bodyTags = GetConfig().nametagsOnBodies ? 1 : 0;
             NametagsAlwaysOn();
             PartnerLock();
+            TestArsenalChoices();
             SkillDataGuard();
             if (NametagsOnBodies())
             {
@@ -3391,8 +3735,8 @@ namespace pdnet::gamepatches
             WrapCommand<MenuCommandFn>(0x1403eefe0 + 88 * 8, 0x140207650, &HookedButtonBar, g_buttonBar, L"settings save button");
             WrapCommand<MenuCommandFn>(0x1403eefe0 + 42 * 8, 0x140207f00, &HookedDrawWindow, g_drawWindow, L"settings save pop-up");
             WrapCommand<NativeFn>(0x1403fb108, 0x1402168a0, &HookedButtons, g_buttons, L"settings save confirmation");
-            if (WrapCommand<SessionCommandFn>(0x1403f1150 + 154 * 8, 0x140214d60, &HookedOptionChanged, g_optionChanged, L"settings rows"))
-                Log(L"gamepatch: in-game Settings ready (multiplayer menu > Settings)");
+            InstallBackButton(); // also takes session command 154, which the Settings rows use
+            if (g_optionChanged) Log(L"gamepatch: in-game Settings ready (multiplayer menu > Settings)");
             if (WrapCommand<MenuCommandFn>(0x1403eefe0 + 40 * 8, 0x140207e20, &HookedAddItem, g_addItem, L"menu item names"))
                 Log(L"gamepatch: menu items renamed as they are added (Quick Join, Lobby Browser%s)", GetConfig().scoreboard ? L", Global scoreboards only" : L"");
             SoundOptions(); // Options > Sound: Aura Particle Beeps

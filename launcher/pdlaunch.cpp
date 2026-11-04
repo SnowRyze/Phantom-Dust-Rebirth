@@ -152,9 +152,15 @@ namespace
             wchar_t line[512];
             while (fgetws(line, 512, f))
             {
+                // By hand, "key = value" and indented lines count too. An empty value leaves the value as it was.
+                constexpr const wchar_t* kBlanks = L" \t\r\n\xfeff";
                 std::wstring s = line;
-                while (!s.empty() && (s.back() == L'\n' || s.back() == L'\r' || s.back() == L' ')) s.pop_back();
-                if (s.compare(0, keyLength, key) == 0 && s.size() > keyLength && s[keyLength] == L'=') value = s.substr(keyLength + 1);
+                size_t eq = s.find(L'='), start = s.find_first_not_of(kBlanks);
+                if (eq == std::wstring::npos || start == std::wstring::npos || start >= eq) continue;
+                size_t keyEnd = s.find_last_not_of(kBlanks, eq - 1) + 1;
+                if (keyEnd - start != keyLength || s.compare(start, keyLength, key) != 0) continue;
+                size_t first = s.find_first_not_of(kBlanks, eq + 1);
+                if (first != std::wstring::npos) value = s.substr(first, s.find_last_not_of(kBlanks) + 1 - first);
             }
             fclose(f);
         }
@@ -842,6 +848,12 @@ namespace
         std::wstring fallback = kit.label.find("Experimental") != std::string::npos ? L"experimental"
                               : kit.label.find("Stable") != std::string::npos ? L"stable" : L"off";
         std::wstring channel = Setting(L"update_channel", L"");
+        if (!channel.empty() && _wcsicmp(channel.c_str(), L"stable") != 0 && _wcsicmp(channel.c_str(), L"experimental") != 0 && _wcsicmp(channel.c_str(), L"off") != 0)
+        {
+            // A typo in settings.ini must not count as stable, which would take an Experimental kit back to a Stable.
+            Log(L"update: update_channel=%s isn't stable, experimental or off - using this kit's own (%s)", channel.c_str(), fallback.c_str());
+            channel.clear();
+        }
         if (channel.empty()) channel = fallback;
         if (_wcsicmp(channel.c_str(), L"off") == 0) { Log(L"update: off (%s)", fallback == L"off" ? L"development build" : L"update_channel=off"); return; }
         bool experimental = _wcsicmp(channel.c_str(), L"experimental") == 0;

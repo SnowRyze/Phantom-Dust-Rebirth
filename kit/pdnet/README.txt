@@ -60,7 +60,7 @@ What you save in the game goes to settings.ini (in the game's own data folder) a
 To change those by hand, e.g. an exact nametag colour, close the game and double-click pdnet\Edit-Settings.bat.
 Colours take any hex code: RRGGBB or #RRGGBB.
 Updates: Main menu > Options > Updates picks Stable or Experimental builds, or Off for no automatic updates
-(used from the next game start).
+(used from the next game start). Or set update_channel in settings.ini: stable, experimental or off.
   display_name=          your name (Setup.bat sets it)
   nametags_on_bodies=    on/off: defeated players keep their nametag. In a lobby the HOST's setting applies.
   dead_nametag_color=    colour of a defeated player's nametag (RRGGBB), FFE600 = yellow
@@ -71,8 +71,11 @@ Updates: Main menu > Options > Updates picks Stable or Experimental builds, or O
   voice_mode=            mic: the in-game option is called Mic and turns only your microphone on/off
                          classic: the original Voice Chat option - Off means you neither talk nor hear
   voice_listen=          on/off: hear other players (mic mode only)
-  partner_lock_key=      keyboard key that locks onto your partner in a match (default Tab; none = off).
-                         On a controller it is RB. Press again to go back to the game's own target.
+  partner_aim=           what the partner lock input does in a match (Multiplayer > Settings > Partner Aim):
+                         modern: locks onto your partner; classic: turns the original Lock Onto Partner option on/off,
+                         so switch target can also reach your partner
+  partner_lock_key=      keyboard key for that input in a match (default Tab; none = off).
+                         On a controller it is RB.
   splash_volume=         % of your volume from the start-up logos until you are past the title screen
   discord_*              lobby announcements in Discord when you host
   more_controllers=      on/off: PlayStation, Nintendo and other controllers work like an Xbox controller

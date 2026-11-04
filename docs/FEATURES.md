@@ -19,7 +19,7 @@ As of Experimental 98. *(untested)* = waiting for a test in a real match.
 ## Voice
 - Voice chat through Epic
 - Tag Team: team-only voice in matches
-- Mind Reading hears the other team *(untested)*
+- Mind Reading hears the other team
 - Mic or Classic voice mode
 
 ## Nametags
@@ -34,7 +34,7 @@ As of Experimental 98. *(untested)* = waiting for a test in a real match.
 
 ## Arsenal Lab
 - Buy and sell arsenal cases, also from the lobby
-- Test Arsenal: pick both arsenals, fight the AI
+- Test Arsenal: pick both arsenals, both characters and the map, fight the AI
 - Max credits and skills in the shop
 
 ## Menus and UI
@@ -52,7 +52,8 @@ As of Experimental 98. *(untested)* = waiting for a test in a real match.
 
 ## Controls
 - PlayStation, Nintendo and other controllers, with rumble
-- Lock onto partner: RB / Tab (key configurable) *(untested)*
+- B skips start-up logos and movies, and leaves a hung match load *(untested)*
+- Lock onto partner: RB / Tab (key configurable), Modern or Classic in Settings *(untested)*
 
 ## Other
 - Quieter start-up logos, game volume remembered

@@ -10,6 +10,9 @@ namespace pdnet::gamepatches
     // "Rebirth" on the title screen: the game's file opens are hooked (CreateFile2). The title picture loads
     // seconds before Apply runs, so pdlaunch's watcher calls this until it returns true.
     bool HookFileOpens();
+    // The B button for the start-up logos, movies and hung match loads: installed as soon as pdnet is in the game, as the logos
+    // are over before Apply runs.
+    void InstallEarlyHooks();
 
     // Nametags on dead bodies can be switched at any time: in a lobby the game host's setting applies to everyone
     // (xsapi/mpsd.cpp reads it from the host's lobby member attributes), otherwise this PC's nametags_on_bodies.
