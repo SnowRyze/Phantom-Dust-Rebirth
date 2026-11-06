@@ -273,6 +273,14 @@ namespace pdnet
         return false;
     }
 
+    bool KeysHeld(uint8_t* keys)
+    {
+        static pads::Shared* shared = MapShared();
+        if (!shared || !shared->keyHeartbeat || GetTickCount() - shared->keyHeartbeat > 1000) return false;
+        for (int i = 0; i < 256; ++i) keys[i] = shared->keys[i];
+        return true;
+    }
+
     winrt::Windows::Foundation::IInspectable CreateGamepadFactory(const winrt::Windows::Foundation::IActivationFactory& real)
     {
         Log(L"gamepads: the game's Gamepad class is pdnet's (Xbox controllers from Windows, others from pdlaunch / SDL3)");

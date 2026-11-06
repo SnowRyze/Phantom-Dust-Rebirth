@@ -10,4 +10,7 @@ namespace pdnet
     // True while any controller (Xbox pads from Windows, SDL pads from pdlaunch) holds one of `buttons`
     // (Windows.Gaming.Input.GamepadButtons bits, e.g. 0x800 = RightShoulder). False before the game made its factory.
     bool AnyPadHolds(uint32_t buttons);
+
+    // The keyboard as pdlaunch reads it (padshare.h): false when it hasn't reported lately. keys: 256 flags by virtual-key code.
+    bool KeysHeld(uint8_t* keys);
 }

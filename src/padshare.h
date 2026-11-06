@@ -36,6 +36,10 @@ namespace pdnet::pads
         Pad pads[kMaxPads];
         volatile uint32_t rumbleSequence; // pdnet: odd while it writes rumble[]
         Rumble rumble[kMaxPads];
+        // The keyboard: pdlaunch reads it (it isn't in the sandbox) while the game has the focus, for PCs where the game's
+        // window gets no key-down events. keys[virtual-key code] is 1 while held. No fresh keyHeartbeat: none are.
+        volatile uint32_t keyHeartbeat;
+        volatile uint8_t keys[256];
     };
 
     // Windows.Gaming.Input.GamepadButtons

@@ -445,6 +445,67 @@ namespace
         return static_cast<pdnet::pads::Shared*>(view);
     }
 
+    // Has the game the keyboard focus? Its own window on top, or a child of the frame on top, or (seen on the developer's
+    // PC, 124: a CoreWindow of no process could be found) Windows' app frame with no child of another process, and a title
+    // that is empty or the game's. Another app's frame has its own CoreWindow and title.
+    bool GameHasFocus(DWORD pid)
+    {
+        HWND top = GetForegroundWindow();
+        DWORD owner = 0;
+        if (!top) return false;
+        GetWindowThreadProcessId(top, &owner);
+        if (owner == pid) return true;
+        struct Search { DWORD pid; bool found; } search{ pid, false };
+        EnumChildWindows(top, [](HWND child, LPARAM param) -> BOOL
+        {
+            auto s = reinterpret_cast<Search*>(param);
+            DWORD p = 0;
+            GetWindowThreadProcessId(child, &p);
+            if (p != s->pid) return TRUE;
+            s->found = true;
+            return FALSE;
+        }, reinterpret_cast<LPARAM>(&search));
+        if (search.found) return true;
+        wchar_t name[64] = {};
+        if (!GetClassNameW(top, name, 64) || wcscmp(name, L"ApplicationFrameWindow") != 0) return false;
+        wchar_t title[128] = {};
+        GetWindowTextW(top, title, 128);
+        return !title[0] || wcsstr(title, L"Phantom Dust");
+    }
+
+    // The keyboard for pdnet (padshare.h), every 8 ms until the game exits. Mouse buttons, the Windows keys and the
+    // left / right copies of Shift, Ctrl and Alt are left out (the game's key events use the plain ones).
+    void ReadKeyboard(DWORD pid, std::wstring localState)
+    {
+        pdnet::pads::Shared* shared = localState.empty() ? nullptr : MapPads(localState);
+        HANDLE game = OpenProcess(SYNCHRONIZE, FALSE, pid);
+        if (!shared || !game)
+        {
+            Log(L"keyboard: not read for the game (error %lu)", GetLastError());
+            if (game) CloseHandle(game);
+            return;
+        }
+        bool told = false;
+        while (WaitForSingleObject(game, 8) == WAIT_TIMEOUT)
+        {
+            bool focus = GameHasFocus(pid);
+            for (int key = 0; key < 256; ++key)
+            {
+                bool wanted = key >= 8 && key < 0xFF && key != 0x5B && key != 0x5C && (key < 0xA0 || key > 0xA5);
+                bool down = focus && wanted && (GetAsyncKeyState(key) & 0x8000) != 0;
+                shared->keys[key] = down ? 1 : 0;
+                if (down && !told)
+                {
+                    told = true;
+                    Log(L"keyboard: first key seen (0x%02X)", key);
+                }
+            }
+            shared->keyHeartbeat = GetTickCount();
+        }
+        shared->keyHeartbeat = 0;
+        CloseHandle(game);
+    }
+
     void ReadControllers(DWORD pid, std::wstring localState)
     {
         if (_wcsicmp(Setting(L"more_controllers", L"on").c_str(), L"off") == 0 || localState.empty()) return;
@@ -870,11 +931,22 @@ namespace
         }
 
         std::wstring repo = Setting(L"update_repo", L"SnowRyze/Phantom-Dust-Rebirth");
+        // Newest first, 100 to a page. The experimental channel's newest is on the first page; a Stable can be far down
+        // (Experimentals and Conceptual kits pile up on top of it: with 30 a page, stable-10 had dropped off the list and
+        // Stable kits saw no Stable at all), so that channel reads on until it has seen one, 5 pages at most.
         std::string json;
-        if (!HttpsGet(L"api.github.com", L"/repos/" + repo + (conceptual ? L"/releases?per_page=100" : L"/releases?per_page=30"), json, 4000))
+        for (int page = 1; page <= 5; ++page)
         {
-            Log(L"update: GitHub not reached - not checked");
-            return;
+            std::string more;
+            if (!HttpsGet(L"api.github.com", L"/repos/" + repo + L"/releases?per_page=100&page=" + std::to_wstring(page), more, 4000))
+            {
+                if (page > 1) break; // what was read so far still counts
+                Log(L"update: GitHub not reached - not checked");
+                return;
+            }
+            json += more;
+            if (experimental || more.find("\"prerelease\":false") != std::string::npos || more.find("\"prerelease\": false") != std::string::npos ||
+                more.find("\"tag_name\"") == std::string::npos) break;
         }
         // Releases come newest first; in each, "prerelease" comes before its assets. The highest build on the channel wins.
         int best = 0;
@@ -1076,6 +1148,7 @@ int wmain(int argc, wchar_t** argv)
     CheckClock(localState); // before pdnet starts EOS, which reads the offset
     KeepIdentity(localState, true); // before the game runs: the same player as always
     std::thread controllers(ReadControllers, pid, localState); // until the game exits
+    std::thread keyboard(ReadKeyboard, pid, localState); // until the game exits
     bool injected = Inject(pid);
 
     HANDLE thread = OpenThread(THREAD_SUSPEND_RESUME, FALSE, tid);
@@ -1091,5 +1164,6 @@ int wmain(int argc, wchar_t** argv)
     }
     KeepIdentity(localState, false); // a first sign-in made its credential while the game ran
     controllers.join();
+    keyboard.join();
     return injected ? 0 : 1;
 }

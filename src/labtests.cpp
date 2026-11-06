@@ -3,8 +3,6 @@
 #include "gamepatches.h"
 #include "gamepads.h"
 #include "log.h"
-#include <winrt/Windows.ApplicationModel.Core.h>
-#include <winrt/Windows.UI.Core.h>
 #include <cmath>
 #include <cstdio>
 #include <vector>
@@ -86,58 +84,35 @@ namespace pdnet::labtests
             return gamepatches::TestBattle() && state != 0 && state != 13 && PlayerObject(LocalSlot());
         }
 
-        void SubscribeKeysOnce()
-        {
-            static std::once_flag once;
-            std::call_once(once, []
-            {
-                try
-                {
-                    using namespace winrt::Windows::UI::Core;
-                    auto window = winrt::Windows::ApplicationModel::Core::CoreApplication::MainView().CoreWindow();
-                    window.Dispatcher().RunAsync(CoreDispatcherPriority::Normal, [window]
-                    {
-                        try
-                        {
-                            window.KeyDown([](CoreWindow const&, KeyEventArgs const& e)
-                            {
-                                if (e.KeyStatus().WasKeyDown || !gamepatches::TestBattle()) return;
-                                static std::atomic<int> logged{ 0 };
-                                if (logged++ < 30) Log(L"labtest: keyboard event: key 0x%02X", static_cast<uint32_t>(e.VirtualKey()));
-                                switch (static_cast<uint32_t>(e.VirtualKey()))
-                                {
-                                case VK_F6: g_pressCamera = true; break;
-                                case VK_F7: g_pressRecord = true; break;
-                                case VK_F8: g_pressPlay = true; break;
-                                default: break;
-                                }
-                            });
-                            Log(L"labtest: keys ready (F6 camera, F7 record, F8 play back)");
-                        }
-                        catch (...) { Log(L"labtest: no keyboard (0x%08X)", winrt::to_hresult()); }
-                    });
-                }
-                catch (...) { Log(L"labtest: no keyboard (0x%08X)", winrt::to_hresult()); }
-            });
-        }
-
-        // Hold View, press a D-pad direction. Windows.Gaming.Input.GamepadButtons: View 0x2, Up 0x40, Left 0x100, Right 0x200.
-        void WatchController()
+        // Keyboard: F6, F7, F8 from the keys pdlaunch reads (KeysHeld, padshare.h): the game's window gets no key events on
+        // the developer's PC. Controller: hold View, press a D-pad direction (Windows.Gaming.Input.GamepadButtons: View 0x2,
+        // Up 0x40, Left 0x100, Right 0x200).
+        void WatchInput()
         {
             std::thread([]
             {
-                struct { uint32_t button; std::atomic<bool>* press; const wchar_t* name; bool held; } combos[] = {
-                    { 0x100, &g_pressCamera, L"camera", false }, { 0x40, &g_pressRecord, L"record", false }, { 0x200, &g_pressPlay, L"play back", false } };
+                struct { uint32_t button; int key; std::atomic<bool>* press; const wchar_t* name; bool held; } combos[] = {
+                    { 0x100, VK_F6, &g_pressCamera, L"camera", false }, { 0x40, VK_F7, &g_pressRecord, L"record", false }, { 0x200, VK_F8, &g_pressPlay, L"play back", false } };
+                uint8_t keys[256];
+                int keyboardKnown = -1; // what was last logged about pdlaunch's keyboard data, in a battle
                 for (;;)
                 {
                     Sleep(16);
-                    bool active = gamepatches::TestBattle() && AnyPadHolds(0x2);
+                    bool active = gamepatches::TestBattle();
+                    bool haveKeys = active && KeysHeld(keys);
+                    if (active && keyboardKnown != (haveKeys ? 1 : 0))
+                    {
+                        keyboardKnown = haveKeys ? 1 : 0;
+                        Log(L"labtest: keyboard from pdlaunch: %s", haveKeys ? L"reporting" : L"not reporting");
+                    }
+                    bool view = active && AnyPadHolds(0x2);
                     for (auto& combo : combos)
                     {
-                        bool now = active && AnyPadHolds(combo.button);
+                        bool fromKey = haveKeys && keys[combo.key] != 0, fromPad = view && AnyPadHolds(combo.button);
+                        bool now = fromKey || fromPad;
                         if (now && !combo.held)
                         {
-                            Log(L"labtest: controller: View + D-pad: %s", combo.name);
+                            Log(L"labtest: %s: %s", fromKey ? L"key" : L"View + D-pad", combo.name);
                             *combo.press = true;
                         }
                         combo.held = now;
@@ -428,7 +403,6 @@ namespace pdnet::labtests
             {
                 g_wasInBattle = true;
                 g_pressCamera = g_pressRecord = g_pressPlay = false; // presses from before this battle
-                SubscribeKeysOnce();
                 LogPlayers(L"battle started");
             }
             // Shows this hook keeps running in the battle, and whether the game's frame counter moves.
@@ -486,7 +460,7 @@ namespace pdnet::labtests
     {
         if (gamepatches::HookCall(0x14017d00e, 0x14012bfc0, reinterpret_cast<void*>(&HookedCamera)))
         {
-            WatchController();
+            WatchInput();
             Log(L"labtest: ready: in a Test Arsenal battle, F6 or View + D-pad Left: camera, F7 or View + D-pad Up: record, F8 or View + D-pad Right: play back");
         }
         else
