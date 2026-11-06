@@ -1567,11 +1567,6 @@ namespace pdnet::gamepatches
                             };
                             RelabelScript(script, kCaseTexts, std::size(kCaseTexts));
                         }
-                        if (m == kEditorMenu && MultiplayerProfile())
-                        {
-                            static constexpr Relabel kEditorTexts[] = { { "Number of Schools", "School Limit" } };
-                            RelabelScript(script, kEditorTexts, std::size(kEditorTexts));
-                        }
                         if (int renamed = RenameXboxLive(script); fresh && renamed > 0) Log(L"gamepatch: menu %d: %d Xbox Live text(s) now say Online", m, renamed);
                         if (scoreboard && m == kRankingMenu)
                         {
@@ -2535,8 +2530,10 @@ namespace pdnet::gamepatches
         // - at a match start it picks the Aura refill rate from gsdata +0x33034: 1 school 1.3, 2 schools 1.0, 3 schools 0.7
         //   (FUN_140187710, FUN_14012a750, used in FUN_14024de20). Other players' games use the number in the arsenal this
         //   PC sends, so a player without this kit sees the right rate too.
-        // So in the multiplayer profile the number follows the arsenal: 3 while the editor is open (the limit, and "limited
-        // to 3 schools" in its message), and otherwise the schools really in it, 1 to 3. The story profile is left alone.
+        // - the screens show it as the arsenal's type (FUN_14016d5f0: picture 0x7e + the number).
+        // So in the multiplayer profile the number always follows the arsenal, 1 to 3, also while the editor is open, as a
+        // visual indicator; HookedSchoolLimit keeps the editor's limit at 3 whatever the number says. The story profile is
+        // left alone. An empty arsenal counts as 1, so a first skill doesn't change its number.
         // Schools: skill record DAT_1404bdc50 + id * 0x90, +0x12, above 0 (as FUN_14015b830); Aura Particles have none.
         constexpr int kMaxCaseSchools = 3;
 
@@ -2555,6 +2552,28 @@ namespace pdnet::gamepatches
             return count;
         }
 
+        int CaseNumberFor(const uint8_t* arsenal, const uint8_t* skills, int& schools)
+        {
+            schools = SchoolsInArsenal(arsenal, skills);
+            return schools < 1 ? 1 : schools > kMaxCaseSchools ? kMaxCaseSchools : schools;
+        }
+
+        // The arsenal the editor is working on, wherever it holds it: DAT_1404c0140 +0x10a0 (FUN_14016fe20) and +0x4a8
+        // (FUN_14016d460, FUN_140217620).
+        void EditedArsenalsFollow(const uint8_t* skills)
+        {
+            uint8_t* editor = *reinterpret_cast<uint8_t**>(At(0x1404c0140));
+            uint8_t* held[2] = { editor ? *reinterpret_cast<uint8_t**>(editor + 0x10a0) : nullptr, editor ? *reinterpret_cast<uint8_t**>(editor + 0x4a8) : nullptr };
+            for (uint8_t* arsenal : held)
+            {
+                if (!arsenal) continue;
+                int schools = 0;
+                int wanted = CaseNumberFor(arsenal, skills, schools);
+                auto& number = *reinterpret_cast<int16_t*>(arsenal + 0x50);
+                if (number != wanted) number = static_cast<int16_t>(wanted);
+            }
+        }
+
         void CasesFollowArsenals(bool editing)
         {
             __try
@@ -2567,19 +2586,41 @@ namespace pdnet::gamepatches
                 for (int i = 0; list && i < cases && i < 16; ++i)
                 {
                     uint8_t* arsenal = list + i * 100;
-                    int schools = SchoolsInArsenal(arsenal, skills);
-                    int wanted = editing ? kMaxCaseSchools : schools < 1 ? 2 : schools > kMaxCaseSchools ? kMaxCaseSchools : schools; // empty: the neutral rate
+                    int schools = 0;
+                    int wanted = CaseNumberFor(arsenal, skills, schools);
                     auto& number = *reinterpret_cast<int16_t*>(arsenal + 0x50);
                     if (number == wanted) continue;
-                    if (!editing) Log(L"gamepatch: arsenal case %d: %d school(s) in it, rate as %d (was %d)", i, schools, wanted, number);
+                    if (!editing) Log(L"gamepatch: arsenal case %d: %d school(s) in it, number %d (was %d)", i, schools, wanted, number);
                     number = static_cast<int16_t>(wanted);
                 }
+                if (editing) EditedArsenalsFollow(skills);
             }
             __except (EXCEPTION_EXECUTE_HANDLER) {}
         }
 
+        // The editor's "too many schools" check (session command at 0x140216cc0), which compares the schools used, counted at
+        // DAT_1404bec08 +0x54..+0x64, with the arsenal's number. In the multiplayer profile: with 3.
+        NativeFn g_schoolLimit = nullptr;
+        int64_t HookedSchoolLimit(int64_t* args)
+        {
+            if (!MultiplayerProfile()) return g_schoolLimit(args);
+            __try
+            {
+                auto state = *reinterpret_cast<uint8_t**>(At(0x1404bec08));
+                int used = 0;
+                for (size_t at = 0x54; at <= 0x64; at += 4) used += *reinterpret_cast<int32_t*>(state + at) > 0 ? 1 : 0;
+                if (used > kMaxCaseSchools) Log(L"gamepatch: arsenal has %d schools: over the limit of %d", used, kMaxCaseSchools);
+                return used > kMaxCaseSchools ? 1 : 0;
+            }
+            __except (EXCEPTION_EXECUTE_HANDLER)
+            {
+                return 0;
+            }
+        }
+
         void DynamicCases()
         {
+            bool limit = WrapCommand<NativeFn>(0x1403f1e48, 0x140216cc0, &HookedSchoolLimit, g_schoolLimit, L"arsenal school limit");
             std::thread([]
             {
                 for (;;)
@@ -2589,7 +2630,7 @@ namespace pdnet::gamepatches
                     if (state == 0 || state == 13) CasesFollowArsenals(CurrentMenu(MenuManager()) == kEditorMenu);
                 }
             }).detach();
-            Log(L"gamepatch: dynamic arsenal cases on (3 schools at most)");
+            Log(L"gamepatch: dynamic arsenal cases on (limit of %d schools %s)", kMaxCaseSchools, limit ? L"ready" : L"NOT ready");
         }
 
         void OpenCaseMenu(int menu)

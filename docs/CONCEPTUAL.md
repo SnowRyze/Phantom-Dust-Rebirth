@@ -85,10 +85,13 @@ Anything that changes match behaviour needs every player on the same kit, and re
 
 ## Log
 (Newest first: what was tried, what happened.)
+- 2026-11-06: the case's number now also follows the arsenal live in the editor, as a visual indicator (the user's request).
+  The limit of 3 moved to a wrap of the editor's check (0x140216cc0), which runs when saving ("too many schools"). The
+  "School Limit" text is gone. An empty arsenal counts as 1. Not yet tried in the game.
 - 2026-11-06: dynamic arsenal cases, the user's choices: the game's Aura rates, 3 schools at most, one plain case to buy.
   The school number (case +0x50) sets the editor limit and the Aura refill rate (1 school 1.3x, 2 1.0x, 3 0.7x). It now
-  follows the arsenal in the multiplayer profile: 3 while the editor is open, otherwise the schools in it. Story unchanged.
-  Buy and "School Limit" texts are English only. Not yet tried in the game.
+  follows the arsenal in the multiplayer profile. Story unchanged.
+  The buy texts are English only. Not yet tried in the game.
 - 2026-11-06: offline tests passed on Conceptual 5 (the user: works; log and labtest.rec checked):
   - Update: Conceptual 4 installed build 5 by itself. As master notes, the keyboard needs the second start.
   - Camera: followed slot 1 for 27 s; its position, health and hand (it changed mid-battle) read fine.
