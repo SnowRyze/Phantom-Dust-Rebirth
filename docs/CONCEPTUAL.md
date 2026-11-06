@@ -85,6 +85,9 @@ Anything that changes match behaviour needs every player on the same kit, and re
 
 ## Log
 (Newest first: what was tried, what happened.)
+- 2026-11-06: school limit fix. The number followed the arsenal, but a 4th and 5th school went in: the save check's counters
+  weren't current. Now a skill making a 4th school is refused as it's added (FUN_140159db0, its own -1 refusal), and the save
+  check counts the arsenal itself. Not yet tried in the game.
 - 2026-11-06: the case's number now also follows the arsenal live in the editor, as a visual indicator (the user's request).
   The limit of 3 moved to a wrap of the editor's check (0x140216cc0), which runs when saving ("too many schools"). The
   "School Limit" text is gone. An empty arsenal counts as 1. Not yet tried in the game.

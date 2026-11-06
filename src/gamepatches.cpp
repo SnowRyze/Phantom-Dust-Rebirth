@@ -2598,18 +2598,22 @@ namespace pdnet::gamepatches
             __except (EXCEPTION_EXECUTE_HANDLER) {}
         }
 
-        // The editor's "too many schools" check (session command at 0x140216cc0), which compares the schools used, counted at
-        // DAT_1404bec08 +0x54..+0x64, with the arsenal's number. In the multiplayer profile: with 3.
+        // The editor's "too many schools" check when saving (session command at 0x140216cc0). The game compares counters with
+        // the arsenal's number, but those counters weren't current when tested, so here the schools are counted in the arsenal
+        // itself. Arsenals made before the limit can still reach it; HookedSetSkill stops new ones.
         NativeFn g_schoolLimit = nullptr;
         int64_t HookedSchoolLimit(int64_t* args)
         {
             if (!MultiplayerProfile()) return g_schoolLimit(args);
             __try
             {
-                auto state = *reinterpret_cast<uint8_t**>(At(0x1404bec08));
+                uint8_t* editor = *reinterpret_cast<uint8_t**>(At(0x1404c0140));
+                uint8_t* skills = *reinterpret_cast<uint8_t**>(At(0x1404bdc50));
+                uint8_t* held[2] = { editor ? *reinterpret_cast<uint8_t**>(editor + 0x10a0) : nullptr, editor ? *reinterpret_cast<uint8_t**>(editor + 0x4a8) : nullptr };
                 int used = 0;
-                for (size_t at = 0x54; at <= 0x64; at += 4) used += *reinterpret_cast<int32_t*>(state + at) > 0 ? 1 : 0;
-                if (used > kMaxCaseSchools) Log(L"gamepatch: arsenal has %d schools: over the limit of %d", used, kMaxCaseSchools);
+                for (uint8_t* arsenal : held)
+                    if (arsenal && skills) used = (std::max)(used, SchoolsInArsenal(arsenal, skills));
+                Log(L"gamepatch: arsenal save check: %d school(s), limit %d", used, kMaxCaseSchools);
                 return used > kMaxCaseSchools ? 1 : 0;
             }
             __except (EXCEPTION_EXECUTE_HANDLER)
@@ -2618,9 +2622,70 @@ namespace pdnet::gamepatches
             }
         }
 
+        // The editor putting a skill in a slot, FUN_140159db0(state, skill, c): state +0x48 is the arsenal; skill 0 empties
+        // the slot; below 0 takes the skill selected in the list (state +0x278 the list, +0x27c + list * 0x18 the row,
+        // DAT_1404c0140 +0x138c + ((list - 1) * 0x3ea + row) * 2). It replaces the slot's skill, state +0x84 + index * 8, index
+        // from state +0x174 + (state +0x268) * 8. Below 0 is its own refusal: -1 makes the caller play "can't do that"
+        // (state +0xb38 = 8). So a skill that would make a 4th school is refused there.
+        using SetSkillFn = int (*)(uint8_t* state, int skill, int c);
+
+        bool WouldPassSchoolLimit(uint8_t* state, int skill)
+        {
+            __try
+            {
+                uint8_t* editor = *reinterpret_cast<uint8_t**>(At(0x1404c0140));
+                uint8_t* skills = *reinterpret_cast<uint8_t**>(At(0x1404bdc50));
+                uint8_t* arsenal = *reinterpret_cast<uint8_t**>(state + 0x48);
+                if (!editor || !skills || !arsenal) return false;
+                if (skill < 0)
+                {
+                    int list = *reinterpret_cast<int32_t*>(state + 0x278);
+                    if (list < 1) return false;
+                    int row = *reinterpret_cast<int32_t*>(state + 0x27c + list * 0x18);
+                    skill = *reinterpret_cast<int16_t*>(editor + 0x138c + ((list - 1) * 0x3ea + row) * 2);
+                }
+                if (skill <= 0) return false;
+                int16_t school = *reinterpret_cast<int16_t*>(skills + 0x12 + skill * 0x90);
+                if (school <= 0 || school >= 32) return false;
+                int slot = *reinterpret_cast<int32_t*>(state + 0x174 + *reinterpret_cast<int32_t*>(state + 0x268) * 8);
+                int16_t replaced = slot < 0 ? -1 : *reinterpret_cast<int16_t*>(state + 0x84 + slot * 8);
+                if (replaced <= 0) replaced = -1;
+                uint32_t seen = 1u << school;
+                bool skipped = false;
+                for (int i = 0; i < 30; ++i)
+                {
+                    int16_t id = *reinterpret_cast<int16_t*>(arsenal + 0x14 + i * 2);
+                    if (id < 0) continue;
+                    if (id == replaced && !skipped) { skipped = true; continue; }
+                    int16_t other = *reinterpret_cast<int16_t*>(skills + 0x12 + id * 0x90);
+                    if (other > 0 && other < 32) seen |= 1u << other;
+                }
+                int count = 0;
+                for (; seen; seen &= seen - 1) ++count;
+                return count > kMaxCaseSchools;
+            }
+            __except (EXCEPTION_EXECUTE_HANDLER)
+            {
+                return false;
+            }
+        }
+
+        int HookedSetSkill(uint8_t* state, int skill, int c)
+        {
+            if (skill != 0 && MultiplayerProfile() && WouldPassSchoolLimit(state, skill))
+            {
+                Log(L"gamepatch: arsenal editor: skill refused, a school past the limit of %d", kMaxCaseSchools);
+                return -1;
+            }
+            return reinterpret_cast<SetSkillFn>(At(0x140159db0))(state, skill, c);
+        }
+
         void DynamicCases()
         {
             bool limit = WrapCommand<NativeFn>(0x1403f1e48, 0x140216cc0, &HookedSchoolLimit, g_schoolLimit, L"arsenal school limit");
+            bool add = true;
+            for (uint64_t site : { 0x140159434ull, 0x14015948full, 0x140159be4ull })
+                add = HookCall(site, 0x140159db0, reinterpret_cast<void*>(&HookedSetSkill)) && add;
             std::thread([]
             {
                 for (;;)
@@ -2630,7 +2695,7 @@ namespace pdnet::gamepatches
                     if (state == 0 || state == 13) CasesFollowArsenals(CurrentMenu(MenuManager()) == kEditorMenu);
                 }
             }).detach();
-            Log(L"gamepatch: dynamic arsenal cases on (limit of %d schools %s)", kMaxCaseSchools, limit ? L"ready" : L"NOT ready");
+            Log(L"gamepatch: dynamic arsenal cases on (limit of %d schools: when adding %s, when saving %s)", kMaxCaseSchools, add ? L"ready" : L"NOT ready", limit ? L"ready" : L"NOT ready");
         }
 
         void OpenCaseMenu(int menu)
