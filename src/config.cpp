@@ -136,6 +136,7 @@ namespace pdnet
                 else if (key == "log_webhook") c.logWebhook = std::wstring(value.begin(), value.end());
                 else if (key == "partner_aim") c.partnerClassic = _stricmp(value.c_str(), "classic") == 0;
                 else if (key == "partner_lock_key") { if (uint32_t code = KeyCode(value); code != ~0u) c.partnerLockKey = code; }
+                else if (key == "conceptual_updates") c.conceptualUpdatesOff = _stricmp(value.c_str(), "off") == 0;
                 else if (key == "update_channel") { if (!value.empty()) c.updateChannel = std::wstring(value.begin(), value.end()); } // empty in settings.ini: pdnet.ini's
                 else if (key == "discord_invite")c.discordInvite = std::wstring(value.begin(), value.end());
                 else if (key == "discord_lobby_messages") c.discordLobbyMessages = _stricmp(value.c_str(), "off") != 0;

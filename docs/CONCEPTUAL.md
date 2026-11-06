@@ -13,8 +13,10 @@ Very experimental work. This branch lives in its own folder, `D:\PhantomDust-Con
 
 ## Rules
 - Commit only to Conceptual; push only to `origin Conceptual`. Never force-push.
-- Kits: `.\build.bat conceptual "what it tries"` saves `PhantomDust-pdnet Conceptual <N>.zip` on D:\. Never published,
-  never auto-updated. Never `build.bat experimental` or `promote` here.
+- Kits: `.\build.bat conceptual "what it tries"` saves `PhantomDust-pdnet Conceptual <N>.zip` on D:\ and, once the code is
+  committed and pushed, publishes a pre-release `conceptual-<N>` with the asset `pdnet-conceptual-<N>.zip`. Installed
+  Conceptual kits update from those only. Other kits ignore that asset name, and a Conceptual kit ignores update_channel.
+  Off switch: Options > Updates (`conceptual_updates=off`). Never `build.bat experimental` or `promote` here.
 - Notes for this work go in this file, not in HANDOFF.md; tools\kit-counter.txt stays untouched.
 - `deps\eos-sdk` and `private\` are links to the main repo's; never commit private\ files, eos.ini, links.ini or game
   files.
@@ -34,8 +36,8 @@ FUN_140125430).
   writes four values (the four hand slots) into that player's status record.
 - A replay is one PC's version of the match; PCs can disagree on bad connections ("cross lagging", HANDOFF section 11).
   Custom rules that decide a winner need the host to make the call.
-- Not settled: the freeze note in HANDOFF says all players advance together. Whether the game waits for other PCs each
-  frame wasn't confirmed, and it could affect spectating.
+- Waiting: FUN_14012bbb0 skips a frame when an active peer's last data is over 60 frames (0x3c) old, in network modes
+  only (game mode 4 or 5). So PCs wait for stale peers, which is the freeze in HANDOFF. A spectator must not count as a peer.
 
 ### Each idea
 | Idea | Possible? | Size | Main catch |
@@ -83,4 +85,10 @@ Anything that changes match behaviour needs every player on the same kit, and re
 
 ## Log
 (Newest first: what was tried, what happened.)
+- 2026-11-06: Conceptual kits get their own auto-update (the user's request; Conceptual branch only). Kits 1 and 2 can't
+  update: install one built with it by hand once.
+- 2026-11-06: Conceptual 2: in Conceptual 1 no test ran (log: labtest not installed); the camera call is a tail jump (e9) at
+  0x14017d00e and the hook only accepted a call. Fixed. Not yet tried in the game.
+- 2026-11-04: Conceptual 1, three offline tests in a Test Arsenal battle (src\labtests.cpp): F6 camera follow, F7 record,
+  F8 play back with both players driven by the file (object +0x34 = 0). Built; not yet tried in the game.
 - 2026-11-03: feature assessment written (above). Read-only, no kit built.

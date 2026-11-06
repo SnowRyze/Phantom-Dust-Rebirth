@@ -842,12 +842,16 @@ namespace
     {
         ClearOldUpdate();
         KitVersion kit = ReadKitVersion();
-        // Conceptual kits (build.bat conceptual, from the Conceptual branch) are never published and never updated:
-        // an update would replace the concept with a master build.
-        if (kit.label.find("Conceptual") != std::string::npos) { Log(L"update: off (Conceptual build)"); return; }
+        // Conceptual kits (build.bat conceptual, Conceptual branch only) have their own updates: pre-releases
+        // "conceptual-<N>" with the asset pdnet-conceptual-<N>.zip. That name is what keeps the two apart: other kits only
+        // look at "/pdnet-update-", and a Conceptual kit only at this one, so it can never become a master build. It
+        // ignores update_channel, which settings.ini shares with the other kits (only conceptual_updates=off stops it).
+        const bool conceptual = kit.label.find("Conceptual") != std::string::npos;
+        const std::string assetPrefix = conceptual ? "pdnet-conceptual-" : "pdnet-update-";
+        if (conceptual && _wcsicmp(Setting(L"conceptual_updates", L"").c_str(), L"off") == 0) { Log(L"update: off (conceptual_updates=off)"); return; }
         std::wstring fallback = kit.label.find("Experimental") != std::string::npos ? L"experimental"
                               : kit.label.find("Stable") != std::string::npos ? L"stable" : L"off";
-        std::wstring channel = Setting(L"update_channel", L"");
+        std::wstring channel = conceptual ? L"experimental" : Setting(L"update_channel", L""); // experimental: pre-releases count
         if (!channel.empty() && _wcsicmp(channel.c_str(), L"stable") != 0 && _wcsicmp(channel.c_str(), L"experimental") != 0 && _wcsicmp(channel.c_str(), L"off") != 0)
         {
             // A typo in settings.ini must not count as stable, which would take an Experimental kit back to a Stable.
@@ -867,7 +871,7 @@ namespace
 
         std::wstring repo = Setting(L"update_repo", L"SnowRyze/Phantom-Dust-Rebirth");
         std::string json;
-        if (!HttpsGet(L"api.github.com", L"/repos/" + repo + L"/releases?per_page=30", json, 4000))
+        if (!HttpsGet(L"api.github.com", L"/repos/" + repo + (conceptual ? L"/releases?per_page=100" : L"/releases?per_page=30"), json, 4000))
         {
             Log(L"update: GitHub not reached - not checked");
             return;
@@ -891,9 +895,9 @@ namespace
             if (q2 == std::string::npos) break;
             std::string url = json.substr(q1 + 1, q2 - q1 - 1);
             at = q2;
-            size_t name = url.rfind("/pdnet-update-");
+            size_t name = url.rfind("/" + assetPrefix);
             if (name == std::string::npos || (pre && !experimental)) continue;
-            int build = atoi(url.c_str() + name + 14);
+            int build = atoi(url.c_str() + name + 1 + assetPrefix.size());
             if (build > best) { best = build; bestUrl = url; bestAt = q2; }
         }
         // On the stable channel a kit that isn't a Stable (an Experimental, after Options > Updates was switched back)
@@ -906,10 +910,10 @@ namespace
         }
         if (revert ? best == kit.build : best <= kit.build)
         {
-            Log(L"update: up to date (build %d, %s channel)", kit.build, experimental ? L"experimental" : L"stable");
+            Log(L"update: up to date (build %d, %s channel)", kit.build, conceptual ? L"Conceptual" : experimental ? L"experimental" : L"stable");
             return;
         }
-        std::string asset = "pdnet-update-" + std::to_string(best) + ".zip";
+        std::string asset = assetPrefix + std::to_string(best) + ".zip";
         // From the same release: a Stable's asset has the same name as its Experimental's, with another kit-version.txt.
         size_t s = json.find("sha256 " + asset + " ", bestAt);
         std::string expected = s == std::string::npos ? std::string() : json.substr(s + 8 + asset.size(), 64);

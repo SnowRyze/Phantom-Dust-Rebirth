@@ -9,7 +9,7 @@
 #                             folder (D:\ if it exists, else out\kits; or set PDNET_KITS), with the notes in
 #                             pdnet\kit-version.txt
 #   promote <N>               rename Experimental N to the next "Stable <M>" and tag its source commit stable-<M>
-#   conceptual "notes"        save the kit as the next "PhantomDust-pdnet Conceptual <N>.zip" (from the Conceptual
+#   conceptual "notes"        publish to Conceptual kits' own updates, and save the kit as the next "PhantomDust-pdnet Conceptual <N>.zip" (from the Conceptual
 #                             branch): never published, and its pdlaunch never updates it
 # Needs: Visual Studio 2022 (or Build Tools) with "Desktop development with C++", and Epic's EOS SDK in deps\eos-sdk.
 # Optional, in private\ (never in git): eos.tester.ini (the EOS client testers use, shipped as the kit's eos.ini) and
@@ -266,7 +266,8 @@ $label = if ($Mode -eq 'experimental') {
     "PhantomDust-pdnet Experimental $number"
 } elseif ($Mode -eq 'conceptual') { "PhantomDust-pdnet Conceptual $((LastNumber 'Conceptual') + 1)" }
 else { 'PhantomDust-pdnet development build' }
-$version = "$label`r`npdnet.dll MD5 $md5`r`n" + $(if ($Mode -eq 'experimental') { "Build: $number`r`n" } else { '' }) +
+if ($Mode -eq 'conceptual') { $conceptualNumber = (LastNumber 'Conceptual') + 1 }
+$version = "$label`r`npdnet.dll MD5 $md5`r`n" + $(if ($Mode -eq 'experimental') { "Build: $number`r`n" } elseif ($Mode -eq 'conceptual') { "Build: $conceptualNumber`r`n" } else { '' }) +
            "Source: $(if ($commit) { $commit } else { 'unknown (not built from a git clone)' })$dirty`r`n" + $(if ($Mode -ne 'build' -and $Arg) { "$Arg`r`n" } else { '' })
 [IO.File]::WriteAllText((Join-Path $files 'kit-version.txt'), $version, (New-Object Text.UTF8Encoding $false))
 Zip $kit (Join-Path $out 'PhantomDust-pdnet.zip')
@@ -281,7 +282,27 @@ if ($Mode -eq 'conceptual') {
     $zip = Join-Path $kits "$label.zip"
     Copy-Item (Join-Path $out 'PhantomDust-pdnet.zip') $zip -Force
     Write-Host "  $zip" -ForegroundColor Green
-    Write-Host 'Conceptual: not published, and it never updates itself. The kit has eos.ini and the Discord links inside: share it only with your testers.' -ForegroundColor Yellow
+    Write-Host 'The kit has eos.ini and the Discord links inside: share it only with your testers.' -ForegroundColor Yellow
+
+    # The update for installed Conceptual kits: a pre-release of the pushed commit, asset pdnet-conceptual-<N>.zip. Other
+    # kits never take it: they only look for pdnet-update-<N>.zip (launcher\pdlaunch.cpp, CheckForUpdate).
+    $asset = Join-Path $out "pdnet-conceptual-$conceptualNumber.zip"
+    UpdateZip $kit $asset
+    $fullCommit = $null; $pushed = $false
+    if ($commit) {
+        $ErrorActionPreference = 'Continue'
+        $fullCommit = git -C $root rev-parse HEAD 2>$null
+        git -C $root fetch -q origin 2>$null
+        $pushed = [bool](git -C $root branch -r --contains $fullCommit 2>$null)
+        $ErrorActionPreference = 'Stop'
+    }
+    if (-not $fullCommit) { Write-Host 'Not published to GitHub: not a git clone.' -ForegroundColor Yellow }
+    elseif ($dirty) { Write-Host 'Not published to GitHub: commit the changes first (an update must match a commit).' -ForegroundColor Yellow }
+    elseif (-not $pushed) { Write-Host 'Not published to GitHub: push this commit first, then run build.bat conceptual again.' -ForegroundColor Yellow }
+    else {
+        $page = PublishRelease "conceptual-$conceptualNumber" $fullCommit "Conceptual $conceptualNumber" $true (ReleaseNotes $conceptualNumber $asset $(if ($Arg) { $Arg } else { "Conceptual $conceptualNumber." })) $asset
+        if ($page) { Write-Host "Published: $page" -ForegroundColor Green }
+    }
 }
 
 if ($Mode -eq 'experimental') {

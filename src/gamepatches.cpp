@@ -7,6 +7,7 @@
 #include "log.h"
 #include "rebirth_word.h"
 #include "gamepads.h"
+#include "labtests.h"
 #include <fstream>
 #include <winrt/Windows.ApplicationModel.Core.h>
 #include <winrt/Windows.UI.Core.h>
@@ -2411,14 +2412,31 @@ namespace pdnet::gamepatches
             return label.find("Experimental") != std::string::npos ? L"experimental" : label.find("Stable") != std::string::npos ? L"stable" : L"off";
         }
 
+        // Conceptual kits update only from Conceptual releases and don't use update_channel, which is shared with other kits.
+        bool ConceptualKit() { return strstr(BuildLabel(), "Conceptual") != nullptr; }
+
         void RefreshUpdateRow()
         {
+            if (ConceptualKit())
+            {
+                sprintf_s(g_updateRowText, "Updates: %s", GetConfig().conceptualUpdatesOff ? "Off" : "Conceptual");
+                return;
+            }
             std::wstring channel = UpdateChannel();
             sprintf_s(g_updateRowText, "Updates: %s", _wcsicmp(channel.c_str(), L"experimental") == 0 ? "Experimental" : _wcsicmp(channel.c_str(), L"off") == 0 ? "Off" : "Stable");
         }
 
         void SwitchUpdates()
         {
+            if (ConceptualKit())
+            {
+                bool off = !GetConfig().conceptualUpdatesOff;
+                EditableConfig().conceptualUpdatesOff = off;
+                SaveSetting("conceptual_updates", off ? "off" : "on");
+                RefreshUpdateRow();
+                Log(L"gamepatch: Options > Updates: Conceptual kit updates %s (used from the next game start)", off ? L"off" : L"on");
+                return;
+            }
             std::wstring now = UpdateChannel();
             std::wstring next = _wcsicmp(now.c_str(), L"stable") == 0 ? L"experimental" : _wcsicmp(now.c_str(), L"experimental") == 0 ? L"off" : L"stable";
             EditableConfig().updateChannel = next;
@@ -2595,7 +2613,7 @@ namespace pdnet::gamepatches
             RefreshUpdateRow();
             int64_t item[8] = { reinterpret_cast<int64_t>(row ? g_logRowText : kLogHint) };
             g_addItem(item);
-            int64_t updates[8] = { reinterpret_cast<int64_t>(row ? g_updateRowText : kUpdateHint) };
+            int64_t updates[8] = { reinterpret_cast<int64_t>(row ? g_updateRowText : ConceptualKit() ? "Updates this Conceptual kit at game start, from Conceptual builds only.\nOff: no automatic updates." : kUpdateHint) };
             g_addItem(updates);
             if (row) Log(L"gamepatch: Options > Send Log and Updates items added");
             return true;
@@ -3702,11 +3720,26 @@ namespace pdnet::gamepatches
         return done;
     }
 
+    bool HookCall(uint64_t siteAddress, uint64_t target, void* hook)
+    {
+        uint8_t* site = At(siteAddress);
+        // A call, or a jump that ends a function in a call's place (e9): the hook returns to the same place either way.
+        if ((site[0] != 0xe8 && site[0] != 0xe9) || site + 5 + *reinterpret_cast<int32_t*>(site + 1) != At(target)) return false;
+        uint8_t* cave = CodeCave(16);
+        if (!cave) return false;
+        std::vector<uint8_t> toHook = { 0xff, 0x25, 0x00, 0x00, 0x00, 0x00 }; // jmp [rip+0]
+        Put64(toHook, reinterpret_cast<uint64_t>(hook));
+        std::vector<uint8_t> call = { site[0] };
+        Put32(call, Rel32(site + 5, cave));
+        return Write(cave, toHook) && Write(site, call);
+    }
+
     void Apply()
     {
         static std::once_flag once;
         std::call_once(once, []
         {
+            labtests::Install(); // Conceptual branch only
             if (!HookFileOpens()) Log(L"gamepatch: title screen: CreateFile2 import not found");
             g_bodyTags = GetConfig().nametagsOnBodies ? 1 : 0;
             NametagsAlwaysOn();
