@@ -85,6 +85,8 @@ Anything that changes match behaviour needs every player on the same kit, and re
 
 ## Log
 (Newest first: what was tried, what happened.)
+- 2026-11-06: Conceptual 5: on 4 the hook ran but no key press was logged, so the tests also take View + D-pad (Left camera,
+  Up record, Right play back), with logging of keyboard events and a heartbeat. Published; a Conceptual 4 install updates to it.
 - 2026-11-06: Conceptual kits get their own auto-update (the user's request; Conceptual branch only). Kits 1 and 2 can't
   update: install one built with it by hand once.
 - 2026-11-06: Conceptual 2: in Conceptual 1 no test ran (log: labtest not installed); the camera call is a tail jump (e9) at

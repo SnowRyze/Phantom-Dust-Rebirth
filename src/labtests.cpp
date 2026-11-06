@@ -1,6 +1,7 @@
 #include "pch.h"
 #include "labtests.h"
 #include "gamepatches.h"
+#include "gamepads.h"
 #include "log.h"
 #include <winrt/Windows.ApplicationModel.Core.h>
 #include <winrt/Windows.UI.Core.h>
@@ -9,9 +10,10 @@
 #include <vector>
 
 // Conceptual branch only (docs\CONCEPTUAL.md): three offline tests, active only inside a Lab > Test Arsenal battle.
-//   F6  camera: own view -> follow each other player -> own view
-//   F7  record: start / stop saving every player's position and hand to LocalState\pdnet\labtest.rec
-//   F8  play back: both players are driven only by that file, as network players are. Nobody is under local control.
+//   F6, or View + D-pad Left:  camera: own view -> follow each other player -> own view
+//   F7, or View + D-pad Up:    record: start / stop saving every player's position and hand to LocalState\pdnet\labtest.rec
+//   F8, or View + D-pad Right: play back: both players are driven only by that file, as network players are. Nobody is
+//                              under local control.
 //
 // What it rests on (Ghidra, PDUWP.exe):
 // - FUN_14012bfc0 (one call, at 0x14017d00e) builds the match view from the local player's object: view matrix +0x13f50,
@@ -100,6 +102,8 @@ namespace pdnet::labtests
                             window.KeyDown([](CoreWindow const&, KeyEventArgs const& e)
                             {
                                 if (e.KeyStatus().WasKeyDown || !gamepatches::TestBattle()) return;
+                                static std::atomic<int> logged{ 0 };
+                                if (logged++ < 30) Log(L"labtest: keyboard event: key 0x%02X", static_cast<uint32_t>(e.VirtualKey()));
                                 switch (static_cast<uint32_t>(e.VirtualKey()))
                                 {
                                 case VK_F6: g_pressCamera = true; break;
@@ -115,6 +119,31 @@ namespace pdnet::labtests
                 }
                 catch (...) { Log(L"labtest: no keyboard (0x%08X)", winrt::to_hresult()); }
             });
+        }
+
+        // Hold View, press a D-pad direction. Windows.Gaming.Input.GamepadButtons: View 0x2, Up 0x40, Left 0x100, Right 0x200.
+        void WatchController()
+        {
+            std::thread([]
+            {
+                struct { uint32_t button; std::atomic<bool>* press; const wchar_t* name; bool held; } combos[] = {
+                    { 0x100, &g_pressCamera, L"camera", false }, { 0x40, &g_pressRecord, L"record", false }, { 0x200, &g_pressPlay, L"play back", false } };
+                for (;;)
+                {
+                    Sleep(16);
+                    bool active = gamepatches::TestBattle() && AnyPadHolds(0x2);
+                    for (auto& combo : combos)
+                    {
+                        bool now = active && AnyPadHolds(combo.button);
+                        if (now && !combo.held)
+                        {
+                            Log(L"labtest: controller: View + D-pad: %s", combo.name);
+                            *combo.press = true;
+                        }
+                        combo.held = now;
+                    }
+                }
+            }).detach();
         }
 
         void LogPlayers(const wchar_t* when)
@@ -402,6 +431,15 @@ namespace pdnet::labtests
                 SubscribeKeysOnce();
                 LogPlayers(L"battle started");
             }
+            // Shows this hook keeps running in the battle, and whether the game's frame counter moves.
+            static uint32_t calls = 0;
+            static DWORD lastBeat = 0;
+            ++calls;
+            if (GetTickCount() - lastBeat >= 5000)
+            {
+                lastBeat = GetTickCount();
+                Log(L"labtest: running: %u camera calls, frame %d, match state %d", calls, FrameNow(), Var<int32_t>(0x1404bc950));
+            }
             if (g_pressCamera.exchange(false)) NextView();
             if (g_pressRecord.exchange(false)) ToggleRecord();
             if (g_pressPlay.exchange(false)) TogglePlay();
@@ -447,7 +485,10 @@ namespace pdnet::labtests
     void Install()
     {
         if (gamepatches::HookCall(0x14017d00e, 0x14012bfc0, reinterpret_cast<void*>(&HookedCamera)))
-            Log(L"labtest: ready: in a Test Arsenal battle, F6 camera, F7 record, F8 play back");
+        {
+            WatchController();
+            Log(L"labtest: ready: in a Test Arsenal battle, F6 or View + D-pad Left: camera, F7 or View + D-pad Up: record, F8 or View + D-pad Right: play back");
+        }
         else
             Log(L"labtest: not installed - the game code is not what this pdnet expects");
     }
