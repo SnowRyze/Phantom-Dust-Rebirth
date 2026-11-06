@@ -85,6 +85,17 @@ Anything that changes match behaviour needs every player on the same kit, and re
 
 ## Log
 (Newest first: what was tried, what happened.)
+- 2026-11-06: dynamic arsenal cases, the user's choices: the game's Aura rates, 3 schools at most, one plain case to buy.
+  The school number (case +0x50) sets the editor limit and the Aura refill rate (1 school 1.3x, 2 1.0x, 3 0.7x). It now
+  follows the arsenal in the multiplayer profile: 3 while the editor is open, otherwise the schools in it. Story unchanged.
+  Buy and "School Limit" texts are English only. Not yet tried in the game.
+- 2026-11-06: offline tests passed on Conceptual 5 (the user: works; log and labtest.rec checked):
+  - Update: Conceptual 4 installed build 5 by itself. As master notes, the keyboard needs the second start.
+  - Camera: followed slot 1 for 27 s; its position, health and hand (it changed mid-battle) read fine.
+  - Record: 447 frames in 14.9 s, 30 game frames a second, 200 bytes each, 5.9 KB a second (positions and hands only).
+  - Play back: 447 of 447 frames with both players at +0x34 = 0, 0 faults; both ended at their recorded last position,
+    and local control came back. So a match can run with nobody under local control, driven by recorded stream data.
+  - Not covered: the other 24 streams (skills, hits), real network traffic, the HUD for another player, 2v2.
 - 2026-11-06: Conceptual 5: F6-F8 never worked (1-4): the window gets no key events on this PC. Merged master's keyboard fix;
   the tests read pdlaunch's keys (KeysHeld), and also take View + D-pad (Left camera, Up record, Right play back).
   Not yet tried in the game.

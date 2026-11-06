@@ -1556,6 +1556,22 @@ namespace pdnet::gamepatches
                             if (fresh && (texts > 0 || official > 0)) Log(L"gamepatch: menu %d: %d Rated text(s), %d Official Battle line(s) removed", m, texts, official);
                         }
                         SettingsScriptPatch(m, script, fresh);
+                        if (m == kCaseBuyMenu && MultiplayerProfile())
+                        {
+                            static constexpr Relabel kCaseTexts[] = {
+                                { "%d-School Arsenal Case", "Arsenal Case" },
+                                { "purchase of an Arsenal Case with", "purchase of an Arsenal Case?" },
+                                { "a %d-School Restriction?", "" },
+                                { "Purchased: Arsenal Case with", "Purchased: Arsenal Case" },
+                                { "%d-School Restriction", "" },
+                            };
+                            RelabelScript(script, kCaseTexts, std::size(kCaseTexts));
+                        }
+                        if (m == kEditorMenu && MultiplayerProfile())
+                        {
+                            static constexpr Relabel kEditorTexts[] = { { "Number of Schools", "School Limit" } };
+                            RelabelScript(script, kEditorTexts, std::size(kEditorTexts));
+                        }
                         if (int renamed = RenameXboxLive(script); fresh && renamed > 0) Log(L"gamepatch: menu %d: %d Xbox Live text(s) now say Online", m, renamed);
                         if (scoreboard && m == kRankingMenu)
                         {
@@ -1694,10 +1710,10 @@ namespace pdnet::gamepatches
             int cases = *reinterpret_cast<int32_t*>(save + 0x3a48);
             uint8_t* list = *reinterpret_cast<uint8_t**>(save + 0x10a * 0x38);
             bool hasCase = false;
-            for (int i = 0; list && i < cases && i < 16; ++i) hasCase |= *reinterpret_cast<int16_t*>(list + i * 100 + 0x50) == kCaseSchools;
+            for (int i = 0; list && i < cases && i < 16; ++i) hasCase = true; // any case: its school number follows the arsenal now
             bool gaveCase = !hasCase && cases < 16;
             if (gaveCase) reinterpret_cast<GiveCaseFn>(At(0x14015c0e0))(mode, kCaseSchools);
-            Log(L"gamepatch: shop Max Credits & Skills (%s profile): %d skill(s) topped up to %d, credits %d -> %d, 2-School Arsenal Case %s",
+            Log(L"gamepatch: shop Max Credits & Skills (%s profile): %d skill(s) topped up to %d, credits %d -> %d, Arsenal Case %s",
                 mode == 2 ? L"multiplayer" : L"story", skills, kSkillTarget, before, credits, gaveCase ? L"given" : hasCase ? L"already owned" : L"not given (16 cases)");
         }
         int64_t HookedStoreStart(int64_t* args)
@@ -1725,7 +1741,7 @@ namespace pdnet::gamepatches
                     strcmp(pool + 1643, "$STORE_TITLE") != 0 || strcmp(pool + 1725, "$STORE_WAIT") != 0)
                     return 0;
                 const char label[] = "Max Credits & Skills";
-                const char hint[] = "Up to 5,000,000 credits, 80 of each skill, one 2-School Arsenal Case.";
+                const char hint[] = "Up to 5,000,000 credits, 80 of each skill, one Arsenal Case.";
                 static_assert(sizeof(label) + sizeof(hint) <= 1737 - 1643, "store texts too short");
                 memcpy(pool + 1643, label, sizeof(label));
                 memcpy(pool + 1643 + sizeof(label), hint, sizeof(hint));
@@ -2514,6 +2530,68 @@ namespace pdnet::gamepatches
             return result;
         }
 
+        // Dynamic arsenal cases (Conceptual branch only). An arsenal's school number, case +0x50, does two things:
+        // - the editor refuses more schools than it (session command at 0x140216cc0: schools used > editing arsenal's +0x50);
+        // - at a match start it picks the Aura refill rate from gsdata +0x33034: 1 school 1.3, 2 schools 1.0, 3 schools 0.7
+        //   (FUN_140187710, FUN_14012a750, used in FUN_14024de20). Other players' games use the number in the arsenal this
+        //   PC sends, so a player without this kit sees the right rate too.
+        // So in the multiplayer profile the number follows the arsenal: 3 while the editor is open (the limit, and "limited
+        // to 3 schools" in its message), and otherwise the schools really in it, 1 to 3. The story profile is left alone.
+        // Schools: skill record DAT_1404bdc50 + id * 0x90, +0x12, above 0 (as FUN_14015b830); Aura Particles have none.
+        constexpr int kMaxCaseSchools = 3;
+
+        int SchoolsInArsenal(const uint8_t* arsenal, const uint8_t* skills)
+        {
+            uint32_t seen = 0;
+            for (int i = 0; i < 30; ++i)
+            {
+                int16_t id = *reinterpret_cast<const int16_t*>(arsenal + 0x14 + i * 2);
+                if (id < 0) continue;
+                int16_t school = *reinterpret_cast<const int16_t*>(skills + 0x12 + id * 0x90);
+                if (school > 0 && school < 32) seen |= 1u << school;
+            }
+            int count = 0;
+            for (; seen; seen &= seen - 1) ++count;
+            return count;
+        }
+
+        void CasesFollowArsenals(bool editing)
+        {
+            __try
+            {
+                uint8_t* save = *reinterpret_cast<uint8_t**>(At(0x1404bec10));
+                uint8_t* skills = *reinterpret_cast<uint8_t**>(At(0x1404bdc50));
+                if (!save || !skills || !MultiplayerProfile()) return;
+                uint8_t* list = *reinterpret_cast<uint8_t**>(save + 0x10a * 0x38);
+                int cases = *reinterpret_cast<int32_t*>(save + 0x3a48);
+                for (int i = 0; list && i < cases && i < 16; ++i)
+                {
+                    uint8_t* arsenal = list + i * 100;
+                    int schools = SchoolsInArsenal(arsenal, skills);
+                    int wanted = editing ? kMaxCaseSchools : schools < 1 ? 2 : schools > kMaxCaseSchools ? kMaxCaseSchools : schools; // empty: the neutral rate
+                    auto& number = *reinterpret_cast<int16_t*>(arsenal + 0x50);
+                    if (number == wanted) continue;
+                    if (!editing) Log(L"gamepatch: arsenal case %d: %d school(s) in it, rate as %d (was %d)", i, schools, wanted, number);
+                    number = static_cast<int16_t>(wanted);
+                }
+            }
+            __except (EXCEPTION_EXECUTE_HANDLER) {}
+        }
+
+        void DynamicCases()
+        {
+            std::thread([]
+            {
+                for (;;)
+                {
+                    Sleep(50);
+                    int32_t state = *reinterpret_cast<volatile int32_t*>(At(0x1404bc950)); // 0 or 13: not in a match
+                    if (state == 0 || state == 13) CasesFollowArsenals(CurrentMenu(MenuManager()) == kEditorMenu);
+                }
+            }).detach();
+            Log(L"gamepatch: dynamic arsenal cases on (3 schools at most)");
+        }
+
         void OpenCaseMenu(int menu)
         {
             Log(L"gamepatch: Arsenal Lab: %s Arsenal Case picked", menu == kCaseBuyMenu ? L"Buy" : L"Sell");
@@ -2524,6 +2602,8 @@ namespace pdnet::gamepatches
             if (*reinterpret_cast<uint64_t*>(At(0x1404c5228)) && memcmp(At(0x1401ce100), "\x48\x83\xec\x28\x48\x8b\x05", 7) == 0)
                 reinterpret_cast<void (*)()>(At(0x1401ce100))();
             else Log(L"gamepatch: Arsenal Lab: shop stock not built - the game code or data is not what this pdnet expects");
+            // Dynamic cases: one plain case to buy (bit N of the stock = a case for N + 1 schools, FUN_1401c40b0).
+            if (menu == kCaseBuyMenu && MultiplayerProfile()) *At(0x14052ad0e) = 1;
             int64_t manager = MenuManager();
             *At(0x1404bbc34) = 0; // as FUN_140207020 (the script's "open menu")
             g_pushMenu(manager, menu, 0);
@@ -3852,6 +3932,7 @@ namespace pdnet::gamepatches
         std::call_once(once, []
         {
             labtests::Install(); // Conceptual branch only
+            DynamicCases();      // Conceptual branch only
             if (!HookFileOpens()) Log(L"gamepatch: title screen: CreateFile2 import not found");
             g_bodyTags = GetConfig().nametagsOnBodies ? 1 : 0;
             NametagsAlwaysOn();
