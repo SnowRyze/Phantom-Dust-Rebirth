@@ -2625,8 +2625,9 @@ namespace pdnet::gamepatches
         // The editor putting a skill in a slot, FUN_140159db0(state, skill, c): state +0x48 is the arsenal; skill 0 empties
         // the slot; below 0 takes the skill selected in the list (state +0x278 the list, +0x27c + list * 0x18 the row,
         // DAT_1404c0140 +0x138c + ((list - 1) * 0x3ea + row) * 2). It replaces the slot's skill, state +0x84 + index * 8, index
-        // from state +0x174 + (state +0x268) * 8. Below 0 is its own refusal: -1 makes the caller play "can't do that"
-        // (state +0xb38 = 8). So a skill that would make a 4th school is refused there.
+        // from state +0x174 + (state +0x268) * 8. Below 0 is its own refusal: -3 ("more than 3 of the same skill") makes the
+        // caller set state +0xb38 = 10, and the editor's script (arsenaledit, English) then shows its pop-up. So a skill that
+        // would make a 4th school returns -3 too, with the pop-up's text swapped first; it's swapped back before any other try.
         using SetSkillFn = int (*)(uint8_t* state, int skill, int c);
 
         bool WouldPassSchoolLimit(uint8_t* state, int skill)
@@ -2670,13 +2671,25 @@ namespace pdnet::gamepatches
             }
         }
 
+        void SwapRefusalText(bool schools)
+        {
+            static constexpr const char* kSameSkill = "You cannot place more than 3 of the same \nskill in an arsenal.";
+            static constexpr const char* kSchools = "You cannot use more than 3 schools \nin an arsenal."; // not longer: it's written over the other
+            uint8_t* script = *reinterpret_cast<uint8_t* volatile*>(At(0x1403fa3d0) + kEditorMenu * 0x18 + 0x10);
+            if (!script) return;
+            const Relabel swap = schools ? Relabel{ kSameSkill, kSchools } : Relabel{ kSchools, kSameSkill };
+            RelabelScript(script, &swap, 1);
+        }
+
         int HookedSetSkill(uint8_t* state, int skill, int c)
         {
             if (skill != 0 && MultiplayerProfile() && WouldPassSchoolLimit(state, skill))
             {
                 Log(L"gamepatch: arsenal editor: skill refused, a school past the limit of %d", kMaxCaseSchools);
-                return -1;
+                SwapRefusalText(true);
+                return -3;
             }
+            SwapRefusalText(false);
             return reinterpret_cast<SetSkillFn>(At(0x140159db0))(state, skill, c);
         }
 

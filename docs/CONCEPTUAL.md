@@ -85,6 +85,8 @@ Anything that changes match behaviour needs every player on the same kit, and re
 
 ## Log
 (Newest first: what was tried, what happened.)
+- 2026-11-06: school limit pop-up. A refused 4th school gives no sign (the user), so it now uses the game's "3 of the same skill"
+  pop-up (the -3 refusal) with its text swapped to the school limit, English only. Not yet tried in the game.
 - 2026-11-06: school limit fix. The number followed the arsenal, but a 4th and 5th school went in: the save check's counters
   weren't current. Now a skill making a 4th school is refused as it's added (FUN_140159db0, its own -1 refusal), and the save
   check counts the arsenal itself. Not yet tried in the game.
