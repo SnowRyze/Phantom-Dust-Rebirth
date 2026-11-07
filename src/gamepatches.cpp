@@ -2719,8 +2719,21 @@ namespace pdnet::gamepatches
             return true;
         }
 
+        // An arsenal's panel (FUN_14016d5f0: case picture, name, skills) draws "<prefix><slot, 2 digits>" above the name when its
+        // 6th argument is 0 or more, and uses that argument for nothing else. The slot number means nothing to players (the
+        // user), so the three calls pass -1 and the label isn't drawn.
+        using ArsenalPanelFn = void (*)(int64_t a, int x, int y, int64_t arsenal, int64_t e, int slot, int colour, int h);
+        void HookedArsenalPanel(int64_t a, int x, int y, int64_t arsenal, int64_t e, int slot, int colour, int h)
+        {
+            reinterpret_cast<ArsenalPanelFn>(At(0x14016d5f0))(a, x, y, arsenal, e, -1, colour, h);
+        }
+
         void DynamicCases()
         {
+            int panels = 0;
+            for (uint64_t site : { 0x14015c683ull, 0x14016d5c8ull, 0x1401704baull })
+                panels += HookCall(site, 0x14016d5f0, reinterpret_cast<void*>(&HookedArsenalPanel)) ? 1 : 0;
+            Log(L"gamepatch: arsenal slot label hidden on %d of 3 panels", panels);
             if (!g_drawText) WrapCommand<MenuCommandFn>(0x1403eefe0 + 23 * 8, 0x140207840, &HookedDrawText, g_drawText, L"arsenal case row text");
             WrapCommand<NativeFn>(0x1403ef390 + 310 * 8, 0x14020bd40, &HookedShopStock, g_shopStock, L"shop case stock");
             WrapCommand<NativeFn>(0x1403ef390 + 347 * 8, 0x14020c3d0, &HookedShopStock2, g_shopStock2, L"shop case stock (2)");

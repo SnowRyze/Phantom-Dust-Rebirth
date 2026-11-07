@@ -85,6 +85,8 @@ Anything that changes match behaviour needs every player on the same kit, and re
 
 ## Log
 (Newest first: what was tried, what happened.)
+- 2026-11-07: the slot label above an arsenal's name ("<prefix>NN") is gone, the user's request: FUN_14016d5f0 draws it only
+  when its 6th argument is 0 or more; its three calls now pass -1. Story profile too. Not yet tried in the game.
 - 2026-11-07: Max Credits & Skills gives an Arsenal Case each press, up to 16 (the user's choice). The main shop (menu 6)
   also offers one plain case: its stock commands (group 3 #310, #347) are wrapped. Multiplayer profile only. Not yet tried.
 - 2026-11-07: the buy screen still said "1-School Arsenal Case": the script's texts are longer strings (the row holds the
