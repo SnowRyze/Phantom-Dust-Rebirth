@@ -85,6 +85,8 @@ Anything that changes match behaviour needs every player on the same kit, and re
 
 ## Log
 (Newest first: what was tried, what happened.)
+- 2026-11-07: Max Credits & Skills gives an Arsenal Case each press, up to 16 (the user's choice). The main shop (menu 6)
+  also offers one plain case: its stock commands (group 3 #310, #347) are wrapped. Multiplayer profile only. Not yet tried.
 - 2026-11-07: the buy screen still said "1-School Arsenal Case": the script's texts are longer strings (the row holds the
   price too). The dialogs are now matched whole, and the row is changed as drawn (menu command 23) without its school
   number. Not yet tried in the game.

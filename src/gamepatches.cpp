@@ -1701,14 +1701,13 @@ namespace pdnet::gamepatches
             auto& credits = *reinterpret_cast<int32_t*>(At(0x14059a9d8));
             int before = credits;
             if (credits < kCreditTarget) reinterpret_cast<GiveCreditsFn>(At(0x14015bf90))(mode, kCreditTarget - credits);
+            // One case each press (the user's choice), up to the game's 16. In the multiplayer profile its number then follows
+            // what's put in it (dynamic cases).
             int cases = *reinterpret_cast<int32_t*>(save + 0x3a48);
-            uint8_t* list = *reinterpret_cast<uint8_t**>(save + 0x10a * 0x38);
-            bool hasCase = false;
-            for (int i = 0; list && i < cases && i < 16; ++i) hasCase = true; // any case: its school number follows the arsenal now
-            bool gaveCase = !hasCase && cases < 16;
+            bool gaveCase = cases < 16;
             if (gaveCase) reinterpret_cast<GiveCaseFn>(At(0x14015c0e0))(mode, kCaseSchools);
             Log(L"gamepatch: shop Max Credits & Skills (%s profile): %d skill(s) topped up to %d, credits %d -> %d, Arsenal Case %s",
-                mode == 2 ? L"multiplayer" : L"story", skills, kSkillTarget, before, credits, gaveCase ? L"given" : hasCase ? L"already owned" : L"not given (16 cases)");
+                mode == 2 ? L"multiplayer" : L"story", skills, kSkillTarget, before, credits, gaveCase ? L"given" : L"not given (16 cases)");
         }
         int64_t HookedStoreStart(int64_t* args)
         {
@@ -1735,7 +1734,7 @@ namespace pdnet::gamepatches
                     strcmp(pool + 1643, "$STORE_TITLE") != 0 || strcmp(pool + 1725, "$STORE_WAIT") != 0)
                     return 0;
                 const char label[] = "Max Credits & Skills";
-                const char hint[] = "Up to 5,000,000 credits, 80 of each skill, one Arsenal Case.";
+                const char hint[] = "Up to 5,000,000 credits, 80 of each skill, and an Arsenal Case.";
                 static_assert(sizeof(label) + sizeof(hint) <= 1737 - 1643, "store texts too short");
                 memcpy(pool + 1643, label, sizeof(label));
                 memcpy(pool + 1643 + sizeof(label), hint, sizeof(hint));
@@ -2694,6 +2693,14 @@ namespace pdnet::gamepatches
 
         int64_t HookedDrawText(int64_t* args); // (below)
 
+        // The shop (menu 6) builds its stock as it opens, with script group 3 #310 (prices and stock, FUN_1401ce100) or #347
+        // (stock, FUN_1401cdef0); the case list (30) then shows bit N of 0x14052ad0e as a case for N + 1 schools. In the
+        // multiplayer profile only the first stays: one plain case, as in the Lab.
+        NativeFn g_shopStock = nullptr, g_shopStock2 = nullptr;
+        void OneCaseInStock() { if (MultiplayerProfile()) *At(0x14052ad0e) = 1; }
+        int64_t HookedShopStock(int64_t* args) { int64_t r = g_shopStock(args); OneCaseInStock(); return r; }
+        int64_t HookedShopStock2(int64_t* args) { int64_t r = g_shopStock2(args); OneCaseInStock(); return r; }
+
         // The buy list's row "%d-School Arsenal Case\a346r\a1f%d\a0f credits" (schools, price) is drawn as "Arsenal Case ..."
         // with the price only. True when `changed` holds the call to make instead.
         bool CaseRowText(const int64_t* args, int64_t* changed)
@@ -2715,6 +2722,8 @@ namespace pdnet::gamepatches
         void DynamicCases()
         {
             if (!g_drawText) WrapCommand<MenuCommandFn>(0x1403eefe0 + 23 * 8, 0x140207840, &HookedDrawText, g_drawText, L"arsenal case row text");
+            WrapCommand<NativeFn>(0x1403ef390 + 310 * 8, 0x14020bd40, &HookedShopStock, g_shopStock, L"shop case stock");
+            WrapCommand<NativeFn>(0x1403ef390 + 347 * 8, 0x14020c3d0, &HookedShopStock2, g_shopStock2, L"shop case stock (2)");
             bool limit = WrapCommand<NativeFn>(0x1403f1e48, 0x140216cc0, &HookedSchoolLimit, g_schoolLimit, L"arsenal school limit");
             bool add = true;
             for (uint64_t site : { 0x140159434ull, 0x14015948full, 0x140159be4ull })
