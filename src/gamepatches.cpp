@@ -1558,12 +1558,11 @@ namespace pdnet::gamepatches
                         SettingsScriptPatch(m, script, fresh);
                         if (m == kCaseBuyMenu && MultiplayerProfile())
                         {
+                            // The list row is drawn with the school number as its first value: CaseRowText changes it as drawn.
                             static constexpr Relabel kCaseTexts[] = {
-                                { "%d-School Arsenal Case", "Arsenal Case" },
-                                { "purchase of an Arsenal Case with", "purchase of an Arsenal Case?" },
-                                { "a %d-School Restriction?", "" },
-                                { "Purchased: Arsenal Case with", "Purchased: Arsenal Case" },
-                                { "%d-School Restriction", "" },
+                                { "Do you want to proceed with the\npurchase of an Arsenal Case with\na %d-School Restriction?",
+                                  "Do you want to proceed with the\npurchase of an Arsenal Case?" },
+                                { "Purchased: Arsenal Case with\n%d-School Restriction", "Purchased: Arsenal Case" },
                             };
                             RelabelScript(script, kCaseTexts, std::size(kCaseTexts));
                         }
@@ -2693,8 +2692,29 @@ namespace pdnet::gamepatches
             return reinterpret_cast<SetSkillFn>(At(0x140159db0))(state, skill, c);
         }
 
+        int64_t HookedDrawText(int64_t* args); // (below)
+
+        // The buy list's row "%d-School Arsenal Case\a346r\a1f%d\a0f credits" (schools, price) is drawn as "Arsenal Case ..."
+        // with the price only. True when `changed` holds the call to make instead.
+        bool CaseRowText(const int64_t* args, int64_t* changed)
+        {
+            static constexpr char kRow[] = "%d-School Arsenal Case";
+            if (!args || CurrentMenu(MenuManager()) != kCaseBuyMenu || !MultiplayerProfile()) return false;
+            char format[96];
+            if (!CopyString(reinterpret_cast<const char*>(args[2]), format, sizeof(format)) || strncmp(format, kRow, sizeof(kRow) - 1) != 0) return false;
+            static char text[96];
+            snprintf(text, sizeof(text), "Arsenal Case%s", format + sizeof(kRow) - 1);
+            changed[0] = args[0];
+            changed[1] = args[1];
+            changed[2] = reinterpret_cast<int64_t>(text);
+            for (int i = 3; i < 7; ++i) changed[i] = args[i + 1]; // the school number dropped
+            changed[7] = 0;
+            return true;
+        }
+
         void DynamicCases()
         {
+            if (!g_drawText) WrapCommand<MenuCommandFn>(0x1403eefe0 + 23 * 8, 0x140207840, &HookedDrawText, g_drawText, L"arsenal case row text");
             bool limit = WrapCommand<NativeFn>(0x1403f1e48, 0x140216cc0, &HookedSchoolLimit, g_schoolLimit, L"arsenal school limit");
             bool add = true;
             for (uint64_t site : { 0x140159434ull, 0x14015948full, 0x140159be4ull })
@@ -3164,6 +3184,7 @@ namespace pdnet::gamepatches
 
         int64_t HookedDrawText(int64_t* args)
         {
+            if (int64_t row[8]; CaseRowText(args, row)) return g_drawText(row);
             int menu = CurrentMenu(MenuManager());
             if (args && GetConfig().ratedLobbies && (menu == kSessionListMenu || menu == kLobbyMenu))
             {

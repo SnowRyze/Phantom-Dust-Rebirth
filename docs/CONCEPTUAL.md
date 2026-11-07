@@ -85,6 +85,12 @@ Anything that changes match behaviour needs every player on the same kit, and re
 
 ## Log
 (Newest first: what was tried, what happened.)
+- 2026-11-07: the buy screen still said "1-School Arsenal Case": the script's texts are longer strings (the row holds the
+  price too). The dialogs are now matched whole, and the row is changed as drawn (menu command 23) without its school
+  number. Not yet tried in the game.
+- 2026-11-07: confirmed in a Test Arsenal battle (the user; read from the running game's memory, read-only): the player's
+  3-school arsenal refilled at 0.7x (DAT_1404bc958), the opponent's 2-school copy at 1.0x. The limit and its pop-up work.
+  1.3x for a 1-school arsenal not yet seen.
 - 2026-11-06: school limit pop-up. A refused 4th school gives no sign (the user), so it now uses the game's "3 of the same skill"
   pop-up (the -3 refusal) with its text swapped to the school limit, English only. Not yet tried in the game.
 - 2026-11-06: school limit fix. The number followed the arsenal, but a 4th and 5th school went in: the save check's counters
