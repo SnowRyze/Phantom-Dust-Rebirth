@@ -85,6 +85,10 @@ Anything that changes match behaviour needs every player on the same kit, and re
 
 ## Log
 (Newest first: what was tried, what happened.)
+- 2026-11-10: the follow view looked wrong (the user: own camera offset). Now from behind the watched player along their
+  facing, object +0x12e68 (16-bit angle, in PlayerPos +0x18): how it maps to a direction is learnt from this player's own
+  camera while it stands (8 readings, best match after 120 frames; log: facing angle read as way N), with the camera's shape
+  measured the same way. Skills sometimes missing from the watched HUD: not understood yet; the hand fields are logged.
 - 2026-11-10: following, the other players' tags were missing (the user). Now, whenever the view isn't the player's own,
   the game's tags are off for the HUD draw (its player's entries zeroed) and pdnet draws every player's tag from the camera
   actually used (a viewer that is nobody), except the watched player. Colours: dead, ally (this player, Tag partner), enemy.

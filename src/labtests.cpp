@@ -200,6 +200,22 @@ namespace pdnet::labtests
                 if (down && g_deadTarget < 0) StartFreeCam();
             }
             if (!g_deadOn) return;
+            // What the HUD's hand reads for the watched player (status record +0x350 in use, +0x378 skill, +0x360, +0x384 owner
+            // per slot, 0x50 apart), every 3 s, to see why its skills sometimes don't show.
+            static ULONGLONG lastHand = 0;
+            if (g_deadTarget >= 0 && !g_freeCam && GetTickCount64() - lastHand >= 3000)
+            {
+                lastHand = GetTickCount64();
+                if (uint8_t* r = PlayerRecord(g_deadTarget))
+                {
+                    wchar_t line[256];
+                    int n = swprintf_s(line, L"deadcam: slot %d hand:", g_deadTarget);
+                    for (int i = 0; i < 4 && n > 0; ++i)
+                        n += swprintf_s(line + n, 256 - n, L" [%d %d %d %d]", Field<int32_t>(r, 0x350 + i * 0x50), Field<int32_t>(r, 0x378 + i * 0x50),
+                                        Field<int32_t>(r, 0x360 + i * 0x50), Field<int32_t>(r, 0x384 + i * 0x50));
+                    Log(L"%s", line);
+                }
+            }
             if (g_deadFree.exchange(false))
             {
                 if (g_freeCam) { g_freeCam = false; g_deadTarget = NextFollowable(LocalSlot(), 1); Log(L"deadcam: following slot %d", g_deadTarget); }
@@ -442,6 +458,77 @@ namespace pdnet::labtests
             return true;
         }
 
+        // Following another player from behind them: each player's facing is a 16-bit angle at object +0x12e68 (sent to the
+        // other PCs in PlayerPos +0x18). Which way that angle turns in world space isn't known for sure, so it is learnt from this
+        // PC's own player while it stands: of the 8 ways to read an angle as a horizontal direction, the one that best matches
+        // where its own camera looks wins. The camera's shape (how far behind, how high, where it looks) comes from that camera
+        // too, measured along the player's facing.
+        constexpr size_t kFacing = 0x12e68;
+        float g_facingScore[8]{};
+        int g_facingSamples = 0;
+        float g_behind = 0, g_height = 0, g_ahead = 0, g_lookHeight = 0; // the camera's shape, along the facing
+        bool g_haveShape = false;
+
+        Vec FacingWay(int way, float angle)
+        {
+            float s = std::sin(angle), c = std::cos(angle);
+            switch (way)
+            {
+            case 0: return { s, 0, c };   case 1: return { -s, 0, -c };
+            case 2: return { c, 0, s };   case 3: return { -c, 0, -s };
+            case 4: return { s, 0, -c };  case 5: return { -s, 0, c };
+            case 6: return { c, 0, -s };  default: return { -c, 0, s };
+            }
+        }
+        float FacingAngle(uint8_t* object) { return Field<uint16_t>(object, kFacing) * (6.2831853f / 65536.0f); }
+        int BestWay()
+        {
+            int best = 0;
+            for (int w = 1; w < 8; ++w) if (g_facingScore[w] > g_facingScore[best]) best = w;
+            return best;
+        }
+        bool FacingKnown() { return g_facingSamples >= 120; }
+
+        void LearnFacing(uint8_t* mine, Vec eye, Vec look)
+        {
+            Vec view = Sub(look, eye);
+            view.y = 0;
+            float len = Length(view);
+            if (len < 0.01f) return;
+            view = Scale(view, 1.0f / len);
+            float angle = FacingAngle(mine);
+            for (int w = 0; w < 8; ++w) g_facingScore[w] = g_facingScore[w] * 0.995f + Dot(view, FacingWay(w, angle));
+            if (++g_facingSamples == 120) Log(L"deadcam: facing angle read as way %d", BestWay());
+            // The camera's shape along the facing it now reads best.
+            Vec f = FacingWay(BestWay(), angle);
+            Vec position = Field<Vec>(mine, kPosition);
+            Vec toEye = Sub(eye, position), toLook = Sub(look, position);
+            g_behind = -Dot(toEye, f);
+            g_height = toEye.y;
+            g_ahead = Dot(toLook, f);
+            g_lookHeight = toLook.y;
+            g_haveShape = g_behind > 0.01f;
+        }
+
+        // The view from behind `object`, along its facing, smoothed so it doesn't snap.
+        bool BehindView(uint8_t* object, Vec& eye, Vec& look)
+        {
+            static Vec smooth{};
+            static uint8_t* last = nullptr;
+            if (!FacingKnown() || !g_haveShape) return false;
+            Vec f = FacingWay(BestWay(), FacingAngle(object));
+            if (object != last || !Finite(smooth)) smooth = f;
+            last = object;
+            smooth = Add(Scale(smooth, 0.85f), Scale(f, 0.15f));
+            float len = Length(smooth);
+            if (len < 0.01f) return false;
+            Vec d = Scale(smooth, 1.0f / len);
+            Vec position = Field<Vec>(object, kPosition);
+            eye = Add(position, Vec{ -d.x * g_behind, g_height, -d.z * g_behind });
+            look = Add(position, Vec{ d.x * g_ahead, g_lookHeight, d.z * g_ahead });
+            return Finite(eye) && Finite(look);
+        }
+
         void UpdateCameraOffset()
         {
             uint8_t* mine = PlayerObject(LocalSlot());
@@ -452,6 +539,7 @@ namespace pdnet::labtests
             g_eyeOffset = Sub(eye, position);
             g_targetOffset = Add(g_eyeOffset, Scale(forward, distance));
             g_haveOffset = true;
+            LearnFacing(mine, eye, Add(position, g_targetOffset));
         }
 
         void NextView()
@@ -750,9 +838,12 @@ namespace pdnet::labtests
             if (free) { eye = g_freePos; look = Add(g_freePos, Scale(FreeForward(), 50.0f)); }
             else
             {
-                Vec position = Field<Vec>(target, kPosition);
-                eye = Add(position, g_eyeOffset);
-                look = Add(position, g_targetOffset);
+                if (!BehindView(target, eye, look)) // until the facing is learnt: this player's own camera offset
+                {
+                    Vec position = Field<Vec>(target, kPosition);
+                    eye = Add(position, g_eyeOffset);
+                    look = Add(position, g_targetOffset);
+                }
             }
             if (!Finite(eye) || !Finite(look))
             {
