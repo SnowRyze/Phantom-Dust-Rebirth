@@ -85,6 +85,10 @@ Anything that changes match behaviour needs every player on the same kit, and re
 
 ## Log
 (Newest first: what was tried, what happened.)
+- 2026-11-10: following, the other players' tags were missing (the user). Now, whenever the view isn't the player's own,
+  the game's tags are off for the HUD draw (its player's entries zeroed) and pdnet draws every player's tag from the camera
+  actually used (a viewer that is nobody), except the watched player. Colours: dead, ally (this player, Tag partner), enemy.
+  Not yet tried in the game.
 - 2026-11-10: tags fixed (the user), but the down player's own tag was missing: the HUD never tags its own player and skips
   bodies unless body tags are on. Now drawn by pdnet after the HUD, the HUD's way (FUN_1402477e0 at the entry + (0x140, 0xe6),
   name DAT_1404bca30 + slot * 0x41, FUN_14028caa0), dead colour once down. The free camera's projection uses a viewer that is

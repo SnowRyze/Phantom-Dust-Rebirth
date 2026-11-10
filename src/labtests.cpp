@@ -234,19 +234,34 @@ namespace pdnet::labtests
         bool g_viewOverridden = false; // this frame's view isn't the player's own (set by ViewFrom)
         constexpr size_t kTagEntries = 0x13f90, kTagBytes = 32 * 0x14;
 
-        // This PC's own nametag while the dead camera runs: the HUD never tags its own player, and skips a body unless body tags
-        // are on. Drawn the HUD's way (FUN_1402477e0 at the entry's screen point + (0x140, 0xe6), the name at DAT_1404bca30 +
-        // slot * 0x41, then FUN_14028caa0), in the dead colour once down, the ally colour while only pretending.
-        void DrawOwnTag(const uint8_t* entries, int slot)
+        // Nametags while the view isn't the player's own: the game's tags are turned off for the draw (the HUD's player gets
+        // entries all marked off screen) and pdnet draws every player's tag itself from this view, the HUD's way
+        // (FUN_1402477e0 at the entry's screen point + (0x140, 0xe6), the name at DAT_1404bca30 + slot * 0x41, then
+        // FUN_14028caa0), so the watched player's view and the free camera tag everyone alike: this PC's own player too,
+        // standing or a body. Colours as pdnet.ini has them: dead for anyone down, ally for this player and its Tag Team
+        // partner, enemy for the rest.
+        uint32_t TagColour(int slot)
+        {
+            if (Health(slot) <= 0) return GetConfig().deadNametagColor;
+            int local = LocalSlot();
+            if (slot == local) return GetConfig().allyNametagColor;
+            uint8_t* mine = PlayerObject(local);
+            uint8_t* other = PlayerObject(slot);
+            bool partner = !gamepatches::TestBattle() && Var<int32_t>(0x1405277b4) == 1 && mine && other && Field<int32_t>(mine, 0x1c) == Field<int32_t>(other, 0x1c);
+            return partner ? GetConfig().allyNametagColor : GetConfig().enemyNametagColor;
+        }
+
+        void DrawTag(const uint8_t* entries, int slot)
         {
             uint8_t* record = PlayerRecord(slot);
-            if (!record) return;
+            uint8_t* object = PlayerObject(slot);
+            if (!record || !object || Field<int32_t>(object, 0x20) == 0) return;
             int index = Field<int32_t>(record, 0x60);
             if (index < 0 || index >= 32) return;
             const uint8_t* entry = entries + index * 0x14;
             if (*reinterpret_cast<const int32_t*>(entry) == 0) return; // off screen
             float x = *reinterpret_cast<const float*>(entry + 4), y = *reinterpret_cast<const float*>(entry + 8);
-            uint32_t colour = Health(slot) <= 0 ? GetConfig().deadNametagColor : GetConfig().allyNametagColor;
+            uint32_t colour = TagColour(slot);
             auto colours = reinterpret_cast<uint32_t*>(At(0x14054c9b0));
             Var<int32_t>(0x14054c9ac) = 8;
             Var<int32_t>(0x14054c9a8) = 0x10;
@@ -259,8 +274,8 @@ namespace pdnet::labtests
             for (int i = 0; i < 4; ++i) colours[i] = 0xffffffff;
         }
 
-        // A viewer for FUN_140253c00 that is nobody (slot -1: nobody is skipped) at the free camera's eye (+0xe0, for distances).
-        uint8_t* FreeViewer()
+        // A viewer for FUN_140253c00 that is nobody (slot -1: nobody is skipped) at the camera's eye (+0xe0, for distances).
+        uint8_t* NobodyViewer()
         {
             alignas(16) static uint8_t viewer[0x100];
             memset(viewer, 0, sizeof(viewer));
@@ -269,29 +284,32 @@ namespace pdnet::labtests
             return viewer;
         }
 
-        void HudWithTags(int64_t hud, int hudSlot, uint8_t* viewer, int ownTag)
+        // The HUD as hudSlot sees it, with every player but skip tagged from this view.
+        void HudWithTags(int64_t hud, int hudSlot, int skip)
         {
             uint8_t* holder = PlayerObject(hudSlot);
-            if (!holder || !viewer) { g_hudDraw(hud); return; }
+            if (!holder) { g_hudDraw(hud); return; }
             alignas(16) static uint8_t block[0x310];
             memset(block, 0, sizeof(block));
             memcpy(block + 0x40, At(0x140584f40), 64);
-            *reinterpret_cast<uint8_t**>(block + 0x300) = viewer;
+            *reinterpret_cast<uint8_t**>(block + 0x300) = NobodyViewer();
             static uint8_t saved[kTagBytes];
             bool lent = false;
             __try
             {
                 reinterpret_cast<void (*)(uint8_t*)>(At(0x140253c00))(block);
                 memcpy(saved, holder + kTagEntries, kTagBytes);
-                memcpy(holder + kTagEntries, block + 0x80, kTagBytes);
+                memset(holder + kTagEntries, 0, kTagBytes); // the game's own tags: none this draw
                 lent = true;
             }
             __except (EXCEPTION_EXECUTE_HANDLER) {}
             g_hudDraw(hud);
-            if (lent) memcpy(holder + kTagEntries, saved, kTagBytes);
-            if (lent && ownTag >= 0)
+            if (!lent) return;
+            memcpy(holder + kTagEntries, saved, kTagBytes);
+            for (int s = 0; s < 4; ++s)
             {
-                __try { DrawOwnTag(block + 0x80, ownTag); }
+                if (s == skip) continue;
+                __try { DrawTag(block + 0x80, s); }
                 __except (EXCEPTION_EXECUTE_HANDLER) {}
             }
         }
@@ -303,15 +321,14 @@ namespace pdnet::labtests
             if (!g_viewOverridden && !following) { g_hudDraw(hud); return; }
             if (!following)
             {
-                // The free camera: own HUD, every player tagged from this view, this PC's own tag too. The Lab camera test: as the game.
-                bool free = g_deadOn && g_freeCam;
-                HudWithTags(hud, local, free ? FreeViewer() : PlayerObject(local), free ? local : -1);
+                // The free camera: own HUD, everyone tagged. The Lab camera test (F6): the watched player untagged.
+                HudWithTags(hud, local, g_deadOn && g_freeCam ? -1 : g_viewSlot);
                 return;
             }
-            // Following: the watched player's HUD; the HUD tags this PC's player itself only while it stands (pretending).
+            // Following: the watched player's HUD, everyone else tagged, this PC's own player too.
             auto& slot = Var<int32_t>(0x1404bbe00);
             slot = g_deadTarget;
-            HudWithTags(hud, g_deadTarget, PlayerObject(g_deadTarget), Health(local) <= 0 ? local : -1);
+            HudWithTags(hud, g_deadTarget, g_deadTarget);
             slot = local;
         }
 
