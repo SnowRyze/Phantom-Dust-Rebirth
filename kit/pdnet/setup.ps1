@@ -33,6 +33,18 @@ function Register($folder) {
     if (-not (Get-AppxPackage Microsoft.VCLibs.140.00 | Where-Object Architecture -eq 'X64')) {
         Fail 'Missing Microsoft.VCLibs.140.00 (x64). Install Microsoft''s "C++ Runtime framework packages for Desktop Bridge", then run this again.'
     }
+    # A copy unpacked straight from the Store package still has its Store signature, and Windows then refuses it
+    # (0x80073CFF, "Windows Store origin cannot be sideloaded"). Those three files are moved into a subfolder, not deleted.
+    $signature = 'AppxSignature.p7x', 'AppxBlockMap.xml', 'AppxMetadata\CodeIntegrity.cat' | Where-Object { Test-Path "$folder\$_" }
+    if ($signature) {
+        $aside = "$folder\_store_signature"
+        foreach ($f in $signature) {
+            $to = Join-Path $aside $f
+            New-Item -ItemType Directory -Force (Split-Path $to) | Out-Null
+            Move-Item "$folder\$f" $to -Force
+        }
+        Write-Host "Moved the Store signature files into $aside (Windows won't install the copy with them)."
+    }
     try { Add-AppxPackage -Register "$folder\AppxManifest.xml" }
     catch { Fail "Windows refused to install the game from $folder : $($_.Exception.Message)" }
 }
@@ -133,6 +145,8 @@ public static class PdPlm
 '@
 $hr = [PdPlm]::Enable($pkg.PackageFullName, "`"$kit\pdlaunch.exe`"")
 if ($hr -ne 0) { Fail ('Windows refused to attach pdlaunch to Phantom Dust (HRESULT 0x{0:X8}).' -f $hr) }
+# That setting doesn't survive a restart: this sign-in entry sets it again (pdlaunch.exe -attach; Remove.bat deletes it).
+Set-ItemProperty 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Run' -Name 'PhantomDust pdnet' -Value "`"$kit\pdlaunch.exe`" -attach" -Type String
 
 # pdnet passes match traffic between the game and itself through sockets on this PC, which Windows blocks for
 # Store-style apps unless they are exempted. This needs administrator rights once.

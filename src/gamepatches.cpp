@@ -689,6 +689,8 @@ namespace pdnet::gamepatches
         PushMenuFn g_pushMenu = nullptr; // the original functions (trampolines)
         PopMenuFn g_popMenu = nullptr;
         std::atomic<bool> g_editorFromLobby{ false };
+        int32_t g_lobbyVariable2 = 0; // menu variable 2 as the lobby had it when its Arsenal Lab button was used
+        void RestoreLobbyVariable2() { MenuVariables()[2] = g_lobbyVariable2; }
         // The lobby ended while its Arsenal editor was open (LobbyEnded): leaving the editor then opens livegterr, the
         // lobby's own way out when its session is lost (livegterr 84 -> liveerror 53 -> liveend 52 -> mainmenu 8).
         // Going back into livelobby instead would start a match with nobody (menu 1).
@@ -870,6 +872,9 @@ namespace pdnet::gamepatches
             *reinterpret_cast<volatile int32_t*>(At(0x140594e90)) = 1;
             *reinterpret_cast<volatile int32_t*>(At(0x140594e94)) = 1;
         }
+        // Back in the lobby from its Arsenal Lab: available again, but only once the skill preview's town session (see
+        // SkillPreviewScene) has fully closed, so the host can't start the match on top of it.
+        void LobbyAvailableAfterPreview();
 
         int HookedPushMenu(int64_t manager, int menu, char force)
         {
@@ -877,6 +882,11 @@ namespace pdnet::gamepatches
             if (menu == 68) g_settingsOpenedAt = GetTickCount64();
             RenameStrings(); // cheap; covers string tables loaded after start-up
             if (menu != current) Log(L"menu: open %d (from %d)", menu, current);
+            if (GetConfig().debugMenu && menu == 5 && current == 8)
+            {
+                Log(L"menu: debug_menu=on - Split Screen opens the debug menu (menu 2) instead");
+                return g_pushMenu(manager, 2, force);
+            }
             if (menu == kFeedbackMenu)
             {
                 bool test = g_testBattle.exchange(false);
@@ -912,8 +922,9 @@ namespace pdnet::gamepatches
                     return g_pushMenu(manager, kLobbyLostMenu, force);
                 }
                 Log(L"menu: leaving the Arsenal Lab opened from the lobby - back to the lobby instead of menu %d", menu);
+                RestoreLobbyVariable2();
                 int result = g_popMenu();
-                SetLobbyAvailable(true);
+                LobbyAvailableAfterPreview();
                 return result;
             }
             return g_pushMenu(manager, menu, force);
@@ -1003,8 +1014,9 @@ namespace pdnet::gamepatches
                     Log(L"menu: leaving the Arsenal Lab - the lobby ended meanwhile, so out the lobby's way (menu %d)", kLobbyLostMenu);
                     return g_pushMenu(manager, kLobbyLostMenu, 0);
                 }
+                RestoreLobbyVariable2();
                 int result = g_popMenu();
-                SetLobbyAvailable(true); // back in the lobby: no red hand
+                LobbyAvailableAfterPreview(); // back in the lobby: no red hand (once a preview's town session has closed)
                 return result;
             }
             return g_popMenu();
@@ -1297,7 +1309,10 @@ namespace pdnet::gamepatches
         PrepareFn g_prepareScript = nullptr;
         void HookedPrepareScript(uint8_t* script)
         {
-            if (script) RenameXboxLive(script);
+            if (script)
+            {
+                RenameXboxLive(script);
+            }
             g_prepareScript(script);
         }
 
@@ -1373,7 +1388,7 @@ namespace pdnet::gamepatches
 
         // Rated / Unrated lobbies (rated_lobbies=on). The create-session menu's Rating option (No Restrictions /
         // With Restrictions: session number ratinglimit 0 / 1, originally "only players within 200 of the host")
-        // becomes Unrated / Rated; the lobby search's Rating option then finds one kind or the other, and the ±200
+        // becomes Unrated / Rated; the lobby search's Rating option then finds one kind or the other, and the Â±200
         // limit is gone (xsapi/stubs/Multiplayer.MultiplayerService.cpp). A match changes ratings only when Rated:
         // FUN_1401835c0 (rating += change, at match start and end) is hooked and gets a change of 0 otherwise. The
         // game rated only the three "Official Battle" rules (rule < 3, checks at 0x1401878c6 and 0x1401882c1); those
@@ -2406,19 +2421,21 @@ namespace pdnet::gamepatches
         bool g_logItemReady = false; // menu command 6 is wrapped (SoundOptions)
 
         // Options > Updates: an eighth item, after Send Log, picked the same way (event 107, "aMAIN_S7"). Each pick goes
-        // stable -> experimental -> off -> stable in update_channel (settings.ini), which pdlaunch reads at the next game
-        // start (CheckForUpdate; settings.ini overrides pdnet.ini; off: no check at all). Empty means the kit's own kind
-        // (off for a development build).
+        // public -> stable -> experimental -> off -> public in update_channel (settings.ini), which pdlaunch reads at the
+        // next game start (CheckForUpdate; settings.ini overrides pdnet.ini; off: no check at all). Empty means the kit's
+        // own kind (off for a development build).
         char g_updateRowText[64];
-        const char* kUpdateHint = "Builds to update to at game start. Stable: tested. Experimental: newest, less tested.\nOff: no automatic updates.";
+        const char* kUpdateHint = "Builds to update to at game start. Public: releases. Stable: tested. Experimental: newest.\nOff: no automatic updates.";
 
         std::wstring UpdateChannel()
         {
             std::wstring channel = GetConfig().updateChannel;
-            if (_wcsicmp(channel.c_str(), L"stable") == 0 || _wcsicmp(channel.c_str(), L"experimental") == 0 || _wcsicmp(channel.c_str(), L"off") == 0) return channel;
+            for (const wchar_t* known : { L"public", L"stable", L"experimental", L"off" })
+                if (_wcsicmp(channel.c_str(), known) == 0) return known;
             std::string label = BuildLabel(); // empty or a typo in settings.ini: the kit's own, as pdlaunch does
             if (label.find("Linux") != std::string::npos) return L"off"; // no pdlaunch there, so no updates
-            return label.find("Experimental") != std::string::npos ? L"experimental" : label.find("Stable") != std::string::npos ? L"stable" : L"off";
+            return label.find("Experimental") != std::string::npos ? L"experimental" : label.find("Stable") != std::string::npos ? L"stable"
+                 : label.find("Public") != std::string::npos ? L"public" : L"off";
         }
 
         // Conceptual kits update only from Conceptual releases and don't use update_channel, which is shared with other kits.
@@ -2432,7 +2449,7 @@ namespace pdnet::gamepatches
                 return;
             }
             std::wstring channel = UpdateChannel();
-            sprintf_s(g_updateRowText, "Updates: %s", _wcsicmp(channel.c_str(), L"experimental") == 0 ? "Experimental" : _wcsicmp(channel.c_str(), L"off") == 0 ? "Off" : "Stable");
+            sprintf_s(g_updateRowText, "Updates: %s", channel == L"experimental" ? "Experimental" : channel == L"off" ? "Off" : channel == L"public" ? "Public" : "Stable");
         }
 
         void SwitchUpdates()
@@ -2447,7 +2464,7 @@ namespace pdnet::gamepatches
                 return;
             }
             std::wstring now = UpdateChannel();
-            std::wstring next = _wcsicmp(now.c_str(), L"stable") == 0 ? L"experimental" : _wcsicmp(now.c_str(), L"experimental") == 0 ? L"off" : L"stable";
+            std::wstring next = now == L"public" ? L"stable" : now == L"stable" ? L"experimental" : now == L"experimental" ? L"off" : L"public";
             EditableConfig().updateChannel = next;
             SaveSetting("update_channel", winrt::to_string(next));
             RefreshUpdateRow();
@@ -2523,7 +2540,7 @@ namespace pdnet::gamepatches
             return result;
         }
 
-        // Dynamic arsenal cases (Conceptual branch only). An arsenal's school number, case +0x50, does two things:
+        // Dynamic arsenal cases. An arsenal's school number, case +0x50, does two things:
         // - the editor refuses more schools than it (session command at 0x140216cc0: schools used > editing arsenal's +0x50);
         // - at a match start it picks the Aura refill rate from gsdata +0x33034: 1 school 1.3, 2 schools 1.0, 3 schools 0.7
         //   (FUN_140187710, FUN_14012a750, used in FUN_14024de20). Other players' games use the number in the arsenal this
@@ -3122,12 +3139,15 @@ namespace pdnet::gamepatches
             *reinterpret_cast<char*>(manager + 0x1062c) = 0; // no picked label on the new menu (see OpenCaseMenu)
         }
 
+        void PreviewTick(); // the skill preview outside the town (below)
+
         using MenuFrameFn = void (*)(int64_t manager);
         MenuFrameFn g_menuFrame = nullptr;
         void HookedMenuFrame(int64_t manager)
         {
             g_menuFrame(manager);
             BackButtonTick(manager);
+            PreviewTick();
         }
 
         // The menu manager's per-frame update, FUN_140248230: its vtable slot. Scripts have run when it returns.
@@ -3373,6 +3393,14 @@ namespace pdnet::gamepatches
             Log(L"menu: menu variable 0 was %d - 0 for the Arsenal Lab", MenuVariables()[0]);
             MenuVariables()[0] = 0;
         }
+        // The Laboratory reads variable 2 as it starts (script command 14) and hands it to g5 #112, which keeps bit 16 at
+        // editor state +0xb58: the split-screen "Player 2's copied arsenal" flag. The multiplayer menu zeroes variables
+        // 0-2 before the Lab, but here a value left by the lobby's own screens (its arsenal picker, menu 67) could show
+        // "Player 2, edits made to the copied arsenal data will only be in effect for the current game session". It is
+        // 0 in the Lab and goes back to what the lobby had when the player returns (RestoreLobbyVariable2).
+        g_lobbyVariable2 = MenuVariables()[2];
+        if (g_lobbyVariable2 != 0) Log(L"menu: menu variable 2 was 0x%X - 0 for the Arsenal Lab (back on return)", g_lobbyVariable2);
+        MenuVariables()[2] = 0;
         *At(0x1404bbc34) = 0; // as the script's own "open menu" command does (FUN_140207020)
         g_pushMenu(manager, kLabMenu, 0);
         return true;
@@ -3556,6 +3584,29 @@ namespace pdnet::gamepatches
                     Log(L"gamepatch: title screen %s", copy.empty() ? L"left as it is (logo file not as expected)" : L"reads \"Rebirth\"");
                 });
                 if (!copy.empty()) return g_createFile2(copy.c_str(), access, share, disposition, params);
+            }
+            // debug_menu=on (developer copies): the debug menu's script is menu 2's menu1_en.ssb; a copy that has it as
+            // debug.ssb (with option_en.ssb overwritten by it, the real Options kept as option_enx.ssb) gets those
+            // swapped back. Split Screen opens it (HookedPushMenu).
+            if (GetConfig().debugMenu && n > 14)
+            {
+                std::wstring path(name);
+                auto endsWith = [&](const wchar_t* tail) { size_t t = wcslen(tail); return path.size() > t && _wcsicmp(path.c_str() + path.size() - t, tail) == 0; };
+                auto swapTail = [&](const wchar_t* tail, const wchar_t* with) { return path.substr(0, path.size() - wcslen(tail)) + with; };
+                auto exists = [](const std::wstring& p) { return GetFileAttributesW(p.c_str()) != INVALID_FILE_ATTRIBUTES; };
+                std::wstring other;
+                // The game's own menu1_en.ssb is in Japanese; Assets\Data\MenuD\menu1_en.ssb (the debug build's menus) has
+                // the English texts, so that one is used where it exists.
+                if (endsWith(L"menu\\menu1_en.ssb") && exists(swapTail(L"menu\\menu1_en.ssb", L"MenuD\\menu1_en.ssb")))
+                    other = swapTail(L"menu\\menu1_en.ssb", L"MenuD\\menu1_en.ssb");
+                else if (endsWith(L"\\menu1_en.ssb") && !exists(path)) other = swapTail(L"menu1_en.ssb", L"debug.ssb");
+                else if (endsWith(L"\\option_en.ssb")) other = swapTail(L"option_en.ssb", L"option_enx.ssb");
+                if (!other.empty() && exists(other))
+                {
+                    static std::atomic<int> told{ 0 };
+                    if (told++ < 4) Log(L"gamepatch: debug menu: %s reads %s", path.c_str(), other.c_str());
+                    return g_createFile2(other.c_str(), access, share, disposition, params);
+                }
             }
             return g_createFile2(name, access, share, disposition, params);
         }
@@ -4062,6 +4113,385 @@ namespace pdnet::gamepatches
         }
     }
 
+    namespace
+    {
+        // Main menu > HOW TO PLAY: the main menu script (mainmenu_en.ssb) shows it only when the title options have a
+        // "how_to_play_url" (g10 #1, FUN_1400bd6a0: mode 0 checks, mode 1 opens it through Windows.System.Launcher).
+        // Those options came from Xbox Live title storage (tms_options.csv, now the copy in the save), and Microsoft's
+        // copy has only help_url, so the item was hidden. FUN_1400c2d80(key, default) looks a key up: it answers this
+        // one with the community site.
+        constexpr char kHowToPlayUrl[] = "https://phantomdust.online";
+        using OptionFn = uint64_t (*)(const char* key, uint64_t fallback);
+        OptionFn g_option = nullptr;
+
+        uint64_t HookedOption(const char* key, uint64_t fallback)
+        {
+            if (key && _stricmp(key, "how_to_play_url") == 0)
+            {
+                static bool told = false;
+                if (!told) { told = true; Log(L"gamepatch: main menu How to Play -> %S", kHowToPlayUrl); }
+                return reinterpret_cast<uint64_t>(kHowToPlayUrl);
+            }
+            return g_option(key, fallback);
+        }
+
+        void HowToPlay()
+        {
+            // mov [rsp+8],rbx; mov [rsp+10h],rsi; push rdi; sub rsp,20h
+            const std::vector<uint8_t> start = { 0x48, 0x89, 0x5c, 0x24, 0x08, 0x48, 0x89, 0x74, 0x24, 0x10, 0x57, 0x48, 0x83, 0xec, 0x20 };
+            g_option = reinterpret_cast<OptionFn>(InlineHookBytes(0x1400c2d80, start, start, reinterpret_cast<void*>(&HookedOption), L"How to Play link"));
+        }
+    }
+
+    namespace
+    {
+        // The skill preview (the small 3D view of what a skill does) in the multiplayer Arsenal editor and View Stock List.
+        // In the story it is part of the town: the Lab is a menu over the running town session (game state 6), and the
+        // preview borrows the town's player object (0x1404bc9d8) and is stepped by the town's frame (FUN_14012b110 calls
+        // the table at 0x1402dd1a0 for the preview state 0x140534798: 0 idle, 1 set up, 2 load prevcam.dat, 3 running,
+        // 4 stop, 5 finish). The multiplayer menus have no session (game state 0, no player), so:
+        // 1. g5 #119 (the scripts' "preview on" check: bit 16 of the Lab's open parameter, set only by the story) is 1 in
+        //    the editor (menu 64) and View Stock List (63), from the multiplayer menu and from the lobby (where this
+        //    player's red hand stays on until the session has closed: LobbyAvailableAfterPreview).
+        // 2. The preview's start (menu command 70 with 102) with no player starts the story's town session underneath
+        //    (FUN_140212720, g4 #461 as townstart_en.ssb uses it: stage 9, the player's character) and is held until the
+        //    town runs (game state 6 with a player object); then PreviewTick starts it, and the town's frame steps it.
+        //    The script meanwhile waits on 103 (state 3) as it does in the story.
+        // 3. The session stays for the whole visit to the Lab (one load per visit). Once the player has left the Lab's menus
+        //    (InLabMenus) and the preview is idle, it ends the way g4 #458 does for a town (FUN_1402117e0's mode-0 path:
+        //    FUN_14012b4f0). With the session's "menu after" left at -1 the game ends in menu state 13 without opening
+        //    another menu (FUN_14012b7a0). A preview asked for while that ending runs (game states 9-12) is held and the
+        //    session started again afterwards (the first version ended it at every stop, and going straight back into
+        //    the editor hung on it).
+        MenuCommandFn g_preview = nullptr;
+        SessionCommandFn g_labPreviewMode = nullptr;
+        bool g_previewTown = false;        // pdnet's town session is loading or running
+        bool g_previewTownClosing = false; // pdnet ended it and the game hasn't finished ending it yet
+        bool g_previewTownAgain = false;   // a preview came while it was ending: start the session again after
+        int g_previewHeld = 0;             // 102 or 104 held until the town runs (0: none)
+        bool g_previewHeldSkill = false;   // a 104 (show this skill) also came while held
+
+        bool g_lobbyAvailableWhenClosed = false; // back in the lobby while the session was still there
+
+        bool MenuGameState(int gameState) { return gameState == 0 || gameState == 13; }
+
+        // The music: the Laboratory plays track 29 (29_DeckEdit.stx, g1 #16 -> FUN_14019cdf0); the current track is at
+        // 0x14052acec. A hum started with pdnet's town session and stayed in the Lab until the main menus played
+        // another track. While the session runs and after it, a different track than the Lab's is switched back to it.
+        int g_previewTrack = -1; // the menu's track when pdnet's session started
+
+        void KeepPreviewTrack(const wchar_t* when)
+        {
+            if (g_previewTrack < 0) return;
+            int now = *reinterpret_cast<uint16_t*>(At(0x14052acec));
+            if (now == g_previewTrack) return;
+            Log(L"preview: %s the music changed to track %d - back to track %d", when, now, g_previewTrack);
+            reinterpret_cast<int64_t (*)(uint32_t, int)>(At(0x14019cdf0))(static_cast<uint32_t>(g_previewTrack), 0);
+        }
+
+        // The flash before the editor: entering a town area (FUN_1401aefe0) sets the area banner bits 0x18000 at
+        // 0x140530034 (`or edx, 0x18000` at 0x1401af6dd); FUN_1401c70f0 then draws the area's map sprite and name for a
+        // moment. pdnet cleared them a frame late, so while its session runs that instruction ORs 0 instead.
+        void PreviewAreaBanner(bool on)
+        {
+            uint8_t* immediate = At(0x1401af6df); // the 4-byte value of `81 CA 00 80 01 00`
+            if (At(0x1401af6dd)[0] != 0x81 || At(0x1401af6dd)[1] != 0xca) return;
+            Write(immediate, on ? std::vector<uint8_t>{ 0x00, 0x80, 0x01, 0x00 } : std::vector<uint8_t>{ 0x00, 0x00, 0x00, 0x00 });
+        }
+
+        bool g_previewZoneSaved = false;   // the save's zone and zone 0's area, while pdnet's session uses zone 0 / area 2
+        int32_t g_previewZoneBefore = 0;
+        uint8_t g_previewAreaBefore = 0;
+
+        // The town load leaves its audio behind: FUN_14021a6a0 (from the stage load) loads the stage's ambience bank
+        // (MapSEUnderground.bin) and DSP profile (DSP_Underground.bin; table 0x1402dc970 by stage % 10, current at
+        // 0x1403e05f4), and only the next stage load replaces them, so a hum stayed in the menus. After pdnet's session
+        // has closed, the menu profile (DSP_Menu.bin, class 0, no ambience bank) is loaded the same way: stage 0 for
+        // the call, then FUN_14021ad70 starts the queued load, and the stage number is put back.
+        void RestoreMenuAudio()
+        {
+            auto stage = reinterpret_cast<int32_t*>(At(0x140530264));
+            int32_t stageBefore = *stage, dspBefore = *reinterpret_cast<int32_t*>(At(0x1403e05f4));
+            *stage = 0;
+            reinterpret_cast<void (*)()>(At(0x14021a6a0))();
+            int64_t started = reinterpret_cast<int64_t (*)()>(At(0x14021ad70))();
+            *stage = stageBefore;
+            Log(L"preview: menu audio profile back (DSP class %d -> %d, loader %s)", dspBefore, *reinterpret_cast<int32_t*>(At(0x1403e05f4)),
+                started ? L"started" : L"busy");
+        }
+
+        void RestorePreviewZone()
+        {
+            if (!g_previewZoneSaved) return;
+            *reinterpret_cast<int32_t*>(At(0x14059a9dc)) = g_previewZoneBefore;
+            *At(0x140599140) = g_previewAreaBefore;
+            g_previewZoneSaved = false;
+            Log(L"preview: zone %d and its area put back", g_previewZoneBefore);
+        }
+
+        void LobbyAvailableAfterPreview()
+        {
+            if (g_previewTown || g_previewTownClosing)
+            {
+                g_lobbyAvailableWhenClosed = true;
+                Log(L"preview: back in the lobby - red hand stays on until the town session has closed");
+                return;
+            }
+            SetLobbyAvailable(true);
+        }
+
+        void StartPreviewTown(int gameState)
+        {
+            // Stage 9 also loads one town area, st09_0N, and that area's scripts for the current zone
+            // (st09_areaNN_ZZ): FUN_1401d85f0 takes N from the zone table (0x140599140 + zone * 0x14, byte 0) for the
+            // zone at 0x14059a9dc, else 7. The online menus have the save's zone (13 on the developer PC: area 8), and
+            // that area has no preview room. The story's Lab (read live, 2026-11-07) runs in zone 0, area 2, so
+            // pdnet's session uses that pair while the stage loads (synchronously, inside the start) and puts both back.
+            // preview_area=N (testing) takes area N with zone 0; -1 keeps the save's own.
+            // (Other pairs crashed: an area with a zone it has no scripts for, e.g. area 2 with zone 13.)
+            // The rest of the load reads the zone again over the next frames (putting it back right after the start
+            // crashed the same way), so the pair stays until the session has closed (RestorePreviewZone).
+            int area = GetConfig().previewArea == 0 ? 2 : GetConfig().previewArea;
+            auto zonePtr = reinterpret_cast<int32_t*>(At(0x14059a9dc));
+            uint8_t* zoneArea = At(0x140599140); // zone 0's entry
+            bool patched = area >= 1 && area <= 8;
+            if (patched && !g_previewZoneSaved)
+            {
+                g_previewZoneBefore = *zonePtr;
+                g_previewAreaBefore = *zoneArea;
+                g_previewZoneSaved = true;
+            }
+            if (patched)
+            {
+                *zonePtr = 0;
+                *zoneArea = static_cast<uint8_t>(area);
+            }
+            if (g_previewTrack < 0) g_previewTrack = *reinterpret_cast<uint16_t*>(At(0x14052acec));
+            PreviewAreaBanner(false);
+            Log(L"preview: no player in this menu - starting the town session under it (game state %d, zone %d -> %d, area %d, music track %d)", gameState,
+                g_previewZoneSaved ? g_previewZoneBefore : *zonePtr, *zonePtr, patched ? area : -1, g_previewTrack);
+            reinterpret_cast<void (*)()>(At(0x140212720))();
+            g_previewTown = true;
+        }
+
+        bool PreviewPlayerReady()
+        {
+            return *reinterpret_cast<int32_t*>(At(0x1404bc950)) == 6 && *reinterpret_cast<uint64_t*>(At(0x1404bc9d8)) != 0;
+        }
+
+        int64_t HookedLabPreviewMode(int32_t* args)
+        {
+            int64_t result = g_labPreviewMode(args);
+            if (result == 1) return result;
+            int menu = CurrentMenu(MenuManager());
+            return menu == kEditorMenu || menu == kStockMenu ? 1 : result;
+        }
+
+        int64_t HookedPreview(int64_t* args)
+        {
+            int what = args ? static_cast<int>(*args) : 0;
+            int gameState = *reinterpret_cast<int32_t*>(At(0x1404bc950));
+            bool noPlayer = *reinterpret_cast<uint64_t*>(At(0x1404bc9d8)) == 0;
+            if ((what == 102 || what == 104) && (g_previewTown ? !PreviewPlayerReady() : noPlayer))
+            {
+                if (!g_previewTown)
+                {
+                    if (g_previewTownClosing)
+                    {
+                        if (!g_previewTownAgain) Log(L"preview: asked for while the town session ends (game state %d) - again after", gameState);
+                        g_previewTownAgain = true;
+                    }
+                    else if (MenuGameState(gameState)) StartPreviewTown(gameState);
+                    else
+                    {
+                        Log(L"preview: no player and game state %d - not started", gameState);
+                        return 0;
+                    }
+                }
+                if (what == 102) g_previewHeld = 102;
+                else g_previewHeldSkill = true;
+                return 0; // held: PreviewTick starts it when the town runs
+            }
+            if (what == 105 && (g_previewTown || g_previewTownClosing) && !PreviewPlayerReady())
+            {
+                g_previewHeld = 0; // not running yet: nothing to stop
+                g_previewHeldSkill = false;
+                g_previewTownAgain = false;
+                return 1;
+            }
+            return g_preview(args);
+        }
+
+        uint32_t SafeU32(uint64_t address)
+        {
+            __try { return *reinterpret_cast<uint32_t*>(address); }
+            __except (EXCEPTION_EXECUTE_HANDLER) { return 0xdeadbeef; }
+        }
+
+        // g5 #140 (FUN_1402183c0): its second argument 0 hides the town's scene layers, 1 shows them.
+        void PreviewTownLayers(bool show)
+        {
+            int64_t args[3] = { show ? 1 : 0, show ? 1 : 0, show ? 1 : 0 };
+            reinterpret_cast<int64_t (*)(int64_t*)>(At(0x1402183c0))(args);
+        }
+
+        void EndPreviewTown()
+        {
+            PreviewTownLayers(true); // as the story's Laboratory does on the way out
+            // As g4 #458 (FUN_1402117e0) does for a town session (mode 0).
+            *reinterpret_cast<int32_t*>(At(0x1404bc5d8)) = 6;
+            *reinterpret_cast<int32_t*>(At(0x1404bbec8)) = 1;
+            *reinterpret_cast<int32_t*>(At(0x1404bbecc)) = 1;
+            *reinterpret_cast<int32_t*>(At(0x1404bc8bc)) = 1;
+            *reinterpret_cast<int32_t*>(At(0x1404bc9b0)) = -1;
+            reinterpret_cast<void (*)()>(At(0x14012b4f0))();
+        }
+
+        void PreviewTick()
+        {
+            int state = *reinterpret_cast<int32_t*>(At(0x140534798));
+            int gameState = *reinterpret_cast<int32_t*>(At(0x1404bc950));
+            int mode = *reinterpret_cast<int32_t*>(At(0x1404bc9d4));
+            uint64_t player = *reinterpret_cast<uint64_t*>(At(0x1404bc9d8));
+            uint32_t loaded = player ? SafeU32(player + 0x20) : 0, ready = player ? SafeU32(player + 0x28) : 0;
+            static int lastState = -1, lastGame = -1, lastMode = -1;
+            static uint64_t lastPlayer = 1;
+            static uint32_t lastLoaded = 1, lastReady = 1;
+            if (state != lastState || gameState != lastGame || mode != lastMode || player != lastPlayer || loaded != lastLoaded || ready != lastReady)
+            {
+                if (g_previewTown || state != 0 || lastState > 0)
+                    Log(L"preview: state %d, game state %d, mode %d, player %llX (+20 %u, +28 %u)%s", state, gameState, mode, player, loaded, ready,
+                        g_previewTown ? L" (pdnet's town session)" : L"");
+                if (state == 3 && lastState != 3)
+                {
+                    // Diagnostics for the dark background: the screen fade (DAT_14052df20) and the stage, to compare the
+                    // story's Lab with pdnet's town session.
+                    uint64_t fade = *reinterpret_cast<uint64_t*>(At(0x14052df20));
+                    std::wstring fields;
+                    if (fade)
+                        for (int offset : { 0x40, 0x48, 0x50, 0x54, 0x58, 0x60, 0x70, 0x74, 0x78, 0x7c, 0x80 })
+                        {
+                            wchar_t one[32];
+                            swprintf_s(one, L" +%X=%X", offset, SafeU32(fade + offset));
+                            fields += one;
+                        }
+                    Log(L"preview: running - stage %d, menu state %d, 530034 %X, fade %llX%s", *reinterpret_cast<int32_t*>(At(0x1403e0304)),
+                        *reinterpret_cast<int32_t*>(At(0x140533744)), *reinterpret_cast<uint32_t*>(At(0x140530034)), fade, fields.c_str());
+                }
+                lastState = state; lastGame = gameState; lastMode = mode; lastPlayer = player; lastLoaded = loaded; lastReady = ready;
+            }
+            // Game state 2 (loading) moves on (FUN_14012a110, to state 3) only when the session has loaded (0x1404bbca4,
+            // set by FUN_140129fb0) and the menu system's state 0x140533744 is 3 (no menu open): the story starts the
+            // town before opening any menu. Here the Lab stays open, so pdnet takes that step itself once loaded.
+            if (g_previewTown && gameState == 2)
+            {
+                // The town session loads menu\Town.alr into the first free texture slot (FUN_140197510) and keeps the
+                // slot's number at [0x1404bec20] +0x48, which FUN_14015eaf0 then reads as a status: 1-2 loading, 0 done.
+                // From the multiplayer menu the slot is 1 or 2; in the lobby its own textures hold the low slots, the
+                // town got slot 3, and 3 counts as nothing: state 2 waited forever. 3 or more becomes 2 (loading), and
+                // the game's loader (FUN_140197750) finishes it as usual.
+                uint64_t ec20 = *reinterpret_cast<uint64_t*>(At(0x1404bec20));
+                if (ec20 && SafeU32(ec20 + 0x40) == 6 && SafeU32(ec20 + 0x48) >= 3 && SafeU32(ec20 + 0x48) < 16)
+                {
+                    Log(L"preview: Town.alr went to texture slot %u - its load counted as loading", SafeU32(ec20 + 0x48));
+                    *reinterpret_cast<uint32_t*>(ec20 + 0x48) = 2;
+                }
+                // Diagnostics (lobby: it stayed in state 2): what the main loop's state 2 and FUN_140129fb0 look at.
+                static ULONGLONG lastTold = 0;
+                ULONGLONG now = GetTickCount64();
+                if (now - lastTold > 1000)
+                {
+                    lastTold = now;
+                    uint64_t ec20 = *reinterpret_cast<uint64_t*>(At(0x1404bec20));
+                    Log(L"preview: in state 2: loaded %d, menu state %d, paused %d, bbc36 %d, c01dc %d, c015c %d, fd90 %d, fee0 %d, ec20+40 %u +48 %u, bc8d8 %d",
+                        *reinterpret_cast<int32_t*>(At(0x1404bbca4)), *reinterpret_cast<int32_t*>(At(0x140533744)), *reinterpret_cast<int32_t*>(At(0x1404bc41c)),
+                        *reinterpret_cast<uint8_t*>(At(0x1404bbc36)), *reinterpret_cast<int32_t*>(At(0x1404c01dc)), *reinterpret_cast<int32_t*>(At(0x1404c015c)),
+                        *reinterpret_cast<int32_t*>(At(0x14058fd90)), *reinterpret_cast<int32_t*>(At(0x14058fee0)),
+                        ec20 ? SafeU32(ec20 + 0x40) : 0, ec20 ? SafeU32(ec20 + 0x48) : 0, *reinterpret_cast<int32_t*>(At(0x1404bc8d8)));
+                }
+            }
+            if (g_previewTown && gameState == 2 && *reinterpret_cast<int32_t*>(At(0x1404bbca4)) != 0 && *reinterpret_cast<int32_t*>(At(0x140533744)) != 3)
+            {
+                Log(L"preview: town session loaded under the menu (menu state %d) - letting it start", *reinterpret_cast<int32_t*>(At(0x140533744)));
+                reinterpret_cast<void (*)()>(At(0x14012a110))();
+            }
+            // The town's HUD (mini-map) flashed up as the session took over under the menu. While pdnet's session runs,
+            // its HUD objects keep the hidden flag 0x40000 (what the game sets on them when a session ends,
+            // FUN_14012b600 / FUN_14012b7a0), and the area-name banner bits (0x18000 at 0x140530034) stay off.
+            if (g_previewTown && gameState >= 1 && gameState <= 6)
+            {
+                for (uint64_t hud : { 0x1404bbd50ull, 0x1404bcc50ull })
+                    if (uint64_t object = *reinterpret_cast<uint64_t*>(At(hud))) *reinterpret_cast<uint32_t*>(object + 8) |= 0x40000;
+                // (Clearing bit 1 at +0x40 of 0x1404bbd50's object as well, which FUN_14012a110 sets, crashed when the
+                // player left the editor: left as it is.)
+                *reinterpret_cast<uint32_t*>(At(0x140530034)) &= ~0x18000u;
+                if (gameState == 6) KeepPreviewTrack(L"in the session");
+            }
+            // (Cutting the end's waits in game states 10 and 11, 0x1404bc8c0, to a frame crashed in the menu's drawing
+            // right after: they stay as the game has them.)
+            if (g_previewTownClosing && MenuGameState(gameState))
+            {
+                g_previewTownClosing = false;
+                if (!g_previewTownAgain)
+                {
+                    RestorePreviewZone();
+                    RestoreMenuAudio();
+                    PreviewAreaBanner(true);
+                    KeepPreviewTrack(L"after the session");
+                    g_previewTrack = -1;
+                }
+                if (g_previewTownAgain)
+                {
+                    g_previewTownAgain = false;
+                    StartPreviewTown(gameState);
+                }
+                else if (g_lobbyAvailableWhenClosed)
+                {
+                    g_lobbyAvailableWhenClosed = false;
+                    SetLobbyAvailable(true);
+                    Log(L"preview: town session closed - red hand off");
+                }
+            }
+            if (!g_previewTown || !PreviewPlayerReady()) return;
+            if (g_previewHeld)
+            {
+                int64_t start = g_previewHeld;
+                g_previewHeld = 0;
+                // The stage load hides the town's scene layers 9-13 and 29-31 (flag 0x20000; FUN_1401d1950) and g5 #140
+                // with 1 shows them (also clears 0x140530034 flag 0x800, sets 0x1403dd3d5 and 0x1404bbee8). Read live in
+                // the story's Lab (2026-11-07): all shown, both set. The preview room and the character are in them.
+                PreviewTownLayers(true);
+                Log(L"preview: the town runs - starting the held preview (town layers shown, as in the story's Lab)");
+                g_preview(&start);
+            }
+            if (g_previewHeldSkill && state == 3)
+            {
+                int64_t skill = 104;
+                g_previewHeldSkill = false;
+                g_preview(&skill);
+            }
+            // The session ends as soon as the player is out of the two screens with the preview (the town's ambience,
+            // a hum, played as long as it ran, and stayed through the rest of the Lab). Going straight back in is
+            // handled: a preview asked for while it ends starts a new session afterwards.
+            int menu = CurrentMenu(MenuManager());
+            if (state == 0 && !g_previewHeld && !g_previewHeldSkill && menu != kEditorMenu && menu != kStockMenu)
+            {
+                g_previewTown = false;
+                g_previewTownClosing = true;
+                Log(L"preview: left the preview screens (menu %d) - ending the town session", menu);
+                EndPreviewTown();
+                // (Loading the menu's audio profile here, while the session still ran, crashed: FUN_14021a6a0 frees the
+                // profile in use. It is loaded once the session has closed.)
+            }
+        }
+
+        void SkillPreviewScene()
+        {
+            WrapCommand<MenuCommandFn>(0x1403eede0 + 134 * 8, 0x140208300, &HookedPreview, g_preview, L"skill preview");
+            WrapCommand<SessionCommandFn>(0x1403f1d50 + 119 * 8, 0x140217f80, &HookedLabPreviewMode, g_labPreviewMode, L"skill preview in multiplayer");
+        }
+    }
+
     void InstallEarlyHooks() { InstallBackButton(); }
 
     bool HookFileOpens()
@@ -4094,13 +4524,15 @@ namespace pdnet::gamepatches
         std::call_once(once, []
         {
             labtests::Install(); // Conceptual branch only
-            DynamicCases();      // Conceptual branch only
+            DynamicCases();
             if (!HookFileOpens()) Log(L"gamepatch: title screen: CreateFile2 import not found");
             g_bodyTags = GetConfig().nametagsOnBodies ? 1 : 0;
             NametagsAlwaysOn();
             PartnerLock();
             TestArsenalChoices();
             SkillDataGuard();
+            HowToPlay();
+            SkillPreviewScene();
             if (NametagsOnBodies())
             {
                 DeadNametagColor(GetConfig().deadNametagColor);

@@ -41,6 +41,7 @@ public static class PdPlmRestore
 }
 '@
     $hr = [PdPlmRestore]::Disable($pkg.PackageFullName)
+    Remove-ItemProperty 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Run' -Name 'PhantomDust pdnet' -ErrorAction SilentlyContinue # Setup's sign-in entry
     Write-Host ($(if ($hr -eq 0) { 'pdlaunch no longer starts with the game.' } else { 'pdlaunch was not set up (nothing to undo).' }))
 
     # --- 2. unpacked copy: files an older kit replaced -----------------------------------------

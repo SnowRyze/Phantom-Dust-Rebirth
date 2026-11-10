@@ -35,12 +35,14 @@ As of Experimental 98. *(untested)* = waiting for a test in a real match.
 ## Arsenal Lab
 - Buy and sell arsenal cases, also from the lobby
 - Test Arsenal: pick both arsenals, both characters and the map, fight the AI
+- Skill preview in the Arsenal editor and View Stock List online, also from the lobby
 - Max credits and skills in the shop
 
 ## Menus and UI
 - "Rebirth" title artwork
 - Build version on the main menu
 - Community (Discord) button replaces Help & Support
+- How to Play button back (opens phantomdust.online)
 - "Xbox Live" reads "Online"
 - Options: Send Log, Updates, Aura Particle Beeps
 - Multiplayer: Settings menu, Online Store removed, Trade reads "Theater"

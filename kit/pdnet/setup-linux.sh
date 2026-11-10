@@ -156,6 +156,11 @@ fi
 # at game start) a failure only ends this script, and a game with another pdnet.dll than the kit's is left alone.
 if [ $action = update ]; then
     running && fail "close Phantom Dust first."
+    # set up before newer wine-uwp only ends the game with its window when asked to (see "have wine-uwp load pdnet")
+    if [ -f "$game/local.env" ] && grep -q WINE_UWP_INJECT "$game/local.env" && ! grep -q WINE_UWP_EXIT_WITH_WINDOW "$game/local.env"; then
+        printf '# wine-uwp: end the game when its window is gone, as Windows does (setup-linux.sh)\n%s\n' \
+            "export WINE_UWP_EXIT_WITH_WINDOW=1" >> "$game/local.env"
+    fi
     command -v curl >/dev/null || fail "curl is needed to update."
     command -v python3 >/dev/null || fail "python3 is needed to update."
     [ -f "$kit/kit-version.txt" ] || fail "kit-version.txt is missing from $kit, so this kit's build is unknown."
@@ -309,7 +314,11 @@ if [ -z "$game" ]; then
     say ""
     say "Downloading Phantom Dust. Sign in with the browser link it shows. A licence error about the newest version"
     say "(1.3.25854.70) is expected: it then takes 1.3.25854.2, which is the version pdnet is made for."
-    "$wup" install-store "$store_id"
+    # a newer wine-uwp takes an older version only when asked to (--allow-older); an older one does it by itself
+    older=""
+    grep -qa -- --allow-older "$(dirname "$(readlink -f "$wup")")/../lib/wine/x86_64-windows/wineuwp-install.exe" 2>/dev/null &&
+        older=--allow-older
+    "$wup" install-store "$store_id" $older
     game=$(find_game)
     [ -n "$game" ] || fail "the install didn't finish (see the messages above)."
 fi
@@ -346,8 +355,11 @@ sed "s|^display_name=.*|display_name=$esc|" "$kit/pdnet.ini" > "$game/pdnet.ini"
 
 # --- have wine-uwp load pdnet into the game -------------------------------------------------------------------------
 touch "$game/local.env"
-sed -i '/WINE_UWP_INJECT/d; /^# Phantom Dust Rebirth/d' "$game/local.env"
+sed -i '/WINE_UWP_INJECT/d; /^# Phantom Dust Rebirth/d; /WINE_UWP_EXIT_WITH_WINDOW/d; /^# wine-uwp: end the game/d' "$game/local.env"
 printf '# Phantom Dust Rebirth: pdnet loaded the way pdlaunch.exe does on Windows (setup-linux.sh)\n%s\n' "$inject" >> "$game/local.env"
+# End Game and closing the window end the game (newer wine-uwp only does that when asked; this stays after --remove)
+printf '# wine-uwp: end the game when its window is gone, as Windows does (setup-linux.sh)\n%s\n' \
+    "export WINE_UWP_EXIT_WITH_WINDOW=1" >> "$game/local.env"
 
 # --- look for updates at each game start (wine-uwp runs this, as Windows runs pdlaunch.exe) --------------------------
 {

@@ -9,8 +9,10 @@
 #                             folder (D:\ if it exists, else out\kits; or set PDNET_KITS), with the notes in
 #                             pdnet\kit-version.txt
 #   promote <N>               rename Experimental N to the next "Stable <M>" and tag its source commit stable-<M>
+#   public <N>                copy Experimental N as the next "Public <P>" with private\public-links.ini, tag public-<P>,
+#                             and publish it (the whole kit for first installs, plus pdnet-public-<build>.zip for updates)
 #   conceptual "notes"        publish to Conceptual kits' own updates, and save the kit as the next "PhantomDust-pdnet Conceptual <N>.zip" (from the Conceptual
-#                             branch): never published, and its pdlaunch never updates it
+#                             branch); its pdlaunch updates only from Conceptual releases
 # Needs: Visual Studio 2022 (or Build Tools) with "Desktop development with C++", and Epic's EOS SDK in deps\eos-sdk.
 # Optional, in private\ (never in git): eos.tester.ini (the EOS client testers use, shipped as the kit's eos.ini) and
 # links.ini (discord_webhook=, log_webhook=, discord_invite=, put into the kit's pdnet.ini).
@@ -78,7 +80,7 @@ function RepoSlug {
 }
 
 # Creates a GitHub release with one asset; returns its web page, or $null (with the reason printed) if it didn't happen.
-function PublishRelease([string]$tag, [string]$target, [string]$title, [bool]$prerelease, [string]$notes, [string]$assetPath) {
+function PublishRelease([string]$tag, [string]$target, [string]$title, [bool]$prerelease, [string]$notes, [string[]]$assetPaths) {
     $tokenFile = Join-Path $root 'private\github-token.txt'
     if (-not (Test-Path $tokenFile)) { Write-Host "Not published to GitHub: no private\github-token.txt (see README, Publishing updates)." -ForegroundColor Yellow; return $null }
     $headers = @{ Authorization = "Bearer $((Get-Content $tokenFile -Raw).Trim())"; Accept = 'application/vnd.github+json'; 'User-Agent' = 'pdnet-build' }
@@ -88,8 +90,10 @@ function PublishRelease([string]$tag, [string]$target, [string]$title, [bool]$pr
         $body = @{ tag_name = $tag; name = $title; body = $notes; prerelease = $prerelease }
         if ($target) { $body.target_commitish = $target }
         $release = Invoke-RestMethod -Method Post -Uri "https://api.github.com/repos/$repo/releases" -Headers $headers -Body ($body | ConvertTo-Json) -ContentType 'application/json'
-        $upload = ($release.upload_url -replace '\{.*$', '') + '?name=' + [Uri]::EscapeDataString((Split-Path $assetPath -Leaf))
-        Invoke-RestMethod -Method Post -Uri $upload -Headers $headers -InFile $assetPath -ContentType 'application/zip' | Out-Null
+        foreach ($assetPath in $assetPaths) {
+            $upload = ($release.upload_url -replace '\{.*$', '') + '?name=' + [Uri]::EscapeDataString((Split-Path $assetPath -Leaf))
+            Invoke-RestMethod -Method Post -Uri $upload -Headers $headers -InFile $assetPath -ContentType 'application/zip' | Out-Null
+        }
         return $release.html_url
     }
     catch {
@@ -143,7 +147,56 @@ if ($Mode -eq 'promote') {
     if ($page) { Write-Host "Published: $page" -ForegroundColor Green }
     exit 0
 }
-if ($Mode -notin 'build', 'experimental', 'conceptual') { Fail "Unknown argument '$Mode'. Use: build.bat [experimental `"notes`" | conceptual `"notes`" | promote N]" }
+# ---- public: Experimental N as the next "Public <P>", with the public links -----------------------------------------
+# The kit is the Experimental's, with kit-version.txt saying Public <P> and the Discord links from private\public-links.ini
+# (same keys as links.ini). Published as the full release "public-<P>" with two files: the whole kit (eos.ini and the
+# links inside, for first installs) and "pdnet-public-<build>.zip", the secret-free update that only the public
+# channel reads (launchers from before it treat every full release's pdnet-update-<build>.zip as a Stable).
+if ($Mode -eq 'public') {
+    $n = [int]$Arg
+    $from = Join-Path $kits "PhantomDust-pdnet Experimental $n.zip"
+    if (-not (Test-Path $from)) { Fail "No $from." }
+    $publicLinks = Join-Path $root 'private\public-links.ini'
+    if (-not (Test-Path $publicLinks)) { Fail "No private\public-links.ini (discord_webhook=, log_webhook=, discord_invite= for public kits)." }
+    $number = (LastNumber 'Public') + 1
+    $label = "PhantomDust-pdnet Public $number"
+    $to = Join-Path $kits "$label.zip"
+    $unpacked = Join-Path $out 'public-kit'
+    if (Test-Path $unpacked) { Remove-Item $unpacked -Recurse -Force }
+    [IO.Compression.ZipFile]::ExtractToDirectory($from, $unpacked)
+    $versionPath = Join-Path $unpacked 'pdnet\kit-version.txt'
+    $lines = (Get-Content $versionPath -Raw -Encoding UTF8) -split "`r?`n"
+    $source = $lines | Where-Object { $_ -match '^Source: (\w+)' } | ForEach-Object { $Matches[1] } | Select-Object -First 1
+    $build = $lines | Where-Object { $_ -match '^Build: (\d+)' } | ForEach-Object { [int]$Matches[1] } | Select-Object -First 1
+    if (-not $build) { $build = $n }
+    [IO.File]::WriteAllText($versionPath, "$label`r`n" + (($lines | Select-Object -Skip 1) -join "`r`n"), (New-Object Text.UTF8Encoding $false))
+    $iniPath = Join-Path $unpacked 'pdnet\pdnet.ini'
+    $ini = Get-Content $iniPath -Raw -Encoding UTF8
+    foreach ($key in 'discord_webhook', 'log_webhook', 'discord_invite') {
+        $value = Select-String -Path $publicLinks -Pattern "^$key=(.+)$" | ForEach-Object { $_.Matches[0].Groups[1].Value.Trim() } | Select-Object -First 1
+        if (-not $value) { Write-Host "No $key in private\public-links.ini: left empty in the Public kit." -ForegroundColor Yellow }
+        $ini = $ini -replace "(?m)^$key=.*$", "$key=$value"
+    }
+    Set-Content $iniPath $ini -Encoding UTF8 -NoNewline
+    Zip $unpacked $to
+    Write-Host "Experimental $n is now also $to"
+    if ($source) { git -C $root tag -f "public-$number" $source | Out-Null; Write-Host "git tag public-$number -> $source (push it: git push origin public-$number)" }
+    else { Write-Host "No Source line in kit-version.txt: tag public-$number by hand." -ForegroundColor Yellow }
+
+    $asset = Join-Path $out "pdnet-public-$build.zip"
+    UpdateZip $unpacked $asset
+    Remove-Item $unpacked -Recurse -Force
+    $download = Join-Path $out "PhantomDust-Rebirth-Public-$number.zip"
+    Copy-Item $to $download -Force
+    $fullSource = $null
+    if ($source) { $ErrorActionPreference = 'Continue'; $fullSource = git -C $root rev-parse $source 2>$null; $ErrorActionPreference = 'Stop' }
+    $sha = (Get-FileHash $asset -Algorithm SHA256).Hash.ToLower()
+    $notes = "Build $build`r`n`r`nPhantom Dust Rebirth, Public $number.`r`n`r`nFirst install: download $(Split-Path $download -Leaf), unzip it to a folder that stays put and double-click Setup.bat (see pdnet\README.txt).`r`n`r`nsha256 $(Split-Path $asset -Leaf) $sha`r`n`r`nInstalled kits update themselves at game start (Main menu > Options > Updates)."
+    $page = PublishRelease "public-$number" $fullSource "Public $number" $false $notes @($download, $asset)
+    if ($page) { Write-Host "Published: $page" -ForegroundColor Green }
+    exit 0
+}
+if ($Mode -notin 'build', 'experimental', 'conceptual') { Fail "Unknown argument '$Mode'. Use: build.bat [experimental `"notes`" | conceptual `"notes`" | promote N | public N]" }
 
 # ---- tools ---------------------------------------------------------------------------------------------------------
 Step 'Looking for Visual Studio and Epic''s SDK'

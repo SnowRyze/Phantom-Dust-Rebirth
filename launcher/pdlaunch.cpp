@@ -14,6 +14,7 @@
 #include <appmodel.h>
 #include <winhttp.h>
 #include <wincred.h>
+#include <shobjidl.h>
 #include <algorithm>
 #include <cstdio>
 #include <set>
@@ -775,9 +776,10 @@ namespace
 
     // ---- Updates (from GitHub Releases) -------------------------------------------------------------------------------
     // build.bat publishes every Experimental kit as a pre-release and every Stable as a release, each with a
-    // secret-free "pdnet-update-<build>.zip" (no eos.ini, no Discord links) and the line
+    // secret-free "pdnet-update-<build>.zip" (no eos.ini, no Discord links; a Public, release "public-<P>", has
+    // "pdnet-public-<build>.zip" instead and is read only on the public channel) and the line
     // "sha256 pdnet-update-<build>.zip <hex>" in its notes. At game start, before pdnet is injected, CheckForUpdate
-    // looks for a higher build on this kit's channel (update_channel=stable|experimental|off; by default the kit's own
+    // looks for a higher build on this kit's channel (update_channel=public|stable|experimental|off; by default the kit's own
     // kind, and off for development builds; an Experimental kit on the stable channel goes back to the newest Stable), downloads it into pdnet\update\ (inside the kit folder, so the files get
     // the folder's read access for the game's sandbox), checks the hash, moves what it replaces to
     // pdnet\update\backup\ (put back if the swap fails) and swaps the files in; after a good swap pdnet\update\ is deleted. eos.ini and pdnet.ini are never touched. A pdnet.dll that doesn't
@@ -908,20 +910,30 @@ namespace
         // look at "/pdnet-update-", and a Conceptual kit only at this one, so it can never become a master build. It
         // ignores update_channel, which settings.ini shares with the other kits (only conceptual_updates=off stops it).
         const bool conceptual = kit.label.find("Conceptual") != std::string::npos;
-        const std::string assetPrefix = conceptual ? "pdnet-conceptual-" : "pdnet-update-";
         if (conceptual && _wcsicmp(Setting(L"conceptual_updates", L"").c_str(), L"off") == 0) { Log(L"update: off (conceptual_updates=off)"); return; }
         std::wstring fallback = kit.label.find("Experimental") != std::string::npos ? L"experimental"
-                              : kit.label.find("Stable") != std::string::npos ? L"stable" : L"off";
-        std::wstring channel = conceptual ? L"experimental" : Setting(L"update_channel", L""); // experimental: pre-releases count
-        if (!channel.empty() && _wcsicmp(channel.c_str(), L"stable") != 0 && _wcsicmp(channel.c_str(), L"experimental") != 0 && _wcsicmp(channel.c_str(), L"off") != 0)
+                              : kit.label.find("Stable") != std::string::npos ? L"stable"
+                              : kit.label.find("Public") != std::string::npos ? L"public" : L"off";
+        // A Conceptual kit's channel is always its own (update_channel is shared with the other kits in settings.ini).
+        std::wstring channel = conceptual ? L"conceptual" : Setting(L"update_channel", L"");
+        for (auto& c : channel) c = static_cast<wchar_t>(towlower(c));
+        if (!conceptual && !channel.empty() && channel != L"public" && channel != L"stable" && channel != L"experimental" && channel != L"off")
         {
             // A typo in settings.ini must not count as stable, which would take an Experimental kit back to a Stable.
-            Log(L"update: update_channel=%s isn't stable, experimental or off - using this kit's own (%s)", channel.c_str(), fallback.c_str());
+            Log(L"update: update_channel=%s isn't public, stable, experimental or off - using this kit's own (%s)", channel.c_str(), fallback.c_str());
             channel.clear();
         }
         if (channel.empty()) channel = fallback;
-        if (_wcsicmp(channel.c_str(), L"off") == 0) { Log(L"update: off (%s)", fallback == L"off" ? L"development build" : L"update_channel=off"); return; }
-        bool experimental = _wcsicmp(channel.c_str(), L"experimental") == 0;
+        if (channel == L"off") { Log(L"update: off (%s)", fallback == L"off" ? L"development build" : L"update_channel=off"); return; }
+        bool experimental = channel == L"experimental" || conceptual; // Conceptual builds are pre-releases
+        // Each channel takes only its own releases (tag build-<N> / stable-<M> / public-<P>, which is in each asset's
+        // download link): a Public must not reach Stable kits, and a kit switched to another channel gets that kind's
+        // label from its own release (a Stable's asset has the same name as its Experimental's).
+        std::string tagPrefix = conceptual ? "/download/conceptual-" : channel == L"public" ? "/download/public-" : experimental ? "/download/build-" : "/download/stable-";
+        const char* kindName = conceptual ? "Conceptual" : channel == L"public" ? "Public" : experimental ? "Experimental" : "Stable";
+        // A Public's asset is "pdnet-public-<build>.zip": launchers from before the public channel take any full release's
+        // "pdnet-update-<build>.zip" as a Stable, and would have moved Stable kits to a Public.
+        std::string assetMarker = conceptual ? "/pdnet-conceptual-" : channel == L"public" ? "/pdnet-public-" : "/pdnet-update-";
 
         std::string md5 = HashHex(BCRYPT_MD5_ALGORITHM, ReadFileBytes(g_dir + L"pdnet.dll")).substr(0, 8);
         if (!kit.md5.empty() && md5 != kit.md5)
@@ -945,8 +957,7 @@ namespace
                 return;
             }
             json += more;
-            if (experimental || more.find("\"prerelease\":false") != std::string::npos || more.find("\"prerelease\": false") != std::string::npos ||
-                more.find("\"tag_name\"") == std::string::npos) break;
+            if (experimental || more.find(tagPrefix) != std::string::npos || more.find("\"tag_name\"") == std::string::npos) break;
         }
         // Releases come newest first; in each, "prerelease" comes before its assets. The highest build on the channel wins.
         int best = 0;
@@ -967,25 +978,27 @@ namespace
             if (q2 == std::string::npos) break;
             std::string url = json.substr(q1 + 1, q2 - q1 - 1);
             at = q2;
-            size_t name = url.rfind("/" + assetPrefix);
-            if (name == std::string::npos || (pre && !experimental)) continue;
-            int build = atoi(url.c_str() + name + 1 + assetPrefix.size());
+            size_t name = url.rfind(assetMarker);
+            if (name == std::string::npos || url.find(tagPrefix) == std::string::npos || (pre && !experimental)) continue;
+            int build = atoi(url.c_str() + name + assetMarker.size());
             if (build > best) { best = build; bestUrl = url; bestAt = q2; }
         }
-        // On the stable channel a kit that isn't a Stable (an Experimental, after Options > Updates was switched back)
-        // goes to the newest Stable, even though its build number is lower.
-        bool revert = !experimental && kit.label.find("Stable") == std::string::npos;
+        // A kit of another kind than its channel (Options > Updates was switched) goes to that channel's newest build, even
+        // when its build number is lower or the same: then it is that kind, with its label (the user, 2026-11-07, after
+        // Public 1 switched to experimental stayed "Public 1": Experimental 133 is the same build).
+        bool revert = kit.label.find(kindName) == std::string::npos;
         if (revert && best == 0)
         {
-            Log(L"update: stable channel, but no Stable build is published yet - keeping build %d", kit.build);
+            Log(L"update: %s channel, but no %S build is published yet - keeping build %d", channel.c_str(), kindName, kit.build);
             return;
         }
-        if (revert ? best == kit.build : best <= kit.build)
+        // (Going back installs even the same build number: that kit then is a Stable / Public, with that kind's label.)
+        if (!revert && best <= kit.build)
         {
-            Log(L"update: up to date (build %d, %s channel)", kit.build, conceptual ? L"Conceptual" : experimental ? L"experimental" : L"stable");
+            Log(L"update: up to date (build %d, %s channel)", kit.build, channel.c_str());
             return;
         }
-        std::string asset = assetPrefix + std::to_string(best) + ".zip";
+        std::string asset = assetMarker.substr(1) + std::to_string(best) + ".zip";
         // From the same release: a Stable's asset has the same name as its Experimental's, with another kit-version.txt.
         size_t s = json.find("sha256 " + asset + " ", bestAt);
         std::string expected = s == std::string::npos ? std::string() : json.substr(s + 8 + asset.size(), 64);
@@ -995,7 +1008,7 @@ namespace
             return;
         }
 
-        if (revert) Log(L"update: stable channel - going back to Stable build %d (this kit is %S, build %d) - downloading", best, kit.label.c_str(), kit.build);
+        if (revert) Log(L"update: %s channel - going to %S build %d (this kit is %S, build %d) - downloading", channel.c_str(), kindName, best, kit.label.c_str(), kit.build);
         else Log(L"update: build %d available (this kit is build %d) - downloading", best, kit.build);
         URL_COMPONENTS parts{ sizeof(parts) };
         wchar_t host[256], path[2048];
@@ -1090,6 +1103,54 @@ namespace
     }
 }
 
+// Windows starts pdlaunch with the game because Setup attached it (IPackageDebugSettings::EnableDebugging), and that
+// doesn't survive a restart: the game then starts without pdnet, until Setup is run again. So a per-user sign-in entry
+// runs "pdlaunch.exe -attach", which sets it again (no administrator rights needed). KeepAttached adds the entry at each
+// game start, so kits set up before it existed get it too; Remove.bat and Restore-XboxLive.bat delete it.
+constexpr wchar_t kRunKey[] = L"Software\\Microsoft\\Windows\\CurrentVersion\\Run";
+constexpr wchar_t kRunName[] = L"PhantomDust pdnet";
+
+void KeepAttached()
+{
+    std::wstring command = L"\"" + g_dir + L"pdlaunch.exe\" -attach";
+    wchar_t current[MAX_PATH * 2] = {};
+    DWORD size = sizeof(current);
+    if (RegGetValueW(HKEY_CURRENT_USER, kRunKey, kRunName, RRF_RT_REG_SZ, nullptr, current, &size) == ERROR_SUCCESS && command == current) return;
+    LSTATUS status = RegSetKeyValueW(HKEY_CURRENT_USER, kRunKey, kRunName, REG_SZ, command.c_str(), static_cast<DWORD>((command.size() + 1) * sizeof(wchar_t)));
+    Log(L"attach: sign-in entry %s (%ld)", status == ERROR_SUCCESS ? L"set" : L"not set", status);
+}
+
+int Attach()
+{
+    constexpr wchar_t kFamily[] = L"Microsoft.MSEsper_8wekyb3d8bbwe";
+    UINT32 count = 0, length = 0;
+    LONG status = GetPackagesByPackageFamily(kFamily, &count, nullptr, &length, nullptr);
+    if (status != ERROR_INSUFFICIENT_BUFFER || !count)
+    {
+        Log(L"attach: Phantom Dust isn't installed (%ld)", status);
+        return 1;
+    }
+    std::vector<PWSTR> names(count);
+    std::vector<wchar_t> buffer(length);
+    if (GetPackagesByPackageFamily(kFamily, &count, names.data(), &length, buffer.data()) != ERROR_SUCCESS) return 1;
+    CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
+    IPackageDebugSettings* settings = nullptr;
+    HRESULT result = CoCreateInstance(CLSID_PackageDebugSettings, nullptr, CLSCTX_ALL, IID_PPV_ARGS(&settings));
+    std::wstring command = L"\"" + g_dir + L"pdlaunch.exe\"";
+    if (settings)
+    {
+        for (UINT32 i = 0; i < count; ++i)
+        {
+            result = settings->EnableDebugging(names[i], command.c_str(), nullptr);
+            Log(L"attach: %s -> 0x%08X", names[i], static_cast<unsigned>(result));
+        }
+        settings->Release();
+    }
+    else Log(L"attach: no package debug settings (0x%08X)", static_cast<unsigned>(result));
+    CoUninitialize();
+    return SUCCEEDED(result) ? 0 : 1;
+}
+
 int wmain(int argc, wchar_t** argv)
 {
     wchar_t exe[MAX_PATH];
@@ -1103,6 +1164,8 @@ int wmain(int argc, wchar_t** argv)
         CheckForUpdate();
         return 0;
     }
+
+    if (argc == 2 && _wcsicmp(argv[1], L"-attach") == 0) return Attach();
 
     DWORD pid = 0, tid = 0;
     for (int i = 1; i + 1 < argc; ++i)
@@ -1141,6 +1204,7 @@ int wmain(int argc, wchar_t** argv)
     }
 
     Log(L"game started (pid %lu, main thread %lu)", pid, tid);
+    KeepAttached();
     HANDLE game = OpenProcess(SYNCHRONIZE | PROCESS_QUERY_LIMITED_INFORMATION, FALSE, pid);
     std::wstring localState = game ? GameLocalState(game) : std::wstring();
     if (!localState.empty()) DeleteFileW(PastTitleFile(localState).c_str()); // from the last start: pdnet writes it again

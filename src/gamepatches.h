@@ -8,7 +8,7 @@ namespace pdnet::gamepatches
     void Apply();
 
     // Sends a call in the game's code at `site` (a 5-byte call or jump to `target`, both Ghidra addresses) to `hook` instead.
-    // False, with nothing changed, if the code there isn't that call. (labtests.cpp, Conceptual branch only.)
+    // False, with nothing changed, if the code there isn't that call.
     bool HookCall(uint64_t site, uint64_t target, void* hook);
 
     // "Rebirth" on the title screen: the game's file opens are hooked (CreateFile2). The title picture loads

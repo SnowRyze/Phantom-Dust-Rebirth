@@ -41,7 +41,8 @@ Steps
 2. Unzip this kit to a folder that will stay put, e.g. Documents\PhantomDust-pdnet.
    (Not inside the zip preview, and don't move or delete the folder while pdnet is set up.)
 3. Double-click Setup.bat.
-   - Unpacked copy that isn't installed yet: it asks for the game folder and installs it.
+   - Unpacked copy that isn't installed yet: it asks for the game folder and installs it. If the copy still has
+     the Store signature files, it moves them into a _store_signature folder first (Windows won't install it with them).
    - Unpacked copy set up with an OLDER kit (Install.bat): it puts the original game files back first.
    - Type your player name when asked.
    - Answer Y to let Phantom Dust use your microphone (voice chat). N: Windows asks the first time instead.
@@ -49,6 +50,7 @@ Steps
 4. Start Phantom Dust the normal way (Start menu). Host or join a lobby.
 5. After a test, double-click pdnet\Collect-Log.bat and send the files it puts on your Desktop.
 
+pdnet stays set up after a PC restart: a Windows sign-in entry ("PhantomDust pdnet") sets it again.
 To stop using pdnet, double-click pdnet\Remove.bat.
 To go fully back to Xbox Live and Teredo (also undoes older kits that replaced game files), double-click
 pdnet\Restore-XboxLive.bat. It asks for administrator permission once.
@@ -85,8 +87,8 @@ Enter). Or edit pdnet.ini with Notepad, then restart the game.
 What you save in the game goes to settings.ini (in the game's own data folder) and overrides pdnet.ini.
 To change those by hand, e.g. an exact nametag colour, close the game and double-click pdnet\Edit-Settings.bat.
 Colours take any hex code: RRGGBB or #RRGGBB.
-Updates: Main menu > Options > Updates picks Stable or Experimental builds, or Off for no automatic updates
-(used from the next game start). Or set update_channel in settings.ini: stable, experimental or off.
+Updates: Main menu > Options > Updates picks Public, Stable or Experimental builds, or Off for no automatic updates
+(used from the next game start). Or set update_channel in settings.ini: public, stable, experimental or off.
   display_name=          your name (Setup.bat sets it)
   nametags_on_bodies=    on/off: defeated players keep their nametag. In a lobby the HOST's setting applies.
   dead_nametag_color=    colour of a defeated player's nametag (RRGGBB), FFE600 = yellow

@@ -20,6 +20,7 @@ $pkg = Get-AppxPackage Microsoft.MSEsper
 if (-not $pkg) { Write-Host 'Phantom Dust is not installed; nothing to undo.'; Read-Host 'Press Enter to close'; exit }
 if (Get-Process PDUWP -ErrorAction SilentlyContinue) { Write-Host 'Close Phantom Dust first.' -ForegroundColor Red; Read-Host 'Press Enter to close'; exit 1 }
 $hr = [PdPlmOff]::Disable($pkg.PackageFullName)
+Remove-ItemProperty 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Run' -Name 'PhantomDust pdnet' -ErrorAction SilentlyContinue # Setup's sign-in entry
 if ($hr -ne 0) { Write-Host ('Windows reported 0x{0:X8}.' -f $hr) -ForegroundColor Yellow }
 Write-Host 'Windows will ask for administrator permission to remove the local-connection exemption Setup.bat added.'
 # Experimental 62 and 63 also added a "Phantom Dust clock" task (and 63 a Program Files folder for it): removed too.
