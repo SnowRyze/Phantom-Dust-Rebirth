@@ -85,6 +85,17 @@ Anything that changes match behaviour needs every player on the same kit, and re
 
 ## Log
 (Newest first: what was tried, what happened.)
+- 2026-11-10: dead camera nametags (the user): in the free camera they floated, following a player there were none. The HUD
+  places tags from the local player's camera block (+0x13f10, entries at +0x80, from FUN_140253c00 with that block's view).
+  Now, while the view isn't the player's own, a stand-in block with the frame's real view (0x140584f40) is worked out the
+  same way and lent to the HUD's player for the draw. Not yet tried in the game.
+- 2026-11-10: PAUSED, lobby settings, nothing built yet. The user's choices: the host sets starting health, starting Aura
+  level and an Aura refill multiplier (on top of the dynamic case rate) for everyone; no stage pick. Rating: custom matches
+  rated only with a password set in the admin tool (outside this repo; HANDOFF 2026-10-28), on their own scoreboard named
+  "Tournament", renamable from the admin tool if possible. To find out next: how the admin tool works and talks to EOS, a new
+  EOS leaderboard / stats for Tournament (made in the Epic portal), and where the game sets starting health and Aura.
+- 2026-11-10: dead camera tried offline on Conceptual 13 (Test Arsenal, F9): followed the AI, free camera, back to following,
+  no errors; the HUD showed the AI's (the user). Free camera directions and the follow angle fine too. Online not tried.
 - 2026-11-10: merged master (Public channel, skill previews, Lab Player 2 fix); Conceptual kits keep their own channel in
   master's update code (tag conceptual-<N>). Dead camera, first version (src\labtests.cpp): when this player is down (health
   record +0xc <= 0) in any match, the view follows a teammate (Tag Team) or anyone standing, with their HUD (the HUD draw at

@@ -221,16 +221,50 @@ namespace pdnet::labtests
 
         // The battle HUD (FUN_140150c30, from the HUD object's table at 0x14047b8f0) draws the local player's panel and hand.
         // While the dead camera follows someone, the local slot reads as theirs for that call only.
+        //
+        // Nametags: the HUD places them from the local player's camera block (object +0x13f10): +0x80 holds 32 entries of
+        // 0x14 (shown, screen x, y, 0, distance), one per targetable object (DAT_1404bcb50), which FUN_140253c00(block)
+        // works out each frame from the projection DAT_14058bdb0 and the block's view matrix (+0x40), skipping the block's
+        // player (+0x300). It runs only for this PC's own player and its own camera, so tags floated in the free camera and
+        // were missing on a followed player. While another view is used, a stand-in block with the frame's real view
+        // (DAT_140584f40, which FUN_14012bfc0 fills either way) is worked out the same way and lent to the HUD's player.
         using HudDrawFn = void (*)(int64_t hud);
         HudDrawFn g_hudDraw = nullptr;
+        bool g_viewOverridden = false; // this frame's view isn't the player's own (set by ViewFrom)
+        constexpr size_t kTagEntries = 0x13f90, kTagBytes = 32 * 0x14;
+
+        void HudWithTags(int64_t hud, int hudSlot, uint8_t* viewer)
+        {
+            uint8_t* holder = PlayerObject(hudSlot);
+            if (!holder || !viewer) { g_hudDraw(hud); return; }
+            alignas(16) static uint8_t block[0x310];
+            memset(block, 0, sizeof(block));
+            memcpy(block + 0x40, At(0x140584f40), 64);
+            *reinterpret_cast<uint8_t**>(block + 0x300) = viewer;
+            static uint8_t saved[kTagBytes];
+            bool lent = false;
+            __try
+            {
+                reinterpret_cast<void (*)(uint8_t*)>(At(0x140253c00))(block);
+                memcpy(saved, holder + kTagEntries, kTagBytes);
+                memcpy(holder + kTagEntries, block + 0x80, kTagBytes);
+                lent = true;
+            }
+            __except (EXCEPTION_EXECUTE_HANDLER) {}
+            g_hudDraw(hud);
+            if (lent) memcpy(holder + kTagEntries, saved, kTagBytes);
+        }
+
         void HookedHudDraw(int64_t hud)
         {
-            if (!g_deadOn || g_freeCam || g_deadTarget < 0 || !PlayerObject(g_deadTarget)) { g_hudDraw(hud); return; }
-            auto& local = Var<int32_t>(0x1404bbe00);
-            int32_t mine = local;
-            local = g_deadTarget;
-            g_hudDraw(hud);
-            local = mine;
+            int local = LocalSlot();
+            bool following = g_deadOn && !g_freeCam && g_deadTarget >= 0 && PlayerObject(g_deadTarget);
+            if (!g_viewOverridden && !following) { g_hudDraw(hud); return; }
+            if (!following) { HudWithTags(hud, local, PlayerObject(local)); return; } // free camera / Lab camera test: own HUD, tags from this view
+            auto& slot = Var<int32_t>(0x1404bbe00);
+            slot = g_deadTarget;
+            HudWithTags(hud, g_deadTarget, PlayerObject(g_deadTarget));
+            slot = local;
         }
 
         bool HookHud()
@@ -591,6 +625,7 @@ namespace pdnet::labtests
             bool battle = InBattle();
             if (!battle)
             {
+                g_viewOverridden = false;
                 if (g_deadOn) { g_deadOn = false; g_deadTarget = -1; Log(L"deadcam: off (match over)"); }
                 if (g_wasInBattle) { g_wasInBattle = false; EndOfBattle(); }
                 original();
@@ -638,6 +673,7 @@ namespace pdnet::labtests
         void ViewFrom(CameraFn original, int follow)
         {
             uint8_t* target = PlayerObject(follow);
+            g_viewOverridden = false;
             auto& cutscene = Var<int32_t>(0x140534798);
             bool free = g_deadOn && g_freeCam;
             if ((!free && (!target || !g_haveOffset)) || cutscene != 0 || Var<int32_t>(0x1404bbec0) == 0)
@@ -667,6 +703,7 @@ namespace pdnet::labtests
             gameLook = look;
             gameEye = eye;
             cutscene = 1;
+            g_viewOverridden = true; // the HUD, drawn after this, places nametags from this view
             original();
             cutscene = 0;
             gameLook = savedLook;
