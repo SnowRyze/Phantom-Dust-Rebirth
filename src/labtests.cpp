@@ -78,10 +78,171 @@ namespace pdnet::labtests
 
         std::wstring RecordingPath() { return LocalStatePath() + L"\\pdnet\\labtest.rec"; }
 
-        bool InBattle()
+        bool InMatchNow()
         {
             int32_t state = Var<int32_t>(0x1404bc950);
-            return gamepatches::TestBattle() && state != 0 && state != 13 && PlayerObject(LocalSlot());
+            return state != 0 && state != 13 && PlayerObject(LocalSlot());
+        }
+        bool InBattle() { return gamepatches::TestBattle() && InMatchNow(); }
+
+        // ---- dead camera (any match) ----
+        // While this PC's player is down (health, status record +0xc, at 0 or below), the view follows another player and the
+        // HUD shows theirs; or a free camera. In Tag Team only the partner can be followed (no calling out the other team's
+        // hands over team voice); elsewhere anyone still standing. A revive gives the player their own view back.
+        //   Keyboard (pdlaunch's keys): Left / Right arrow: previous / next player; Up arrow: free camera on / off;
+        //   free camera: W A S D move, Q E turn, R F up / down.
+        //   Controller: D-pad Left / Right: previous / next; D-pad Up: free camera; free camera: left stick moves,
+        //   right stick turns, LB / RB down / up.
+        // In a Test Arsenal battle F9 (or View + D-pad Down) pretends the player is down, to try it against the AI.
+        std::atomic<bool> g_deadNext{ false }, g_deadPrevious{ false }, g_deadFree{ false }, g_pretendDown{ false };
+        bool g_deadOn = false, g_freeCam = false;
+        int g_deadTarget = -1;
+        Vec g_freePos{};
+        float g_freeYaw = 0, g_freePitch = 0;
+        ULONGLONG g_freeLast = 0;
+        Vec g_lastEye{}, g_lastLook{};
+        bool g_haveLast = false;
+
+        int32_t Health(int slot) { uint8_t* record = PlayerRecord(slot); return record ? Field<int32_t>(record, 0xc) : 0; }
+
+        bool LocalDown()
+        {
+            if (g_pretendDown && gamepatches::TestBattle()) return true;
+            return Health(LocalSlot()) <= 0;
+        }
+
+        // Game type 1 = Tag Team (0x1405277b4, as the lobby has it); team = player object +0x1c.
+        bool Followable(int slot)
+        {
+            int local = LocalSlot();
+            uint8_t* object = PlayerObject(slot);
+            if (slot == local || !object || Field<int32_t>(object, 0x20) == 0 || Health(slot) <= 0) return false;
+            if (gamepatches::TestBattle() || Var<int32_t>(0x1405277b4) != 1) return true;
+            uint8_t* mine = PlayerObject(local);
+            return mine && Field<int32_t>(mine, 0x1c) == Field<int32_t>(object, 0x1c);
+        }
+
+        int NextFollowable(int from, int step)
+        {
+            for (int i = 1; i <= 4; ++i)
+            {
+                int s = ((from < 0 ? 0 : from) + step * i + 8) % 4;
+                if (Followable(s)) return s;
+            }
+            return -1;
+        }
+
+        Vec FreeForward() { return { std::cos(g_freePitch) * std::sin(g_freeYaw), std::sin(g_freePitch), std::cos(g_freePitch) * std::cos(g_freeYaw) }; }
+
+        void StartFreeCam()
+        {
+            g_freeCam = true;
+            g_freeLast = GetTickCount64();
+            if (g_haveLast)
+            {
+                g_freePos = g_lastEye;
+                Vec d = Sub(g_lastLook, g_lastEye);
+                float len = Length(d);
+                if (len > 0.01f)
+                {
+                    d = Scale(d, 1.0f / len);
+                    g_freeYaw = std::atan2(d.x, d.z);
+                    g_freePitch = std::asin((std::max)(-1.0f, (std::min)(1.0f, d.y)));
+                }
+            }
+            Log(L"deadcam: free camera");
+        }
+
+        void MoveFreeCam()
+        {
+            ULONGLONG now = GetTickCount64();
+            float dt = (std::min)(0.1f, (now - g_freeLast) / 1000.0f);
+            g_freeLast = now;
+            float lx = 0, ly = 0, rx = 0, ry = 0, up = 0;
+            PadSticks(lx, ly, rx, ry);
+            if (AnyPadHolds(0x800)) up += 1;  // RB
+            if (AnyPadHolds(0x400)) up -= 1;  // LB
+            uint8_t keys[256];
+            if (KeysHeld(keys))
+            {
+                if (keys['W']) ly += 1;
+                if (keys['S']) ly -= 1;
+                if (keys['D']) lx += 1;
+                if (keys['A']) lx -= 1;
+                if (keys['E']) rx += 1;
+                if (keys['Q']) rx -= 1;
+                if (keys['R']) up += 1;
+                if (keys['F']) up -= 1;
+            }
+            auto dead = [](float v) { return std::fabs(v) < 0.2f ? 0.0f : v; };
+            lx = dead(lx); ly = dead(ly); rx = dead(rx); ry = dead(ry);
+            constexpr float kSpeed = 150.0f, kTurn = 2.0f;
+            g_freeYaw += rx * kTurn * dt;
+            g_freePitch = (std::max)(-1.4f, (std::min)(1.4f, g_freePitch + ry * kTurn * dt));
+            Vec forward = FreeForward(), right = { std::cos(g_freeYaw), 0, -std::sin(g_freeYaw) };
+            g_freePos = Add(g_freePos, Scale(forward, ly * kSpeed * dt));
+            g_freePos = Add(g_freePos, Scale(right, lx * kSpeed * dt));
+            g_freePos.y += up * kSpeed * dt;
+        }
+
+        void UpdateDeadCamera()
+        {
+            bool down = LocalDown();
+            if (down != g_deadOn)
+            {
+                g_deadOn = down;
+                g_freeCam = false;
+                g_deadNext = g_deadPrevious = g_deadFree = false;
+                g_deadTarget = down ? NextFollowable(LocalSlot(), 1) : -1;
+                if (down) Log(L"deadcam: on, following slot %d", g_deadTarget);
+                else Log(L"deadcam: off (back in the fight)");
+                if (down && g_deadTarget < 0) StartFreeCam();
+            }
+            if (!g_deadOn) return;
+            if (g_deadFree.exchange(false))
+            {
+                if (g_freeCam) { g_freeCam = false; g_deadTarget = NextFollowable(LocalSlot(), 1); Log(L"deadcam: following slot %d", g_deadTarget); }
+                else StartFreeCam();
+            }
+            if (!g_freeCam)
+            {
+                int step = g_deadNext.exchange(false) ? 1 : g_deadPrevious.exchange(false) ? -1 : 0;
+                if (step) { g_deadTarget = NextFollowable(g_deadTarget, step); Log(L"deadcam: following slot %d", g_deadTarget); }
+                if (g_deadTarget >= 0 && !Followable(g_deadTarget))
+                {
+                    g_deadTarget = NextFollowable(g_deadTarget, 1);
+                    Log(L"deadcam: that player is down - following slot %d", g_deadTarget);
+                }
+                if (g_deadTarget < 0) StartFreeCam();
+            }
+            else
+                MoveFreeCam();
+        }
+
+        // The battle HUD (FUN_140150c30, from the HUD object's table at 0x14047b8f0) draws the local player's panel and hand.
+        // While the dead camera follows someone, the local slot reads as theirs for that call only.
+        using HudDrawFn = void (*)(int64_t hud);
+        HudDrawFn g_hudDraw = nullptr;
+        void HookedHudDraw(int64_t hud)
+        {
+            if (!g_deadOn || g_freeCam || g_deadTarget < 0 || !PlayerObject(g_deadTarget)) { g_hudDraw(hud); return; }
+            auto& local = Var<int32_t>(0x1404bbe00);
+            int32_t mine = local;
+            local = g_deadTarget;
+            g_hudDraw(hud);
+            local = mine;
+        }
+
+        bool HookHud()
+        {
+            auto entry = reinterpret_cast<HudDrawFn*>(At(0x14047b8f0));
+            if (*entry != reinterpret_cast<HudDrawFn>(At(0x140150c30))) return false;
+            DWORD old = 0;
+            if (!VirtualProtect(entry, 8, PAGE_READWRITE, &old)) return false;
+            g_hudDraw = *entry;
+            *entry = &HookedHudDraw;
+            VirtualProtect(entry, 8, old, &old);
+            return true;
         }
 
         // Keyboard: F6, F7, F8 from the keys pdlaunch reads (KeysHeld, padshare.h): the game's window gets no key events on
@@ -95,10 +256,34 @@ namespace pdnet::labtests
                     { 0x100, VK_F6, &g_pressCamera, L"camera", false }, { 0x40, VK_F7, &g_pressRecord, L"record", false }, { 0x200, VK_F8, &g_pressPlay, L"play back", false } };
                 uint8_t keys[256];
                 int keyboardKnown = -1; // what was last logged about pdlaunch's keyboard data, in a battle
+                // The dead camera's presses: D-pad / arrow keys, without View (View + D-pad is the Lab tests').
+                struct { uint32_t button; int key; std::atomic<bool>* press; bool held; } dead[] = {
+                    { 0x200, VK_RIGHT, &g_deadNext, false }, { 0x100, VK_LEFT, &g_deadPrevious, false }, { 0x40, VK_UP, &g_deadFree, false } };
+                bool pretendHeld = false;
                 for (;;)
                 {
                     Sleep(16);
+                    bool deadActive = g_deadOn;
+                    bool haveDeadKeys = deadActive && KeysHeld(keys);
+                    bool viewHeld = AnyPadHolds(0x2);
+                    for (auto& d : dead)
+                    {
+                        bool now = deadActive && ((!viewHeld && AnyPadHolds(d.button)) || (haveDeadKeys && keys[d.key]));
+                        if (now && !d.held) *d.press = true;
+                        d.held = now;
+                    }
                     bool active = gamepatches::TestBattle();
+                    {
+                        uint8_t k[256];
+                        bool pretend = active && ((viewHeld && AnyPadHolds(0x80)) || (KeysHeld(k) && k[VK_F9]));
+                        if (pretend && !pretendHeld)
+                        {
+                            g_pretendDown = !g_pretendDown;
+                            Log(L"deadcam: Test Arsenal: pretending to be down %s", g_pretendDown ? L"on" : L"off");
+                        }
+                        pretendHeld = pretend;
+                        if (!active) g_pretendDown = false;
+                    }
                     bool haveKeys = active && KeysHeld(keys);
                     if (active && keyboardKnown != (haveKeys ? 1 : 0))
                     {
@@ -385,13 +570,28 @@ namespace pdnet::labtests
         // ---- each frame ----
 
         using CameraFn = void (*)();
+        void ViewFrom(CameraFn original, int follow);
+
+        // A match that isn't a Test Arsenal battle: only the dead camera.
+        void DeadCameraFrame(CameraFn original)
+        {
+            if (!LocalDown()) UpdateCameraOffset(); // the player's own camera, while it still runs
+            UpdateDeadCamera();
+            ViewFrom(original, g_deadOn ? (g_freeCam ? -1 : g_deadTarget) : -1);
+        }
 
         void HookedCamera()
         {
             auto original = reinterpret_cast<CameraFn>(At(0x14012bfc0));
+            if (InMatchNow() && !InBattle())
+            {
+                DeadCameraFrame(original);
+                return;
+            }
             bool battle = InBattle();
             if (!battle)
             {
+                if (g_deadOn) { g_deadOn = false; g_deadTarget = -1; Log(L"deadcam: off (match over)"); }
                 if (g_wasInBattle) { g_wasInBattle = false; EndOfBattle(); }
                 original();
                 return;
@@ -427,22 +627,40 @@ namespace pdnet::labtests
             }
             if (!g_playing) UpdateCameraOffset(); // playing back, this player's own camera doesn't run
             ReportFollowed();
+            UpdateDeadCamera();
 
-            int follow = g_viewSlot >= 0 ? g_viewSlot : g_playing ? LocalSlot() : -1;
+            int follow = g_deadOn ? (g_freeCam ? -1 : g_deadTarget) : g_viewSlot >= 0 ? g_viewSlot : g_playing ? LocalSlot() : -1;
+            ViewFrom(original, follow);
+        }
+
+        // The view for this frame: the dead camera's free camera, following `follow` (with this player's own camera offset), or
+        // the game's own view.
+        void ViewFrom(CameraFn original, int follow)
+        {
             uint8_t* target = PlayerObject(follow);
             auto& cutscene = Var<int32_t>(0x140534798);
-            if (!target || !g_haveOffset || cutscene != 0 || Var<int32_t>(0x1404bbec0) == 0)
+            bool free = g_deadOn && g_freeCam;
+            if ((!free && (!target || !g_haveOffset)) || cutscene != 0 || Var<int32_t>(0x1404bbec0) == 0)
             {
                 original();
                 return;
             }
-            Vec position = Field<Vec>(target, kPosition);
-            Vec eye = Add(position, g_eyeOffset), look = Add(position, g_targetOffset);
+            Vec eye, look;
+            if (free) { eye = g_freePos; look = Add(g_freePos, Scale(FreeForward(), 50.0f)); }
+            else
+            {
+                Vec position = Field<Vec>(target, kPosition);
+                eye = Add(position, g_eyeOffset);
+                look = Add(position, g_targetOffset);
+            }
             if (!Finite(eye) || !Finite(look))
             {
                 original();
                 return;
             }
+            g_lastEye = eye;
+            g_lastLook = look;
+            g_haveLast = true;
             auto& gameLook = Var<Vec>(0x14059e130);
             auto& gameEye = Var<Vec>(0x14059e150);
             Vec savedLook = gameLook, savedEye = gameEye;
@@ -462,6 +680,7 @@ namespace pdnet::labtests
         {
             WatchInput();
             Log(L"labtest: ready: in a Test Arsenal battle, F6 or View + D-pad Left: camera, F7 or View + D-pad Up: record, F8 or View + D-pad Right: play back");
+            Log(L"deadcam: ready (HUD %s); in Test Arsenal, F9 or View + D-pad Down pretends to be down", HookHud() ? L"follows the watched player" : L"NOT hooked");
         }
         else
             Log(L"labtest: not installed - the game code is not what this pdnet expects");

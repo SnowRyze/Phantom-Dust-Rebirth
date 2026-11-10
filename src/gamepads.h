@@ -13,4 +13,8 @@ namespace pdnet
 
     // The keyboard as pdlaunch reads it (padshare.h): false when it hasn't reported lately. keys: 256 flags by virtual-key code.
     bool KeysHeld(uint8_t* keys);
+
+    // The sticks of whichever controller pushes each one furthest, -1..1 (right and up positive). False when all are centred.
+    // (Conceptual branch: the dead camera's free camera.)
+    bool PadSticks(float& leftX, float& leftY, float& rightX, float& rightY);
 }

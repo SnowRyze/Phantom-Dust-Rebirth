@@ -85,6 +85,11 @@ Anything that changes match behaviour needs every player on the same kit, and re
 
 ## Log
 (Newest first: what was tried, what happened.)
+- 2026-11-10: merged master (Public channel, skill previews, Lab Player 2 fix); Conceptual kits keep their own channel in
+  master's update code (tag conceptual-<N>). Dead camera, first version (src\labtests.cpp): when this player is down (health
+  record +0xc <= 0) in any match, the view follows a teammate (Tag Team) or anyone standing, with their HUD (the HUD draw at
+  0x14047b8f0 runs with the local slot swapped), or a free camera. Arrows / D-pad pick and toggle; WASD QE RF or sticks and
+  LB/RB move the free camera. F9 or View + D-pad Down pretends to be down in Test Arsenal. Not yet tried in the game.
 - 2026-11-07: the slot label above an arsenal's name ("<prefix>NN") is gone, the user's request: FUN_14016d5f0 draws it only
   when its 6th argument is 0 or more; its three calls now pass -1. Story profile too. Not yet tried in the game.
 - 2026-11-07: Max Credits & Skills gives an Arsenal Case each press, up to 16 (the user's choice). The main shop (menu 6)
