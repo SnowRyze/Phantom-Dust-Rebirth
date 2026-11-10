@@ -2,6 +2,7 @@
 #include "labtests.h"
 #include "gamepatches.h"
 #include "gamepads.h"
+#include "config.h"
 #include "log.h"
 #include <cmath>
 #include <cstdio>
@@ -233,7 +234,42 @@ namespace pdnet::labtests
         bool g_viewOverridden = false; // this frame's view isn't the player's own (set by ViewFrom)
         constexpr size_t kTagEntries = 0x13f90, kTagBytes = 32 * 0x14;
 
-        void HudWithTags(int64_t hud, int hudSlot, uint8_t* viewer)
+        // This PC's own nametag while the dead camera runs: the HUD never tags its own player, and skips a body unless body tags
+        // are on. Drawn the HUD's way (FUN_1402477e0 at the entry's screen point + (0x140, 0xe6), the name at DAT_1404bca30 +
+        // slot * 0x41, then FUN_14028caa0), in the dead colour once down, the ally colour while only pretending.
+        void DrawOwnTag(const uint8_t* entries, int slot)
+        {
+            uint8_t* record = PlayerRecord(slot);
+            if (!record) return;
+            int index = Field<int32_t>(record, 0x60);
+            if (index < 0 || index >= 32) return;
+            const uint8_t* entry = entries + index * 0x14;
+            if (*reinterpret_cast<const int32_t*>(entry) == 0) return; // off screen
+            float x = *reinterpret_cast<const float*>(entry + 4), y = *reinterpret_cast<const float*>(entry + 8);
+            uint32_t colour = Health(slot) <= 0 ? GetConfig().deadNametagColor : GetConfig().allyNametagColor;
+            auto colours = reinterpret_cast<uint32_t*>(At(0x14054c9b0));
+            Var<int32_t>(0x14054c9ac) = 8;
+            Var<int32_t>(0x14054c9a8) = 0x10;
+            for (int i = 0; i < 4; ++i) colours[i] = colour;
+            reinterpret_cast<void (*)(int, int, const char*, int)>(At(0x1402477e0))(static_cast<int>(x) + 0x140, static_cast<int>(y) + 0xe6,
+                reinterpret_cast<const char*>(At(0x1404bca30) + slot * 0x41), 0);
+            reinterpret_cast<void (*)()>(At(0x14028caa0))();
+            Var<int32_t>(0x14054c9ac) = 7;
+            Var<int32_t>(0x14054c9a8) = 0xe;
+            for (int i = 0; i < 4; ++i) colours[i] = 0xffffffff;
+        }
+
+        // A viewer for FUN_140253c00 that is nobody (slot -1: nobody is skipped) at the free camera's eye (+0xe0, for distances).
+        uint8_t* FreeViewer()
+        {
+            alignas(16) static uint8_t viewer[0x100];
+            memset(viewer, 0, sizeof(viewer));
+            *reinterpret_cast<int32_t*>(viewer + 0x14) = -1;
+            *reinterpret_cast<Vec*>(viewer + 0xe0) = g_lastEye;
+            return viewer;
+        }
+
+        void HudWithTags(int64_t hud, int hudSlot, uint8_t* viewer, int ownTag)
         {
             uint8_t* holder = PlayerObject(hudSlot);
             if (!holder || !viewer) { g_hudDraw(hud); return; }
@@ -253,6 +289,11 @@ namespace pdnet::labtests
             __except (EXCEPTION_EXECUTE_HANDLER) {}
             g_hudDraw(hud);
             if (lent) memcpy(holder + kTagEntries, saved, kTagBytes);
+            if (lent && ownTag >= 0)
+            {
+                __try { DrawOwnTag(block + 0x80, ownTag); }
+                __except (EXCEPTION_EXECUTE_HANDLER) {}
+            }
         }
 
         void HookedHudDraw(int64_t hud)
@@ -260,10 +301,17 @@ namespace pdnet::labtests
             int local = LocalSlot();
             bool following = g_deadOn && !g_freeCam && g_deadTarget >= 0 && PlayerObject(g_deadTarget);
             if (!g_viewOverridden && !following) { g_hudDraw(hud); return; }
-            if (!following) { HudWithTags(hud, local, PlayerObject(local)); return; } // free camera / Lab camera test: own HUD, tags from this view
+            if (!following)
+            {
+                // The free camera: own HUD, every player tagged from this view, this PC's own tag too. The Lab camera test: as the game.
+                bool free = g_deadOn && g_freeCam;
+                HudWithTags(hud, local, free ? FreeViewer() : PlayerObject(local), free ? local : -1);
+                return;
+            }
+            // Following: the watched player's HUD; the HUD tags this PC's player itself only while it stands (pretending).
             auto& slot = Var<int32_t>(0x1404bbe00);
             slot = g_deadTarget;
-            HudWithTags(hud, g_deadTarget, PlayerObject(g_deadTarget));
+            HudWithTags(hud, g_deadTarget, PlayerObject(g_deadTarget), Health(local) <= 0 ? local : -1);
             slot = local;
         }
 

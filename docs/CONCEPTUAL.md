@@ -85,6 +85,10 @@ Anything that changes match behaviour needs every player on the same kit, and re
 
 ## Log
 (Newest first: what was tried, what happened.)
+- 2026-11-10: tags fixed (the user), but the down player's own tag was missing: the HUD never tags its own player and skips
+  bodies unless body tags are on. Now drawn by pdnet after the HUD, the HUD's way (FUN_1402477e0 at the entry + (0x140, 0xe6),
+  name DAT_1404bca30 + slot * 0x41, FUN_14028caa0), dead colour once down. The free camera's projection uses a viewer that is
+  nobody, so it includes this player. As a body: only testable online. Not yet tried in the game.
 - 2026-11-10: dead camera nametags (the user): in the free camera they floated, following a player there were none. The HUD
   places tags from the local player's camera block (+0x13f10, entries at +0x80, from FUN_140253c00 with that block's view).
   Now, while the view isn't the player's own, a stand-in block with the frame's real view (0x140584f40) is worked out the
