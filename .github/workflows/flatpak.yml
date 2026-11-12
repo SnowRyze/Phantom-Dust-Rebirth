@@ -1,5 +1,5 @@
 # Builds the Flatpak (flatpak/) from a Stable release's kit and adds it to that release as
-# PhantomDust-Rebirth.flatpak. Runs by itself when a Stable is published (build.bat promote); Experimental
+# PhantomDust-Rebirth-Linux.flatpak. Runs by itself when a Stable is published (build.bat promote); Experimental
 # pre-releases are skipped, their kits reach a Flatpak through the kit's own updater. It can also be started by hand
 # for an existing release (Actions > Flatpak > Run workflow).
 name: Flatpak
@@ -10,7 +10,7 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: Release tag with a PhantomDust-Rebirth-Stable-<N>.zip (for example stable-12)
+        description: Release tag with a PhantomDust-Rebirth-Stable-<N>-PC.zip (for example stable-12)
         required: true
 
 permissions:
@@ -41,4 +41,4 @@ jobs:
         run: flatpak/build.sh "$RUNNER_TEMP"/kit/PhantomDust-Rebirth-Stable-*.zip
 
       - name: Add it to the release
-        run: gh release upload "$TAG" --repo "$GITHUB_REPOSITORY" --clobber out/flatpak/PhantomDust-Rebirth.flatpak
+        run: gh release upload "$TAG" --repo "$GITHUB_REPOSITORY" --clobber out/flatpak/PhantomDust-Rebirth-Linux.flatpak

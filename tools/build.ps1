@@ -151,7 +151,7 @@ if ($Mode -eq 'promote') {
     $asset = Join-Path $out "pdnet-update-$build.zip"
     UpdateZip $unpacked $asset
     Remove-Item $unpacked -Recurse -Force
-    $download = Join-Path $out "PhantomDust-Rebirth-Stable-$number.zip"
+    $download = Join-Path $out "PhantomDust-Rebirth-Stable-$number-PC.zip"
     Copy-Item $to $download -Force
     $fullSource = $null
     if ($source) { $ErrorActionPreference = 'Continue'; $fullSource = git -C $root rev-parse $source 2>$null; $ErrorActionPreference = 'Stop' } # GitHub wants the full hash

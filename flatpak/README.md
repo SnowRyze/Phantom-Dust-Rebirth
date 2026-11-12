@@ -16,7 +16,7 @@ launcher that runs the kit's `setup-linux.sh`. It works on the Steam Deck, in Ga
 ## For players
 
 ```
-flatpak install PhantomDust-Rebirth.flatpak
+flatpak install PhantomDust-Rebirth-Linux.flatpak
 flatpak run io.github.snowryze.PhantomDustRebirth
 ```
 
@@ -38,7 +38,7 @@ Logs: `logs/` in the folder above (`flatpak-setup.log` is the setup's).
 
 ## Building
 
-`flatpak/build.sh` builds `out/flatpak/PhantomDust-Rebirth.flatpak` with the newest Stable kit from the releases, or
+`flatpak/build.sh` builds `out/flatpak/PhantomDust-Rebirth-Linux.flatpak` with the newest Stable kit from the releases, or
 with the kit zip given as its argument. It needs `flatpak-builder` and the flathub remote.
 
 The **Flatpak** workflow (`.github/workflows/flatpak.yml`) does the same on GitHub when a Stable release is published
