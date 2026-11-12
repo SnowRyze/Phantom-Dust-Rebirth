@@ -424,6 +424,7 @@ Preview hang cause: Select (2026-11-12, Experimental 157, found by the tester Nu
 - if the paused bit is set anyway during the session, the pause object goes back to mode 6 (UnpauseUnderPreview, logged);
 - 154's safety net (the town's update run from the menu frame) stays.
 Still open from the same report: the town's hum while the preview runs (tester: "it has a constant humming really annoying").
+New log webhook (2026-11-12, the user's request): log_webhook in private\links.ini (Experimental kits) and private\public-links.ini (Stable kits) now points to the new channel. Only kits built from now on carry it (Experimental 158 on; Stable from the next promote). Installed kits keep their pdnet.ini (updates never change it), so their Send Log still goes to the old webhook unless the player edits pdnet.ini or downloads a new kit.
 Blank lobby rows (Experimental 138): done, the user confirmed (2026-11-10).
 Still open:
 - Risryn's joins (waiting for a 143 log; possibly Norton's firewall);
