@@ -4470,8 +4470,73 @@ namespace pdnet::gamepatches
             reinterpret_cast<void (*)()>(At(0x14012b4f0))();
         }
 
+        // Diagnostics for the hang without story progress (2026-11-12, read live on the developer PC with a fresh save):
+        // the preview stuck in state 4 because the town's frame stopped. FUN_14012b110 (state table at 0x1402dd1a0) is
+        // only called from FUN_140129ac0, called from FUN_14017cd00: the update (vtable slot 3, 0x14047bc30) of the scene
+        // object at [0x1404c51e8], whose own gate 0x140509a44 was 1. So the game's task runner stopped calling it. Its
+        // update calls are counted, its header (+8..+0x48) logged on each change while pdnet's session is there, and a
+        // stall of the count logged once with the game's states.
+        using SceneUpdateFn = void (*)(void*);
+        SceneUpdateFn g_sceneUpdate = nullptr;
+        std::atomic<uint32_t> g_sceneUpdates{ 0 };
+        void HookedSceneUpdate(void* self)
+        {
+            ++g_sceneUpdates;
+            g_sceneUpdate(self);
+        }
+
+        void WatchSceneUpdates()
+        {
+            static bool done = false;
+            if (done) return;
+            done = true;
+            auto slot = reinterpret_cast<uint64_t*>(At(0x14047bc30));
+            if (*slot != reinterpret_cast<uint64_t>(At(0x14017cd00))) { Log(L"preview: scene update slot not as expected - not counted"); return; }
+            g_sceneUpdate = reinterpret_cast<SceneUpdateFn>(*slot);
+            uint64_t hook = reinterpret_cast<uint64_t>(&HookedSceneUpdate);
+            Write(reinterpret_cast<uint8_t*>(slot), std::vector<uint8_t>(reinterpret_cast<uint8_t*>(&hook), reinterpret_cast<uint8_t*>(&hook) + 8));
+        }
+
+        void SceneDiagnostics()
+        {
+            WatchSceneUpdates();
+            if (!g_sceneUpdate || !(g_previewTown || g_previewTownClosing)) return;
+            static uint8_t last[0x40] = {};
+            static uint32_t lastCount = 0;
+            static int still = 0;
+            static bool toldStall = false;
+            uint8_t* scene = *reinterpret_cast<uint8_t**>(At(0x1404c51e8));
+            uint8_t now[0x40] = {};
+            if (scene) memcpy(now, scene + 8, sizeof(now));
+            uint32_t count = g_sceneUpdates;
+            auto hex = [](const uint8_t* bytes)
+            {
+                std::wstring text;
+                for (int i = 0; i < 0x40; ++i) { wchar_t two[4]; swprintf_s(two, L"%02X", bytes[i]); text += two; if (i % 8 == 7) text += L' '; }
+                return text;
+            };
+            if (memcmp(now, last, sizeof(now)) != 0)
+            {
+                Log(L"preview: scene +8: %s (updates %u, game state %d, preview state %d)", hex(now).c_str(), count,
+                    *reinterpret_cast<int32_t*>(At(0x1404bc950)), *reinterpret_cast<int32_t*>(At(0x140534798)));
+                memcpy(last, now, sizeof(now));
+            }
+            still = count == lastCount ? still + 1 : 0;
+            if (count != lastCount) toldStall = false;
+            lastCount = count;
+            if (still == 10 && !toldStall)
+            {
+                toldStall = true;
+                Log(L"preview: the scene's update stopped (count %u) - game state %d, preview state %d, mode %d, bbc36 %d, 509a44 %d, bc41c %d, 51c128 %d, menu state %d",
+                    count, *reinterpret_cast<int32_t*>(At(0x1404bc950)), *reinterpret_cast<int32_t*>(At(0x140534798)), *reinterpret_cast<int32_t*>(At(0x1404bc9d4)),
+                    *At(0x1404bbc36), *reinterpret_cast<int32_t*>(At(0x140509a44)), *reinterpret_cast<int32_t*>(At(0x1404bc41c)),
+                    *reinterpret_cast<int32_t*>(At(0x14051c128)), *reinterpret_cast<int32_t*>(At(0x140533744)));
+            }
+        }
+
         void PreviewTick()
         {
+            SceneDiagnostics();
             int state = *reinterpret_cast<int32_t*>(At(0x140534798));
             int gameState = *reinterpret_cast<int32_t*>(At(0x1404bc950));
             int mode = *reinterpret_cast<int32_t*>(At(0x1404bc9d4));
