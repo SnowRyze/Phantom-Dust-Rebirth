@@ -376,12 +376,37 @@ namespace pdnet::gamepatches
             int32_t state = 0;
             if (!ReadPresence(present, state)) return;
             bool match = state != 0 && state != 13;
+            // Only a player who was connected during this match can leave it: AI players (Test Arsenal, the debug menu's
+            // battles, where every nametag was hidden; 2026-11-12) are never network players.
+            static bool seen[4] = {};
             for (int s = 0; s < 4; ++s)
             {
-                // Test Arsenal's AI opponent is never a network player: nobody counts as left there.
-                uint8_t gone = match && !AiBattle() && v.matchName[s][0] && !present[s] ? 1 : 0;
+                if (!match || !v.matchName[s][0]) seen[s] = false;
+                else if (present[s]) seen[s] = true;
+                uint8_t gone = match && !AiBattle() && seen[s] && !present[s] ? 1 : 0;
                 if (g_slotGone[s].exchange(gone) != gone && gone) Log(L"gamepatch: %S left the match - nametag hidden", v.matchName[s]);
             }
+        }
+
+        // AI players (the debug menu's battles) have no name at 0x1404bca30 + i*0x41, so their nametag drew nothing (the
+        // user, 2026-11-12; log: "0 enemy, 1 -, 2 -, 3 -"). During a match, a slot with a player (status record
+        // DAT_1404bc608[i], count 0x1404bc628) and no name is named "CPU <slot + 1>". Online players always have names.
+        void NameAiPlayers()
+        {
+            __try
+            {
+                // Only once the match runs (game state 6): by then the game has written every real player's name.
+                if (*reinterpret_cast<int32_t*>(At(0x1404bc950)) != 6) return;
+                int32_t count = *reinterpret_cast<int32_t*>(At(0x1404bc628));
+                for (int i = 0; i < count && i < 4; ++i)
+                {
+                    char* name = reinterpret_cast<char*>(At(0x1404bca30) + i * 0x41);
+                    if (name[0] || !*reinterpret_cast<uint64_t*>(At(0x1404bc608) + i * 8)) continue;
+                    sprintf_s(name, 0x41, "CPU %d", i + 1);
+                    Log(L"gamepatch: match slot %d has no name (an AI player) - nametag reads %S", i, name);
+                }
+            }
+            __except (EXCEPTION_EXECUTE_HANDLER) {}
         }
 
         void NametagColours()
@@ -396,6 +421,7 @@ namespace pdnet::gamepatches
                     // Read every pass: the in-game Settings menu can change them (White is one of the colours).
                     uint64_t ally = twice(GetConfig().allyNametagColor), enemy = twice(GetConfig().enemyNametagColor);
                     g_deadColour = twice(GetConfig().deadNametagColor);
+                    NameAiPlayers();
                     TeamView v{};
                     if (!ReadTeamView(v)) continue;
                     UpdateLeftPlayers(v);
