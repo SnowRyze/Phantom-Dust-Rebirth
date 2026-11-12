@@ -4524,6 +4524,15 @@ namespace pdnet::gamepatches
             still = count == lastCount ? still + 1 : 0;
             if (count != lastCount) toldStall = false;
             lastCount = count;
+            // The safety net (Experimental 154): while the game doesn't call it, the update runs from the menu frame (same
+            // thread), so the preview's states and the session's end go on and leaving the Lab doesn't hang. Called on the
+            // original, not the hook, so the count shows when the game itself calls it again.
+            if (still >= 10 && scene && GetConfig().previewUnstick)
+            {
+                static int runs = 0;
+                if (runs++ % 300 == 0) Log(L"preview: running the town's update from the menu frame (stalled; %d so far)", runs);
+                g_sceneUpdate(scene);
+            }
             if (still == 10 && !toldStall)
             {
                 toldStall = true;

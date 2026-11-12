@@ -127,6 +127,7 @@ namespace pdnet
                 else if (key == "voice_talk_icon_x" && !value.empty()) c.voiceTalkIconX = std::stoi(value);
                 else if (key == "icon_gallery") c.iconGallery = _stricmp(value.c_str(), "on") == 0;
                 else if (key == "preview_area") c.previewArea = atoi(value.c_str());
+                else if (key == "preview_unstick") c.previewUnstick = value != "off";
                 else if (key == "debug_menu") c.debugMenu = _stricmp(value.c_str(), "on") == 0;
                 else if (key == "nametags_on_bodies") c.nametagsOnBodies = _stricmp(value.c_str(), "off") != 0;
                 else if (key == "dead_nametag_color") ReadColour(value, c.deadNametagColor);
