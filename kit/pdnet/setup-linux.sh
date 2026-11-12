@@ -10,7 +10,8 @@
 #   ./setup-linux.sh --logs           copy the logs to your home folder, to send after a test
 #
 # wine-uwp is looked for in $WINE_UWP (the wine-uwp script), on PATH, in ~/.local/opt/wine-uwp and ~/wine-uwp; if
-# none can load pdnet, it offers to download the prebuilt one (github.com/LiveManQuestion/wine-uwp releases).
+# none can load pdnet, it offers to download the prebuilt one (github.com/designgears/wine-uwp releases, or
+# github.com/LiveManQuestion/wine-uwp's while designgears/wine-uwp has none).
 # The game's files are not changed: wine-uwp loads pdnet.dll into the game when it starts (local.env in the game's
 # folder, WINE_UWP_INJECT), as pdlaunch.exe does on Windows. pdnet and its files are copied next to the game.
 # Like pdlaunch.exe, a launcher (~/.local/bin/phantom-dust-rebirth, menu entry "Phantom Dust Rebirth") calls this
@@ -53,9 +54,10 @@ for c in "${WINE_UWP:-}" "$(command -v wine-uwp 2>/dev/null || true)" ~/.local/o
     fi
     old=${old:-$c}
 done
-# None (or only an older one): offer the prebuilt runtime from the wine-uwp fork's releases, into ~/.local/opt.
-release=https://github.com/LiveManQuestion/wine-uwp/releases/latest/download
-asset=wine-uwp-phantom-dust-x86_64.tar.xz
+# None (or only an older one): offer the prebuilt runtime, into ~/.local/opt. From designgears/wine-uwp's latest
+# release; until that repository has published one, from the LiveManQuestion/wine-uwp fork's (same runtime).
+sources="https://github.com/designgears/wine-uwp/releases/latest/download wine-uwp-x86_64.tar.xz
+https://github.com/LiveManQuestion/wine-uwp/releases/latest/download wine-uwp-phantom-dust-x86_64.tar.xz"
 dl_tmp=""
 download_wine_uwp() {
     local dest=$HOME/.local/opt
@@ -74,9 +76,14 @@ download_wine_uwp() {
     fi
     dl_tmp=$(mktemp -d)
     trap 'rm -rf "$dl_tmp"' EXIT
-    local tmp=$dl_tmp
+    local tmp=$dl_tmp release="" asset="" r a
+    # The first source that has a release (its checksum file downloads).
+    while read -r r a; do
+        if curl -fsL -o "$tmp/$a.sha256" "$r/$a.sha256"; then release=$r; asset=$a; break; fi
+    done <<<"$sources"
+    [ -n "$release" ] || fail "download failed (no wine-uwp release could be reached; is the network up?)."
+    say "Downloading ${release%/latest/download}/latest"
     curl -fL --progress-bar -o "$tmp/$asset" "$release/$asset" || fail "download failed ($release/$asset)."
-    curl -fsL -o "$tmp/$asset.sha256" "$release/$asset.sha256" || fail "download failed ($release/$asset.sha256)."
     (cd "$tmp" && sha256sum -c --quiet "$asset.sha256") || fail "the download is damaged (checksum mismatch); run this again."
     mkdir -p "$dest"
     if [ -e "$dest/wine-uwp" ]; then
