@@ -425,6 +425,7 @@ Preview hang cause: Select (2026-11-12, Experimental 157, found by the tester Nu
 - 154's safety net (the town's update run from the menu frame) stays.
 Still open from the same report: the town's hum while the preview runs (tester: "it has a constant humming really annoying").
 Log webhook change undone (2026-11-12, the user's request): a new log_webhook was put in private\links.ini and private\public-links.ini, then taken back; both have the earlier URLs again (restored from the Experimental 157 and Stable 12 kits). Only the Experimental 158 kit zip had the new one; 159 has the old one again. Update zips never carry webhooks.
+Confirmed by the user (2026-11-12): AI nametags in debug-menu battles (155/156), story NPCs visible again (156), and the Motley / Chaos Murloc join hang (the 139/140 relay fix, on Stable 12) are done. Closed as non-issues: the preview's hum, Chaos Murloc's kit not updating itself, and the Stable update path not yet seen on a player's PC. Still to test: Select under the preview (157), the colour names for Alpha (152 logs), the arsenal Limit while editing (147). Still open: skills not playing in the preview without story progress (toaf), Risryn's joins (Norton), Norton blocking Setup.bat. The developer PC's save is back in LocalState\pdnet\saves (the fresh test save went to the Recycle Bin).
 Blank lobby rows (Experimental 138): done, the user confirmed (2026-11-10).
 Still open:
 - Risryn's joins (waiting for a 143 log; possibly Norton's firewall);
