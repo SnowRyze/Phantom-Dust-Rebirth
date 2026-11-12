@@ -1,6 +1,6 @@
 # Phantom Dust Rebirth: changes from the original game
 
-As of Experimental 98. *(untested)* = waiting for a test in a real match.
+The current feature list is in the [README](../README.md#features). This page is the older list, as of Experimental 98. *(untested)* = waiting for a test in a real match.
 
 ## Online
 - Epic Online Services instead of Xbox Live: no accounts, no port forwarding
