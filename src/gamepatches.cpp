@@ -4582,8 +4582,11 @@ namespace pdnet::gamepatches
             }
         }
 
+        void UnpauseUnderPreview(); // (below)
+
         void PreviewTick()
         {
+            UnpauseUnderPreview();
             SceneDiagnostics();
             int state = *reinterpret_cast<int32_t*>(At(0x140534798));
             int gameState = *reinterpret_cast<int32_t*>(At(0x1404bc950));
@@ -4799,8 +4802,49 @@ namespace pdnet::gamepatches
             }).detach();
         }
 
+        // Select under the preview (found by the tester Nuion, 2026-11-12: "if u press select in any arsenal editing it kills
+        // the instance behind it"). While a town session runs, the pause object [0x1404c0130] (CPauseMenuClass, modes from
+        // the table at 0x1403e7b70: handler, -, flags, next mode; switched by FUN_140167580) is in mode 6, whose handler
+        // FUN_140166a50 switches to mode 14 when the pause button is pressed (FUN_1401669f0(1)). Mode 14 has flags 3: the
+        // game's paused bit (0x140530034 bit 0) and the town's pause menu (menu 49 on a menu manager of its own), out of
+        // sight under the Lab. The town's update then stopped: the preview froze, and leaving the editor hung on it.
+        // While pdnet's session is there, the button handlers (FUN_140166a50, FUN_140166b30) do nothing.
+        using PauseModeFn = void (*)(int64_t);
+        PauseModeFn g_pauseButtons = nullptr, g_pauseButtons2 = nullptr;
+        void HookedPauseButtons(int64_t self) { if (!g_previewTown && !g_previewTownClosing) g_pauseButtons(self); }
+        void HookedPauseButtons2(int64_t self) { if (!g_previewTown && !g_previewTownClosing) g_pauseButtons2(self); }
+
+        void NoPauseUnderPreview()
+        {
+            g_pauseButtons = reinterpret_cast<PauseModeFn>(At(0x140166a50));
+            g_pauseButtons2 = reinterpret_cast<PauseModeFn>(At(0x140166b30));
+            int patched = 0;
+            for (int mode = 0; mode < 17; ++mode)
+            {
+                auto entry = reinterpret_cast<uint64_t*>(At(0x1403e7b70) + mode * 0x18);
+                uint64_t hook = *entry == reinterpret_cast<uint64_t>(g_pauseButtons) ? reinterpret_cast<uint64_t>(&HookedPauseButtons)
+                              : *entry == reinterpret_cast<uint64_t>(g_pauseButtons2) ? reinterpret_cast<uint64_t>(&HookedPauseButtons2) : 0;
+                if (!hook) continue;
+                if (Write(reinterpret_cast<uint8_t*>(entry), std::vector<uint8_t>(reinterpret_cast<uint8_t*>(&hook), reinterpret_cast<uint8_t*>(&hook) + 8))) ++patched;
+            }
+            Log(L"gamepatch: skill preview: the town's pause button is off under the preview (%d pause modes)", patched);
+        }
+
+        // If the game is paused all the same while pdnet's session is there (bit 0 of 0x140530034), the pause object goes
+        // back to the town's mode 6 (flags 0: the paused bit is cleared), so the town runs and leaving doesn't hang.
+        void UnpauseUnderPreview()
+        {
+            if (!(g_previewTown || g_previewTownClosing) || !(*reinterpret_cast<uint32_t*>(At(0x140530034)) & 1)) return;
+            int64_t pause = *reinterpret_cast<int64_t*>(At(0x1404c0130));
+            if (!pause) return;
+            int mode = *reinterpret_cast<int32_t*>(pause + 0x50);
+            Log(L"preview: the game was paused under the preview (pause mode %d) - back to the town's mode 6", mode);
+            reinterpret_cast<void (*)(int64_t, int)>(At(0x140167580))(pause, 6);
+        }
+
         void SkillPreviewScene()
         {
+            NoPauseUnderPreview();
             WrapCommand<MenuCommandFn>(0x1403eede0 + 134 * 8, 0x140208300, &HookedPreview, g_preview, L"skill preview");
             WrapCommand<SessionCommandFn>(0x1403f1d50 + 119 * 8, 0x140217f80, &HookedLabPreviewMode, g_labPreviewMode, L"skill preview in multiplayer");
         }
