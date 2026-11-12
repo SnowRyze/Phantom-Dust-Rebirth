@@ -395,14 +395,27 @@ namespace pdnet::gamepatches
         {
             __try
             {
-                // Only once the match runs (game state 6): by then the game has written every real player's name.
-                if (*reinterpret_cast<int32_t*>(At(0x1404bc950)) != 6) return;
-                int32_t count = *reinterpret_cast<int32_t*>(At(0x1404bc628));
-                for (int i = 0; i < count && i < 4; ++i)
+                // Only once the match runs (game state 6): by then the game has written every real player's name. And
+                // never in the story: its towns hold the NPCs in these slots with no name, and Experimental 155 naming
+                // them made every NPC disappear (2026-11-12); FUN_1401ca1e0 builds the characters' names from them.
+                // The names pdnet wrote are cleared again once the match is over (they stayed in the slots otherwise).
+                static bool named[4] = {};
+                bool running = *reinterpret_cast<int32_t*>(At(0x1404bc950)) == 6 && MultiplayerProfile();
+                for (int i = 0; i < 4; ++i)
                 {
                     char* name = reinterpret_cast<char*>(At(0x1404bca30) + i * 0x41);
+                    char ours[16];
+                    sprintf_s(ours, "CPU %d", i + 1);
+                    if (!running)
+                    {
+                        if (named[i] && strcmp(name, ours) == 0) name[0] = 0;
+                        named[i] = false;
+                        continue;
+                    }
+                    if (named[i] || i >= *reinterpret_cast<int32_t*>(At(0x1404bc628))) continue;
                     if (name[0] || !*reinterpret_cast<uint64_t*>(At(0x1404bc608) + i * 8)) continue;
-                    sprintf_s(name, 0x41, "CPU %d", i + 1);
+                    strcpy_s(name, 0x41, ours);
+                    named[i] = true;
                     Log(L"gamepatch: match slot %d has no name (an AI player) - nametag reads %S", i, name);
                 }
             }
