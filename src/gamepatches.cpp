@@ -4876,11 +4876,85 @@ namespace pdnet::gamepatches
         return Write(cave, toHook) && Write(site, call);
     }
 
+    namespace
+    {
+        // Peers dropped at a match's end (2026-11-13, diagnostics; Fisher King / Motley, a 3-player Battle Royale on
+        // Stable 12): the last two players went down together, and in the same second each game dropped the others
+        // from its peer list (0x140595ea8, 0x298-byte entries: +0 active, +4 slot, +8 ping countdown, +0xc keepalive
+        // countdown, +0x28 address) and called itself the winner. Fisher's game had dropped the host, so back in the
+        // lobby it gave up on the session (menus 84 / 53). pdnet's links were healthy. Two game functions clear an
+        // entry: FUN_140126bd0, the keepalive (each call counts +0xc down; at 0 it sends message 6 and drops that
+        // peer) and FUN_140126aa0, which drops every peer (called from several end-of-session paths). Fisher's two
+        // drops came 0.1 s apart, which points at the keepalive. Both are hooked to log which one drops a peer, the
+        // entry's counters and bytes, the highest keepalive value seen (the refill value) and how often it runs.
+        using VoidFn = void (*)();
+        VoidFn g_dropAllPeers = nullptr, g_peerKeepalive = nullptr;
+        std::atomic<uint32_t> g_keepaliveCalls{ 0 };
+        int32_t g_keepaliveMax = 0;
+
+        struct PeerEntryView { int32_t active, slot, ping, keepalive; };
+        PeerEntryView PeerEntry(int i)
+        {
+            auto e = reinterpret_cast<int32_t*>(At(0x140595ea8) + i * 0x298);
+            return { e[0], e[1], e[2], e[3] };
+        }
+
+        std::wstring PeerBytes(int i)
+        {
+            const uint8_t* e = At(0x140595ea8) + i * 0x298;
+            std::wstring text;
+            for (int k = 0; k < 0x60; ++k) { wchar_t two[4]; swprintf_s(two, L"%02X", e[k]); text += two; if (k % 16 == 15) text += L' '; }
+            return text;
+        }
+
+        void HookedDropAllPeers()
+        {
+            int32_t count = *reinterpret_cast<int32_t*>(At(0x140594ea4)), active = 0;
+            for (int i = 0; i < 3; ++i) active += PeerEntry(i).active ? 1 : 0;
+            if (active)
+                Log(L"peers: the game drops every peer (%d active, %d listed; called from %llx, game state %d)", active, count,
+                    GhidraAddress(_ReturnAddress()), *reinterpret_cast<int32_t*>(At(0x1404bc950)));
+            g_dropAllPeers();
+        }
+
+        void HookedPeerKeepalive()
+        {
+            ++g_keepaliveCalls;
+            int32_t count = *reinterpret_cast<int32_t*>(At(0x140594ea4));
+            PeerEntryView before[16] = {};
+            for (int i = 0; i < count && i < 16; ++i)
+            {
+                before[i] = PeerEntry(i);
+                if (before[i].active && before[i].keepalive > g_keepaliveMax)
+                {
+                    g_keepaliveMax = before[i].keepalive;
+                    Log(L"peers: highest keepalive countdown seen: %d (the keepalive ran %u times so far)", g_keepaliveMax, g_keepaliveCalls.load());
+                }
+            }
+            g_peerKeepalive();
+            for (int i = 0; i < count && i < 16; ++i)
+                if (before[i].active && !PeerEntry(i).active)
+                    Log(L"peers: the game's keepalive dropped peer %d (slot %d; countdown was %d, ping %d, highest seen %d, keepalive runs %u; game state %d). Entry: %s",
+                        i, before[i].slot, before[i].keepalive, before[i].ping, g_keepaliveMax, g_keepaliveCalls.load(),
+                        *reinterpret_cast<int32_t*>(At(0x1404bc950)), PeerBytes(i).c_str());
+        }
+
+        void WatchPeerDrops()
+        {
+            static const uint8_t kDropAll[10] = { 0x48, 0x89, 0x5c, 0x24, 0x08, 0x48, 0x89, 0x6c, 0x24, 0x10 };
+            g_dropAllPeers = reinterpret_cast<VoidFn>(InlineHook(0x140126aa0, reinterpret_cast<void*>(&HookedDropAllPeers), L"peer drop (all)", kDropAll));
+            const std::vector<uint8_t> keepalive = { 0x4c, 0x8b, 0xdc, 0x56, 0x57, 0x48, 0x81, 0xec, 0x88, 0x04, 0x00, 0x00 };
+            g_peerKeepalive = reinterpret_cast<VoidFn>(InlineHookBytes(0x140126bd0, keepalive, keepalive, reinterpret_cast<void*>(&HookedPeerKeepalive), L"peer keepalive"));
+            Log(L"gamepatch: peer drops logged (drop all %s, keepalive %s)", g_dropAllPeers ? L"ready" : L"NOT ready", g_peerKeepalive ? L"ready" : L"NOT ready");
+        }
+    }
+
     void Apply()
     {
         static std::once_flag once;
         std::call_once(once, []
         {
+            WatchPeerDrops();
             DynamicCases();
             if (!HookFileOpens()) Log(L"gamepatch: title screen: CreateFile2 import not found");
             g_bodyTags = GetConfig().nametagsOnBodies ? 1 : 0;
