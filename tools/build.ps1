@@ -145,7 +145,15 @@ if ($Mode -eq 'promote') {
     Zip $unpacked $to
     Remove-Item $from -Force
     Write-Host "Experimental $n is now $to"
-    if ($source) { git -C $root tag -f "stable-$number" $source | Out-Null; Write-Host "git tag stable-$number -> $source (push it: git push origin stable-$number)" }
+    # The tag is pushed with git (the user's own GitHub sign-in) and the release made on it: creating the tag through the
+    # API was refused for Stable 13 ("Resource not accessible by personal access token", 2026-11-13; that commit adds
+    # a GitHub workflow file, which a token needs extra permission to tag), while a release on an existing tag works.
+    $tagPushed = $false
+    if ($source) {
+        git -C $root tag -f "stable-$number" $source | Out-Null
+        $ErrorActionPreference = 'Continue'; git -C $root push origin "stable-$number" 2>$null | Out-Null; $tagPushed = $LASTEXITCODE -eq 0; $ErrorActionPreference = 'Stop'
+        Write-Host "git tag stable-$number -> $source$(if ($tagPushed) { ', pushed' } else { ' (not pushed: git push origin stable-' + $number + ')' })"
+    }
     else { Write-Host "No Source line in kit-version.txt: tag stable-$number by hand." -ForegroundColor Yellow }
 
     $asset = Join-Path $out "pdnet-update-$build.zip"
@@ -160,7 +168,7 @@ if ($Mode -eq 'promote') {
     # The update zip has no eos.ini, so it can't be a first install: its title on the release page says so (the user,
     # 2026-11-10). Only the shown name changes; pdlaunch still finds it by its file name.
     $updateLabel = @{ (Split-Path $asset -Leaf) = "DO NOT DOWNLOAD - automatic updates only (pdnet-update-$build.zip)" }
-    $page = PublishRelease "stable-$number" $fullSource "Stable $number" $false $notes @($download, $asset) $updateLabel
+    $page = PublishRelease "stable-$number" $(if ($tagPushed) { $null } else { $fullSource }) "Stable $number" $false $notes @($download, $asset) $updateLabel
     if ($page) { Write-Host "Published: $page" -ForegroundColor Green }
     exit 0
 }

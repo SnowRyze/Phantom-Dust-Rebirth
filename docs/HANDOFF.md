@@ -69,7 +69,7 @@ Other docs: [`EOS_PLAN.md`](EOS_PLAN.md), [`MODDING_PLAN.md`](MODDING_PLAN.md), 
 
 ## Status (2026-11-12)
 
-Newest builds: **Experimental 161** (the game as in 157), **Stable 12** (Experimental 145).
+Newest builds: **Experimental 161** (the game as in 157), **Stable 13** (Experimental 159, the game as in 157).
 
 Not yet confirmed in the game (each has its change log note):
 - Select under the skill preview no longer freezes it or hangs leaving the editor (Experimental 157).
@@ -103,6 +103,9 @@ Ideas, not planned (notes in the change log and reference notes):
 # Change log (newest first)
 
 ## November 2026
+
+Stable 13 (2026-11-13): Experimental 159 promoted at the user's request (build.bat promote 159). The game is as in 157; the kit has the public links from private\public-links.ini (old log webhook, as restored). Tag stable-13 = master cfd6f5e. The release has PhantomDust-Rebirth-Stable-13-PC.zip and pdnet-update-159.zip ("DO NOT DOWNLOAD" label); the Flatpak workflow started for it. Since Stable 12: the arsenal Limit while editing (147), colour names on the character select (148-152), AI nametags in debug battles (155/156), the preview hang fixes (153/154/157), the -PC / -Linux file names, the Linux setup changes (pull requests 7, 8, 10) and the Flatpak (9).
+- Publishing: creating the release (with its tag) through the API was refused twice: "Resource not accessible by personal access token" (403); the token could still read. Pushing the tag with git and making the release on the existing tag worked (draft, files, then published). Likely cause: that commit adds .github/workflows/flatpak.yml, and tagging it through the API needs a token permission this one lacks. build.ps1 promote now pushes the tag with git first and makes the release without target_commitish.
 
 Release file names (2026-11-12, the user's request): the Stable full kit is PhantomDust-Rebirth-Stable-<N>-PC.zip (build.ps1 promote) and the Flatpak PhantomDust-Rebirth-Linux.flatpak (flatpak/build.sh, the Flatpak workflow, flatpak/README.md). flatpak/build.sh finds the kit with or without -PC; the workflow's pattern 'PhantomDust-Rebirth-Stable-*.zip' takes both. The stable-12 release's two files were renamed through the API and its notes changed to match; links to the old names no longer work. pdnet-update-<N>.zip keeps its name (the updater needs it).
 

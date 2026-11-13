@@ -11,8 +11,8 @@ folder that stays put and double-click `Setup.bat`.
 
 ## Features
 
-Everything here is in the current Stable unless marked *(Experimental)*: those are in the newest Experimental builds and
-still being tested. *(Not yet confirmed)* means it is in Stable but hasn't been checked in a real match yet.
+Everything here is in the current Stable (Stable 13). *(Not yet confirmed)* means it hasn't been checked in a real match
+yet. Newer work goes into Experimental builds first.
 
 **Playing online**
 - Lobbies, matches, voice chat and scoreboards through Epic Online Services: no Xbox Live, no Epic account, no port
@@ -40,15 +40,15 @@ still being tested. *(Not yet confirmed)* means it is in Stable but hasn't been 
 - Always on, with your own colours for teammates, opponents and defeated players.
 - Optional nametags on defeated players (the lobby host's setting applies); Play Dead shows as defeated.
 - A player who leaves the match loses their nametag.
-- AI players in the debug menu's battles get nametags too *(Experimental)*.
+- AI players in the debug menu's battles get nametags too.
 
 **Arsenal Lab**
 - Arsenal cases follow the arsenal: 1, 2 or 3 schools, up to 3, so the case type and Aura rate always match the skills
-  in it. The Limit shown follows the schools while you edit *(Experimental)*.
+  in it. The Limit shown follows the schools while you edit *(not yet confirmed)*.
 - Buy and sell arsenal cases in the Lab, also from the lobby.
 - Test Arsenal: pick your arsenal and character, the AI's arsenal and character, and the map, then fight.
 - The skill preview works online, in the Arsenal editor and View Stock List, also from the lobby. Pressing Select
-  there no longer freezes it *(Experimental)*.
+  there no longer freezes it *(not yet confirmed)*.
 - Max Credits & Skills in the shop: up to 5,000,000 credits and 80 of every skill, DLC included.
 
 **Menus**
@@ -57,7 +57,7 @@ still being tested. *(Not yet confirmed)* means it is in Stable but hasn't been 
 - "Xbox Live" reads "Online"; the multiplayer menu has Online Settings (name, voice, nametags, Discord posts, partner
   aim), and the Online Store is gone.
 - Options: Send Log (sends your logs to the developers), Updates (Stable, Experimental or Off) and Aura Particle Beeps.
-- Character select shows each colour's name instead of COLOR 1-4 *(Experimental)*.
+- Character select shows each colour's name instead of COLOR 1-4 (Alpha's *not yet confirmed*).
 - Player feedback screen after matches removed.
 
 **Controls**
