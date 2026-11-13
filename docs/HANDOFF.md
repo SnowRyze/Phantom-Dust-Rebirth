@@ -95,6 +95,7 @@ Open problems:
 - Links to players from earlier lobbies stay open and get reconnected every minute (seen since Experimental 69).
 
 Ideas, not planned (notes in the change log and reference notes):
+- Xbox save import on Rebirth's first start (paused by the user, 2026-11-13). The import code is still in gamesave.cpp (ImportCloudSave: Xbox service for the Store version, the local wgs cache for unpacked copies) but nothing calls it since the Community button replaced IMPORT XBOX SAVE. Suggested: whole save on the first start with no pdnet saves, plus an Options item; arsenals-only would need new merging code. Never tested against a real Xbox save. kit\pdnet\README.txt still mentions the old button.
 - Auto-updater on Linux without the Flatpak (see setup-linux.sh's updater first).
 - Loading-screen timeout (the observe-only watchdog was commit 4cf65cb).
 - In-lobby game type / rule change (reverted 2026-10-21; notes kept).
