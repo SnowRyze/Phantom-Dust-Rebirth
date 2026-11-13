@@ -35,7 +35,8 @@ namespace pdnet::p2p
     // A player now in this PC's lobby: accept their connection ahead of Epic's notice and open it from this side too.
     void Expect(const std::string& peer);
 
-    // The local UDP port the game sends to for `peer` (opens the link if needed); 0 on failure.
-    uint16_t OpenLink(const std::string& peer);
+    // The local UDP port the game sends to for `peer` (opens the link if needed); 0 on failure. `holdForGame` (this PC
+    // joins): the peer's game packets wait until this PC's game has sent its first one on the link (at most 1.5 s).
+    uint16_t OpenLink(const std::string& peer, bool holdForGame = false);
     void CloseLink(const std::string& peer);
 }
