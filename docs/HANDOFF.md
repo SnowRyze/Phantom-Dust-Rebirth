@@ -88,7 +88,7 @@ Test steps for the older items (from the October "waiting for testers" list):
 - **Partner lock on keyboard** (the keyboard itself is confirmed on Experimental 126; still to check: rebinding rows, Lock Onto Partner's row, the key in Modern and Classic, nothing stuck after alt-tabbing. Notes: pdlaunch reads the keys; before that no key worked on the developer's PC. Start the game twice after updating. Keys work in menus and matches, none stuck after alt-tabbing, typing a name still works): Options > Keyboard shows Lock Onto Partner at the end of the list; picking it reads PRESS A KEY, the key is saved and stays after a restart; Esc cancels; Restore Default Settings gives Tab. In a Tag Team match that key works in Modern and Classic. Classic: a 2nd press turns it off and a targeted partner goes back to an enemy (RB too).
 
 Open problems:
-- Players dropped from each other at a match's end, then the lobby lost (Fisher King / Motley, 2026-11-13): Experimental 163 logs which game function drops them; fix planned once a log confirms it.
+- Players dropped from each other at a match's end, then the lobby lost (Fisher King / Motley, 2026-11-13): Experimental 163 logs which game function drops them; fix planned once a log confirms it (paused by the user, 2026-11-13).
 - Story progress not saved (reported 2026-11-13, paused by the user): no log yet; the developer PC's own save is fine. The log's "GameSave: wrote ..." lines show each save.
 - Skill preview without story progress (toaf): skills may not play in the preview.
 - Risryn can't join anyone: UDP to their own address doesn't arrive (self-test, 141/143); Norton's firewall suspected.
