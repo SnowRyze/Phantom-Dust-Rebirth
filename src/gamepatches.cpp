@@ -8,6 +8,7 @@
 #include "rebirth_word.h"
 #include "gamepads.h"
 #include "labtests.h"
+#include "film.h"
 #include <fstream>
 #include <winrt/Windows.ApplicationModel.Core.h>
 #include <winrt/Windows.UI.Core.h>
@@ -4524,6 +4525,7 @@ namespace pdnet::gamepatches
         std::call_once(once, []
         {
             labtests::Install(); // Conceptual branch only
+            film::Start();       // Conceptual branch only: Theatre films
             DynamicCases();
             if (!HookFileOpens()) Log(L"gamepatch: title screen: CreateFile2 import not found");
             g_bodyTags = GetConfig().nametagsOnBodies ? 1 : 0;

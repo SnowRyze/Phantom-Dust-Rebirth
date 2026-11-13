@@ -1,5 +1,6 @@
 #include "pch.h"
 #include "p2p.h"
+#include "film.h"
 #include "config.h"
 #include "eos.h"
 #include "log.h"
@@ -159,6 +160,7 @@ namespace pdnet::p2p
                 }
                 link->outPackets++;
                 link->outBytes += n;
+                film::Packet(true, link->peer, buf.data(), static_cast<size_t>(n)); // Conceptual branch: Theatre films
                 Queue({ link->peer, kGame, std::vector<uint8_t>(buf.begin(), buf.begin() + n) });
             }
         }
@@ -408,6 +410,7 @@ namespace pdnet::p2p
 
                 if (channel == kGame)
                 {
+                    film::Packet(false, peer, buf, bytes); // Conceptual branch: Theatre films
                     std::shared_ptr<Link> link;
                     {
                         std::lock_guard guard(g_lock);

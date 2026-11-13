@@ -85,6 +85,12 @@ Anything that changes match behaviour needs every player on the same kit, and re
 
 ## Log
 (Newest first: what was tried, what happened.)
+- 2026-11-13: Theatre, step 1: the film recorder (srcilm.cpp; the user's REPLAY_SYSTEM_SPEC.md, strategy B: no server here,
+  so a film is one PC's view). Each match: LocalState\pdnetilmsilm-<date>-<time>.pdfilm with every game datagram sent
+  and received over EOS P2P (p2p.cpp), the time and the game frame, match states, and a setup snapshot at state 6 (type, rule,
+  stage, layout, slots with name / team / health, this PC's arsenal). Written about once a second by a background thread,
+  8 MB buffer cap (excess dropped and counted), newest 25 kept. Not the direct network mode. Other players' arsenals: not
+  found yet (needed for playback). Not yet tried in the game.
 - 2026-11-13: the log has an online run on Conceptual 16 (3-player Battle Royale, 01:11): the dead camera came on when the
   player went down, followed two players and the free camera, no errors. Skills not loading on the watched HUD, likely cause:
   only CardKind (+0x350, +0x378) comes over the network; the HUD shows the name of the player at +0x384 (card's source) in
