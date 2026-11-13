@@ -85,6 +85,10 @@ Anything that changes match behaviour needs every player on the same kit, and re
 
 ## Log
 (Newest first: what was tried, what happened.)
+- 2026-11-13: the log has an online run on Conceptual 16 (3-player Battle Royale, 01:11): the dead camera came on when the
+  player went down, followed two players and the free camera, no errors. Skills not loading on the watched HUD, likely cause:
+  only CardKind (+0x350, +0x378) comes over the network; the HUD shows the name of the player at +0x384 (card's source) in
+  place of the skill when 0 or more, never set on another PC's player. Now -1 on such a player for the HUD draw. Unconfirmed.
 - 2026-11-10: the follow view looked wrong (the user: own camera offset). Now from behind the watched player along their
   facing, object +0x12e68 (16-bit angle, in PlayerPos +0x18): how it maps to a direction is learnt from this player's own
   camera while it stands (8 readings, best match after 120 frames; log: facing angle read as way N), with the camera's shape

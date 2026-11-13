@@ -342,10 +342,22 @@ namespace pdnet::labtests
                 return;
             }
             // Following: the watched player's HUD, everyone else tagged, this PC's own player too.
+            // A player on another PC: only its hand's skills come over the network (CardKind: status record +0x350 in use,
+            // +0x378 the skill). The HUD also reads +0x384 per slot, the player a card came from, and shows that player's
+            // name in place of the skill's when it is 0 or more; on another PC's player it is never set, so cards could read
+            // as a player's name. For the draw it is -1 (the skill's own name) on such a player.
+            uint8_t* watched = PlayerObject(g_deadTarget);
+            uint8_t* record = PlayerRecord(g_deadTarget);
+            bool remote = watched && record && Field<int32_t>(watched, kDriven) == 0;
+            int32_t owners[4]{};
+            if (remote)
+                for (int i = 0; i < 4; ++i) { owners[i] = Field<int32_t>(record, 0x384 + i * 0x50); Field<int32_t>(record, 0x384 + i * 0x50) = -1; }
             auto& slot = Var<int32_t>(0x1404bbe00);
             slot = g_deadTarget;
             HudWithTags(hud, g_deadTarget, g_deadTarget);
             slot = local;
+            if (remote)
+                for (int i = 0; i < 4; ++i) Field<int32_t>(record, 0x384 + i * 0x50) = owners[i];
         }
 
         bool HookHud()
