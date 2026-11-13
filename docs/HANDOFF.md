@@ -1,384 +1,232 @@
-# Handoff: Phantom Dust (2017 UWP): replacing Xbox Live / Teredo networking
+# Handoff: Phantom Dust Rebirth (pdnet)
 
-Written 2026-10-17 by the first Claude Code session, updated by a second session (source repair and test peer),
-and updated again on 2026-10-18 and 2026-10-19 (EOS, Xbox-free mode). See Â§10 and `git log` in `_netmod`.
-Read next: [`EOS_PLAN.md`](EOS_PLAN.md) (the current direction, with detailed progress) and [`MODDING_PLAN.md`](MODDING_PLAN.md) (original design and research).
+pdnet replaces Xbox Live in Phantom Dust (2017 PC / Microsoft Store remaster, package `Microsoft.MSEsper`) so it can be
+played online without Xbox Live or Teredo: lobbies and matches go through Epic Online Services (EOS), with no Epic
+account and no port forwarding for players. It never changes the game's files: `pdlaunch.exe` (started by Windows as the
+package's debugger) injects `pdnet.dll`, which answers the game's Xbox classes itself and patches the game in memory.
 
-**Repository layout and building (from 2026-10-30; older notes below use the old paths).** The user couldn't build a Windows SDK 10.0.22000.0 is required: `xsapigen` was made by its C++/WinRT (2.0.210806.1), and on a PC with only SDK 10.0.26100 the build failed with "Mismatched C++/WinRT headers"; build.ps1 checks for it and offers to open Microsoft's standalone installer (Windows SDK 10.0.22000.194, https://go.microsoft.com/fwlink/?linkid=2173743, from the SDK archive page): current Visual Studio 2022 (17.14) no longer has it as a component. A download of the repository as a ZIP (no .git, or no git installed) builds too: the kit's Source line then says "unknown (not built from a git clone)" (before, Windows PowerShell treated git's "not a git repository" as a fatal error).
-**Repository cleanup (2026-10-31).** This log moved to `docsHANDOFF.md` (the top of the repository is README.md, build.bat, build-linux.sh and the folders). `toolsold` was removed (the old build.cmd / build-pdlaunch.cmd / make-testkit.ps1, lobbytool, the stage A-C test kits, early dev scripts); they are still in git history, for example at tag stable-9. The kit27 branch is retired (it held nothing master lacks: its commits were cherry-picked copies, and its two Linux commits from pull request #1 are identical to master's from #2); its last commit is tag `kit27-final`. It was still GitHub's default branch, so downloads and the repository page showed the old layout until the default was switched to master.
-fresh clone (it needed Python, files from the game install and folders on the developer's PC), so the repository was
-reorganised. Old path -> new path: `pdnet\src` -> `src\`, `pdnet\xsapi` -> `xsapi\` (with `gen\` now committed, so
-`generate.py` never has to run), `pdnet\tools\pdlaunch.cpp` -> `launcher\`, `testkit-store\` -> `kit\` (Setup.bat at
-the top, the rest in `kit\pdnet\`) plus `testkit-stagec\pdnet.ini` -> `kit\pdnet\pdnet.ini`, `pdnet\tools\rebirth-word`
--> `tools\rebirth-word`, `kit-counter.txt` -> `tools\`, the old notes -> `docs\`, and everything outdated
-(`pdnet\build.cmd`, `build-pdlaunch.cmd`, `make-testkit.ps1`, lobbytool, the stage A-C test kits, the top-level dev
-scripts) -> `tools\old\`. **One `build.bat`** (running `tools\build.ps1`) builds pdnet.dll and pdlaunch.exe into `out\`
-and makes `out\kit` and `out\PhantomDust-pdnet.zip`. `build.bat experimental "notes"` also saves the next numbered
-Experimental zip, and `build.bat promote N` makes a Stable. It needs Visual Studio's C++ tools and Epic's SDK in
-`deps\eos-sdk` (each user downloads that, because of its license; on the developer PC it is a junction to the SDK
-download). SDL3 is in `deps\SDL3`. Secrets live in `private\` (git-ignored): `eos.tester.ini` (the kit's eos.ini),
-`eos.local.ini` and `links.ini` (discord_webhook / log_webhook / discord_invite for the kit's pdnet.ini). The kit27
-branch is retired: kits are built from master (they had become identical, title included). A Linux build from contributor DeadMan009 (pull request #2: `build-linux.sh`, clang-cl + lld-link for wine-uwp, plus Wine support in `generate.py`) was merged into this layout; it sits at the top next to `src\` and writes to `out/linux`.
+This file has four parts: **Start here** (how things are now), the **change log** (newest first, one note per change),
+**reference notes** (how parts of the game work), and the **early history** (2026-10-17 to 10-20). Read Start here first.
+Other docs: [`EOS_PLAN.md`](EOS_PLAN.md), [`MODDING_PLAN.md`](MODDING_PLAN.md), [`FEATURES.md`](FEATURES.md).
 
-## 1. Goal
+# Start here
 
-The user owns a decrypted dump of the 2017 Phantom Dust remaster (UWP / Microsoft Store, package
-`Microsoft.MSEsper`, x64, TitleId 267248679). They want its online play to stop depending on Microsoft's
-architecture (Xbox Live accounts, and Teredo for peer-to-peer). They want it as plug-and-play as possible for players
-(no port forwarding, no router changes), and eventually their own server.
+## Repository, build and releases
 
-**A firm user requirement:** keep the original Microsoft/Teredo networking available and working the whole time.
-Never break the Teredo build or the master dump.
+- GitHub: https://github.com/SnowRyze/Phantom-Dust-Rebirth (`origin`). Branches: **master** (Experimental and Stable)
+  and **Conceptual** (very experimental; master is merged into Conceptual, never the other way). Never force-push: if a
+  push is refused, fetch and merge (others merge pull requests on GitHub, e.g. the Linux setup and the Flatpak).
+- Layout: `src\` (pdnet.dll), `xsapi\` (the Xbox Live stand-in, `gen\` committed), `launcher\` (pdlaunch.exe), `kit\`
+  (Setup.bat + `kit\pdnet\`: scripts, README, pdnet.ini), `tools\` (build.ps1, kit-counter.txt, rebirth-word),
+  `flatpak\` + `.github\workflows\flatpak.yml` (Linux Flatpak), `build-linux.sh`, `docs\`.
+- `build.bat` (runs `tools\build.ps1`) builds into `out\`:
+  - `build.bat`: pdnet.dll, pdlaunch.exe, `out\kit`, `out\PhantomDust-pdnet.zip`.
+  - `build.bat experimental "notes"`: also `D:\PhantomDust-pdnet Experimental <N>.zip` (N from `tools\kit-counter.txt`)
+    and a GitHub pre-release `build-<N>` with `pdnet-update-<N>.zip`. The commit must be pushed first.
+  - `build.bat promote <N>`: Experimental N becomes `Stable <M>` (the public version) with the public Discord links from
+    `private\public-links.ini`; tag `stable-<M>`; release with `PhantomDust-Rebirth-Stable-<M>-PC.zip` (the whole kit,
+    for first installs) and `pdnet-update-<N>.zip`, labelled "DO NOT DOWNLOAD - automatic updates only". The Flatpak
+    workflow then adds `PhantomDust-Rebirth-Linux.flatpak` to the release.
+  - `build.bat conceptual "notes"` (Conceptual branch): `Conceptual <N>` zips, never published.
+- Needs Visual Studio 2022 C++ tools, Windows SDK 10.0.22000 and Epic's SDK in `deps\eos-sdk` (a junction on this PC).
+- Secrets live in `private\` (git-ignored, never commit or ship them except inside kits): `eos.tester.ini` (the kit's
+  eos.ini), `eos.local.ini`, `links.ini` (tester Discord links), `public-links.ini` (Stable kits), `github-token.txt`.
+- Updates: pdlaunch's CheckForUpdate reads this repository's releases at game start; channels `stable`, `experimental`,
+  `off` (`update_channel`, Options > Updates; settings.ini wins over pdnet.ini). An update zip never contains eos.ini
+  or Discord links, and an update never changes an installed pdnet.ini.
+- Every change: a simple commit, a note in this file's change log, a push to master, `build.bat experimental "notes"`,
+  then commit and push `tools\kit-counter.txt`. Only the user decides when a kit becomes Stable.
 
-## 2. Machine and tools
+## This PC
 
-- Windows 10 Pro 19045. Developer Mode is on. A second PC is **not** available yet, so no two-machine testing has happened.
-- Visual Studio 2022 Community with the C++ tools (cl works through `vcvarsall x64 10.0.22000.0`). Windows SDK 10.0.22000 (has `cppwinrt.exe`).
-- Python 3.10 (`py`). Ghidra 12.1.4 in `C:\Users\ryhol\tools\ghidra_12.1.4_PUBLIC`, with JDK 21 in
-  `C:\Users\ryhol\tools\jdk-21.0.12.1+1`. Set `JAVA_HOME` to that JDK before running `support\analyzeHeadless.bat`.
-- Ghidra project: `C:\Users\ryhol\tools\ghidra-projects\PhantomDust` (`PDUWP.exe` already imported and analyzed).
-  Scripts are in `C:\Users\ryhol\tools\ghidra-scripts`: `DumpCallers.java` (decompile every caller of the named functions) and
-  `DumpRefs.java`. Run them headless with `-process PDUWP.exe -noanalysis -readOnly`.
-  Don't use `|` in script arguments (the .bat launcher eats it).
+- Windows 10 Pro 19045, Developer Mode on. Visual Studio 2022, Windows SDK 10.0.22000, Python (`py -I`, not on PATH as
+  `python`), 7-Zip in `D:\7-Zip`.
+- Game copies: `D:\PhantomDust-Dumped-NoMovie` is the master dump and the registered copy (its Options has the debug
+  menu; `debug_menu=on` makes Split Screen open it). `D:\PhantomDust-Teredo` (original Microsoft networking) and
+  `D:\PhantomDust-Conceptual` must not be modified. Never move a game copy. Check with `Get-AppxPackage *MSEsper*`.
+- Kits: zips on `D:\`. The kit the game uses is the one in the HKCU Run entry "PhantomDust pdnet"
+  (`<kit>\pdnet\pdlaunch.exe -attach`); it changes whenever a Setup.bat runs. Test builds go only into an
+  Experimental kit folder, never into a Stable or Public kit.
+- Game data: `%LOCALAPPDATA%\Packages\Microsoft.MSEsper_8wekyb3d8bbwe\LocalState\`: `pdnet.log`, `pdnet\settings.ini`
+  (in-game settings, the user's own), `pdnet\saves\` (saves). The kit's `pdnet\pdlaunch.log` has the launcher and updates.
+- Ghidra 12.1.4 in `C:\Users\ryhol\tools` (JDK 21 next to it; set `JAVA_HOME`). Project `tools\ghidra-projects\PhantomDust`
+  (PDUWP.exe analysed). Headless scripts in `tools\ghidra-scripts`: `XrefsTo` (decompile every function that reads or writes
+  given addresses), `DumpCallers` (callers of named functions), `DecompileAt`, `DumpAsm`, `FindStrRefs`. Run with
+  `analyzeHeadless.bat ... PhantomDust -process PDUWP.exe -noanalysis -readOnly -scriptPath <scripts> -postScript ...`.
+  Don't use `|` in script arguments. Addresses in this file are Ghidra addresses (image base 0x140000000).
+- Live memory of the running game can be read with ReadProcessMemory (PROCESS_VM_READ) from PowerShell: game address =
+  module base + (Ghidra address - 0x140000000).
 
-## 3. Folders and what is registered
+## Standing rules (from the user)
 
-| Path | Contents |
-|---|---|
-| `D:\PhantomDust-Dumped-NoMovie` | **Master dump, byte-for-byte as received** (checked against `_netmod\original`). Holds `_netmod\` (all project files). |
-| `D:\PhantomDust-Teredo` | Original Microsoft networking (`pdnet.ini: network_mode=teredo`) plus local saves and the menu fix. DLL = original 12:26 stage 2 build (MD5 `E3E67884`; its networking code stays inactive in teredo mode). **The user plays online with this build and it works.** **Don't modify it.** |
-| `D:\PhantomDust-Direct` | The development build. As of 2026-10-19: Xbox-free DLL (MD5 `F21B9852`, from `pdnet\build-xboxoff`), `EOSSDK-Win64-Shipping.dll` and `eos.ini` (credentials; never commit), and pdnet.ini set to `network_mode=direct xbox=off eos=on eos_test=off test_peer=off display_name=YourName` (still the placeholder name). Manifest capabilities `internetClientServer` and `privateNetworkClientServer`. **Registered at the time of writing; switch back with `builds.ps1 -Use Teredo` for normal play.** |
+- Keep the Teredo copy and the master dump playable and unchanged; back things up first. Deleted user files go to the
+  Recycle Bin. Ask before downloading anything.
+- The leaderboard admin tool lives outside the repository: never commit, push or ship it.
+- pdnet.ini comments: short and plain, and "=" only on real setting lines.
+- Kits are "Experimental N"; "Stable N" only when the user says so. "Go back to stable" means the highest Stable.
+- Players need as little setup as possible: no Epic accounts, no port forwarding or router changes.
+- Short, practical explanations; one-command scripts for anything the user has to run.
 
-- All three use the **same package identity** (`Microsoft.MSEsper_8wekyb3d8bbwe`), because Xbox Live sign-in is tied to it.
-  So only one can be registered at a time. Switch with `_netmod\builds.ps1 -Use Teredo|Direct|Master`, which removes
-  with `-PreserveApplicationData` and then registers. Save data is shared and survives switches.
-- `_netmod\builds.ps1 -Create` rebuilds both build folders from the master plus `_netmod\original` backups. **Careful:** it
-  overwrites `D:\PhantomDust-Teredo` too. Don't run `-Create` while the user depends on that build unless you've confirmed with them.
-- `register.ps1` (in `_netmod` and copied into each build) is the one-step setup for another PC.
-- Save data: `%LOCALAPPDATA%\Packages\Microsoft.MSEsper_8wekyb3d8bbwe\LocalState\pdnet\saves`. Backup: `_netmod\backup\LocalState-2026-10-17`.
-  The files there are EFS-encrypted, so `Copy-Item` to D: fails. Copy the contents with `[IO.File]::ReadAllBytes`/`WriteAllBytes`.
-- Log: `...\LocalState\pdnet.log` (now opened with sharing, so it can be read while the game runs).
-- GitHub (from 2026-10-27): `_netmod` is pushed to https://github.com/SnowRyze/Phantom-Dust-Rebirth (remote `origin`; branches master and kit27, tags stable-N). Every code change gets a simple commit, a note in this file, and a push.
+## Status (2026-11-12)
 
-## 4. Done and verified by the user
+Newest builds: **Experimental 161** (the game as in 157), **Stable 13** (Experimental 159, the game as in 157).
 
-1. **Recon.** All Xbox code lives in `PDUWP.exe` (C++/CX glue built from Microsoft's Xbox multiplayer samples) plus the XSAPI
-   WinRT DLL. The engine (`WPFLibRelease_UWP.dll`) has no Xbox dependency. The full list of Xbox classes in use (~50) is in `MODDING_PLAN.md` Â§4b.
-2. **`pdnet` shim DLL** (`_netmod\pdnet`), shipped as `Microsoft.Xbox.Services.dll`; the original is renamed `Microsoft.Xbox.Services.orig.dll`:
-   - It forwards every XSAPI activation to the original and logs it.
-   - It IAT-patches `RoGetActivationFactory` in every loaded module (key one: `vccorlib140_app.dll`, which all C++/CX activations go through) to answer selected OS classes itself.
-   - **Local saves:** it replaces `Windows.Gaming.XboxLive.Storage.GameSaveProvider` (Connected Storage) with plain files. This fixed the
-     **"retrieving profile" hang**: `GetForUserAsync` never completes for the sideloaded copy. Verified: profile creation, save and reload all work.
-   - The static CRT (`/MT`) means it needs nothing from the package. Build with `_netmod\pdnet\build.cmd`.
-3. **Debug menu move.** The dump had `Menu\option_en.ssb` replaced by a patched debug menu, with the real options kept as `option_enx.ssb`.
-   The game loads `Assets\Data\Menu\<name>_en.ssb` by name. Now Options = real options, and Multiplayer â†’ Split Screen
-   (`vsmode_en.ssb`) = debug menu. Script: `_netmod\debugmenu.ps1 [-Revert]`. Verified by the user.
-4. **Stage 2 code (direct UDP instead of Teredo)**, first built 12:26 (still the Teredo build's DLL); the Direct build now runs the rebuilt test-peer version. It replaces
-   `Windows.Networking.XboxLive.*`: device addresses become pdnet snapshots carrying the IP and ports, and endpoint pairs come from a CONNECT/ACK
-   handshake on UDP 43211. QoS uses pings. It loads and doesn't break anything (user verified single player and the lobby browser), but **it has never
-   run a real connection**, because only creating or joining a lobby exercises it and there's no second PC.
-5. **Shareable test kit** (2026-10-18): `D:\PhantomDust-pdnet-TestKit-2026-10-18.zip` (source in `testkit\`). It contains the mod only, no game files;
-   `install.ps1` applies it to the tester's own unpacked copy. Not yet used by a second tester.
-6. **No-suspend** (2026-10-19): `nosuspend.ps1 [-Off]` turns on package debug mode (`IPackageDebugSettings::EnableDebugging`) so Windows
-   doesn't suspend the game when minimized. Verified: no threads suspended in the background. Re-run it after a build switch if pausing returns.
-7. **EOS (Epic Online Services) works inside the game's sandbox** (2026-10-19), with EOS SDK 1.19.2 loaded at run time (`eossdk.*`):
-   - Feasibility test (`eos_test=on`, `eostest.ps1`) passed: device-ID login (no Epic account), NAT query (Moderate), and a lobby created and deleted with presence off.
-   - The sandbox blocks Windows Credential Manager, where EOS keeps the device ID. `credstore.cpp` points the EOS module's
-     `CredRead/Write/Delete/Free` imports at DPAPI files in `LocalState\eos\credentials`.
-   - Long-lived sign-in (`eos=on`, `eos.cpp`, `eosrun.ps1`): stayed signed in for about 75 minutes with no drops (the SDK refreshes device-ID sessions itself).
-     It uses the same product user every launch.
-8. **Xbox-free mode** (`xbox=off`, `xboxfree.ps1`, code in `pdnet\xsapi\`): pdnet answers every `Microsoft.Xbox.Services.*` class itself.
-   - `xsapi\generate.py` runs cppwinrt on the XSAPI winmd: 169 classes. A stub `.cpp` is regenerated until it has hand-written code or a `// pdnet-hand` line.
-     Unimplemented members log `xsapi-stub:` and return safe defaults (empty/zero/default object/finished async).
-   - Hand-written so far: `XboxLiveUser` (local sign-in; name = `display_name`; id kept in `LocalState\pdnet\identity.txt`), `XboxLiveContext`,
-     settings and app config, title storage (served from `titlestorage\` or the game's `Assets\Data(\gstorage)`; missing blobs fail as HTTP 404),
-     and **stage A sessions** (`xsapi\mpsd.*`: in-memory session store plus MultiplayerSession/member/properties/constants/reference/write result
-     and the write/read/events parts of MultiplayerService).
-   - **Verified by the user:** boots without Xbox sign-in; main menu, scenario mode and the multiplayer menu work; **creating a match lobby works**
-     (on this PC only, since sessions exist only in memory).
-9. **Stage B code: sessions shared through EOS lobbies** (2026-10-19, session 3, commit `e689999`, DLL `pdnet\build-stageb`, MD5 `91379196`).
-   Follows [`STAGE_B_GUIDE.md`](STAGE_B_GUIDE.md) steps 1â€“8. The session â†” lobby mapping is written down at the top of `xsapi\mpsd.h`.
-   - `src\lobbies.*`: the EOS lobby layer (plain C++, no EOS types, so the XSAPI side can use it). Each call is posted to the EOS thread and
-     the caller waits with a 12 s timeout, so the game can't hang on a lost callback. Notifications go to one worker thread in order.
-   - `xsapi\mpsd.*`: `SessionStore` creates/joins/updates/leaves the lobby inside `Write()`. The lobby id is `pd1` + SHA-256 of the session key,
-     so a session reference or search handle (handle id = lobby id) finds the lobby on any PC. Bucket `pd1|<scid>|<template>` gates mod versions.
-     Writes apply only fields the game edited (stage A copied the whole doc, which would overwrite other players' data).
-     Only the lobby owner can write lobby attributes, so a non-owner's session-level edits go to its `PD_REQ` member attribute and the owner applies
-     them; the owner also numbers members in join order and promotes whichever member the game names as host.
-   - Search handles live on the lobby (`PD_SEARCH`); `GetSearchHandlesAsync` searches the bucket and evaluates the game's filter
-     (`numbers/ratingmin le N and numbers/ratingmax ge N`, `numbers/reqmoney le N`, `numbers/cross eq 0`, `numbers/ratinglimit eq N`, from PDUWP.exe strings).
-   - Remote changes raise `MultiplayerSessionChanged` (respecting `SetSessionChangeSubscription`); EOS sign-out raises `MultiplayerSubscriptionLost`.
-   - `pdnet\tools\lobbytool.exe` (`build-lobbytool.cmd`): a second EOS client on this PC (desktop process, so its own device ID and product user).
-     `search`, `show <id>`, `join <id> [s]` (joins as fake player "lobbytool" with a TEST-NET address), `host <id> [s]` (self-test).
-   - **Verified (no game):** all 40 lobby functions resolve; lobbytool self-test against EOS passed (create, 1300-byte value split and rejoined,
-     read by id, update visible, destroy). A new lobby shows up in bucket searches after a few seconds, not instantly.
-   - **In game (2026-10-19 00:27, Direct build with `build-stageb`, user created a match):** the game created lobby `pd12f7beâ€¦` (owner = the
-     game's product user), wrote it 4 times and set its search handle (numbers cross, crossplat, crossplay, gamerule, gametype, language,
-     rating, ratinglimit, ratingmin/ratingmax, reqmoney, reqskill, sendskill, sessiontype, stage, state, version=140; strings gamename,
-     platform). `lobbytool search` found it with all properties. `lobbytool join â€¦ 60`: the game numbered the new member 2 within ~150 ms,
-     raised `MemberListChange`, re-read the session (2 members); on leave it raised it again (1 member). No crash, no multiplayer stubs hit.
-     **The lobby screen did not list "lobbytool"** (user, 00:29).
-   - **Test peer in game (00:36, `test_peer=on`, DLL `A3755102`):** first in-game run of pdnet's stage 2 networking: 4/4 PASS (ping, CONNECT/ACK,
-     HELLO both ways â€” the game named itself `<xuid> [noid]` â€” then 20 s of heartbeats and a clean DELETE). Right after HELLO the game sent one
-     48-byte type-3 (chat/custom) message that the test peer doesn't answer. **The lobby screen listed nothing either.**
-   - So neither a session member alone nor a mesh peer alone shows up. Likely the UI needs both (a member whose device address matches the
-     connected peer) and/or the game's own player-info exchange after HELLO. Next: Ghidra on the lobby member list and the type-3 message,
-     or a real second PC (which does all of this naturally).
-   - Fixed meanwhile (`4b0a7e1`): EOS hides member ids/attributes from non-members, so search results now carry EOS's member count.
-   - Known gaps: reservations (`AddMemberReservation`) stay on the PC that made them; transfer handles (`SetTransferHandleAsync`) are still a stub;
-     an EOS re-sign-in doesn't rejoin lobbies (the game is told the subscription was lost and should leave/recreate).
+Not yet confirmed in the game (each has its change log note):
+- Select under the skill preview no longer freezes it or hangs leaving the editor (Experimental 157).
+- Colour names on the character select for Alpha (drawn as "player"; 152 logs each step, a tester log is needed).
+- The arsenal's Limit following its schools while editing (147).
+- Lock onto partner (103), Partner Aim Modern / Classic (118) and its keyboard key (Options > Keyboard).
+- B button: skipping start-up logos and cut-scene movies, leaving a hung match load after 30 s (120).
+- Modpack guard (parked: the user couldn't reproduce pewchy's report; log lines "modpack ...").
 
-## 5. Key technical findings (for whoever continues)
+Test steps for the older items (from the October "waiting for testers" list):
+- **Lock onto partner** (Experimental 103): in a Tag Team match, with or without an enemy targeted, RB (or Tab)
+  locks onto the partner; again unlocks. While on the partner, lock-on or switch-target goes to an enemy.
+  Switch-target never reaches the partner. Log: "target hook running", "lock onto partner on / off ...".
+- **Partner Aim setting** (Experimental 118): Multiplayer > Settings shows the row, left / right switches it, A saves, it stays after a restart. Modern: as lock onto partner above. Classic, in a Tag Team match: RB or Tab turns the original option on and off (log says which); while on, switch target also reaches the partner.
+- **B button** (Experimental 120): start-up logos: B skips each one, and the game still reaches the title normally. Movies (needs a full copy, not the stub dump): B ends a cut-scene movie and the story carries on. Hung match load (needs other players; cut a peer's network during a load): after 30 s, B leaves: from the lobby's LOADING to the multiplayer menu, from a match load to the lobby. A normal load must be unaffected: B does nothing in the first 30 s.
+- **Partner lock on keyboard** (the keyboard itself is confirmed on Experimental 126; still to check: rebinding rows, Lock Onto Partner's row, the key in Modern and Classic, nothing stuck after alt-tabbing. Notes: pdlaunch reads the keys; before that no key worked on the developer's PC. Start the game twice after updating. Keys work in menus and matches, none stuck after alt-tabbing, typing a name still works): Options > Keyboard shows Lock Onto Partner at the end of the list; picking it reads PRESS A KEY, the key is saved and stays after a restart; Esc cancels; Restore Default Settings gives Tab. In a Tag Team match that key works in Modern and Classic. Classic: a 2nd press turns it off and a targeted partner goes back to an enemy (RB too).
 
-- **Game socket** (Ghidra, `PDUWP.exe`):
-  - `FUN_140027870` creates it: `WSASocketW(AF_INET6, SOCK_DGRAM, UDP)`, with `IPV6_V6ONLY=0` (dual-stack), non-blocking, bound to the
-    `networkmanifest.xml` port **43210**.
-  - `FUN_140029080` sends: it gets the destination from `IXboxLiveEndpointPair::GetRemoteSocketAddressBytes` (vtable +0x48) into a 0x80-byte buffer, then calls `WSASendTo`.
-  - `FUN_140029330` receives: a plain loop, `WSARecvFrom` with no overlapped I/O; it retries on `WSAEWOULDBLOCK` and maps senders back to peers through the endpoint pair lookup.
-  - **So Teredo/SDA only supplies addresses. Game packets are ordinary UDP**, and IPv4-mapped addresses work on that socket.
-- Mesh message types: HELLO, HEARTBEAT, ACK, CHAT, CUSTOM (`PDUWP.NetworkMesh`). Sessions and matchmaking go through `PDUWP.Xbox.Samples.Multiplayer.MultiplayerManager` on XSAPI MPSD, SmartMatch and search handles.
-- On this sideloaded copy, **Xbox Live sign-in, title storage (card data) and the lobby browser still work**. Only Connected Storage hangs.
-- Meld (`MeldRelease_UWP.dll`) requests an Xbox token (`GetTokenAndSignature`), so it probably also calls a separate web backend. Not investigated.
-- Menu scripts: `.ssb`. Name table in `PDUWP.exe` (`menu1, shop, vsmode, option, command, vsmenu, mainmenu, â€¦`).
-- `tms_options.csv` holds the store product definitions and online version gates. Saved copies under `UserConfig` are AES-encrypted by the game.
+Open problems:
+- Skill preview without story progress (toaf): skills may not play in the preview.
+- Risryn can't join anyone: UDP to their own address doesn't arrive (self-test, 141/143); Norton's firewall suspected.
+- Norton blocks Setup.bat: needs the detection name.
+- Links to players from earlier lobbies stay open and get reconnected every minute (seen since Experimental 69).
 
-## 6. Current state of the source tree
+Ideas, not planned (notes in the change log and reference notes):
+- Auto-updater on Linux without the Flatpak (see setup-linux.sh's updater first).
+- Loading-screen timeout (the observe-only watchdog was commit 4cf65cb).
+- In-lobby game type / rule change (reverted 2026-10-21; notes kept).
+- Spectator mode for tournaments (feasibility only).
+- The skill preview's hum (closed as a non-issue by the user, 2026-11-12).
 
-**Repaired (2026-10-17, second session).** `_netmod` is now a git repo; the first commit is the broken snapshot, for reference.
+# Change log (newest first)
 
-- `net.h`/`net.cpp` were rebuilt from the installed DLL's PDB and disassembly, and `config.*` were reverted to the stage 2 fields
-  (`teredo`, `advertiseIp`, `gamePort`, `controlPort`=43211, `qosProbes`; default INI text restored byte for byte).
-- Stage 2 wire format (confirmed from the binary):
-  - snapshot (34 bytes, big-endian) = `"PDN1" | 1 | 0 | gamePort | controlPort | ip[16] | deviceId`
-  - control message = `"PDNC" | type | nonce (4 bytes, native order) | body`, on one dual-stack UDP socket bound to `controlPort`
-  - Ack and Pong complete a pending `Request` by nonce. Everything else goes to the handler.
-- Verified: builds clean with `build.cmd build-repair`. Exports, imports and all UTF-16 strings are identical to the installed DLL,
-  and every `pdnet::net` function exists in both. A loopback harness passed the snapshot and Base64 round trips, connectâ†’ack and
-  pingâ†’pong against a Python peer written from the disassembled format, plus the unsolicited-message path. Not yet run inside the game.
-- `build.cmd [outdir]` now takes an optional output folder. `pdnet\build-stage2-1226\` is a copy of the original good build (DLL + PDB + objs), ignored by git.
-- The rebuilt DLL (`pdnet\build-repair`, MD5 8316A4A1â€¦) was installed in the Direct build and smoke-tested in game on 2026-10-17
-  (13:07: it loaded and lobby creation worked). It was then replaced there by the test-peer build (Â§6a).
-  The Teredo build and `pdnet\build` still have the original 12:26 DLL (MD5 E3E67884â€¦), which is also kept in `pdnet\build-stage2-1226`.
-- Build output folders: `build` / `build-stage2-1226` = original 12:26, `build-repair` = repaired source, `build-testpeer` = repaired + test peer,
-  `build-eostest` (CAD9F6F4) = EOS test, `build-eos` (5CF6B75D) = long-lived sign-in, `build-xboxoff` (F21B9852) = Xbox-free mode stage A, `build-stageb` (91379196) = stage B, EOS lobbies (current source).
-  Don't build into `build` or `build-stage2-1226`; they're the known-good copies.
-- Since 2026-10-19, `build.cmd` compiles in phases: core sources, then the XSAPI stand-in with a precompiled header (`xsapi_pch.h`) and `/MP`,
-  then link (about 95 s). It needs `xsapi\gen\` first: `py -I pdnet\xsapi\generate.py <master>\Microsoft.Xbox.Services.winmd` (gen\ is git-ignored).
-- Commit messages containing double quotes break when passed through PowerShell to git; write them to a file and use `git commit -F`.
-- `server\pdserver.py` (partial) was deleted; it's still in the first commit.
+## November 2026
 
-## 6a. Test peer (one-PC join test)
+Stable 13 (2026-11-13): Experimental 159 promoted at the user's request (build.bat promote 159). The game is as in 157; the kit has the public links from private\public-links.ini (old log webhook, as restored). Tag stable-13 = master cfd6f5e. The release has PhantomDust-Rebirth-Stable-13-PC.zip and pdnet-update-159.zip ("DO NOT DOWNLOAD" label); the Flatpak workflow started for it. Since Stable 12: the arsenal Limit while editing (147), colour names on the character select (148-152), AI nametags in debug battles (155/156), the preview hang fixes (153/154/157), the -PC / -Linux file names, the Linux setup changes (pull requests 7, 8, 10) and the Flatpak (9).
+- Publishing: creating the release (with its tag) through the API was refused twice: "Resource not accessible by personal access token" (403); the token could still read. Pushing the tag with git and making the release on the existing tag worked (draft, files, then published). Likely cause: that commit adds .github/workflows/flatpak.yml, and tagging it through the API needs a token permission this one lacks. build.ps1 promote now pushes the tag with git first and makes the release without target_commitish.
 
-`pdnet.ini: test_peer=on` (set in **D:\PhantomDust-Direct only**; off by default) starts an in-process fake second player
-3 s after the game first calls `XboxLiveEndpointPairTemplate.GetTemplateByName` (lobby creation). It uses its own sockets
-(control 43212, game 43213) inside the game process, which sidesteps AppContainer loopback isolation. The steps are:
-ping, then CONNECT, then HELLO on the game port, then 20 s of heartbeats with ACKs, then DELETE. It logs `testpeer: n/4 PASS|FAIL` lines to pdnet.log.
-Code: `src\testpeer.cpp`. Verified offline against net.cpp plus a Python stand-in for the game port. The Direct build has this DLL (`build-testpeer`, MD5 632CEAC6â€¦).
-**Not yet run in the game:** as of 2026-10-18, pdnet.log has no `testpeer:` lines. Running it is the next one-PC step: register the Direct build, create an Xbox Live lobby, then read the log.
+Release file names (2026-11-12, the user's request): the Stable full kit is PhantomDust-Rebirth-Stable-<N>-PC.zip (build.ps1 promote) and the Flatpak PhantomDust-Rebirth-Linux.flatpak (flatpak/build.sh, the Flatpak workflow, flatpak/README.md). flatpak/build.sh finds the kit with or without -PC; the workflow's pattern 'PhantomDust-Rebirth-Stable-*.zip' takes both. The stable-12 release's two files were renamed through the API and its notes changed to match; links to the old names no longer work. pdnet-update-<N>.zip keeps its name (the updater needs it).
 
-Game mesh facts found for it (PDUWP.exe, Microsoft's sample MeshManager):
-- Packet: `seq u16 | type u8 | length u16 | flags u16 (0x8000 = wants ACK) | body`, little-endian; several messages per datagram.
-  Type 1 = heartbeat, 2 = HELLO (`responding u8 | nameLen u16 | UTF-16 name`), 3 = chat/custom, 4 = ACK (seq = acked seq), 0x40+ = game messages.
-  Builders: HELLO `FUN_140028310`, ACK `FUN_140028670`, heartbeat `FUN_1400281a0`. Dispatcher: `FUN_140029c50`.
-- Receive loop `FUN_140029330`: the sender is looked up by address, then via `FindEndpointPairBySocketAddressBytes` â†’ device address â†’ mesh connection.
-  An unknown sender is logged and skipped. A sender that is **known but in state 0/1 makes the loop `break` (the receive thread stops)**.
-- `OnAssociationIncoming` (`FUN_140037740`) creates a mesh connection for **any** inbound endpoint pair, in state 2 (accepted). HELLO moves it to 3.
-  So the host does not need the joiner's MPSD membership to accept packets. This answers the Â§7 question at the mesh level.
+Confirmed by the user (2026-11-12): AI nametags in debug-menu battles (155/156), story NPCs visible again (156), and the Motley / Chaos Murloc join hang (the 139/140 relay fix, on Stable 12) are done. Closed as non-issues: the preview's hum, Chaos Murloc's kit not updating itself, and the Stable update path not yet seen on a player's PC. Still to test: Select under the preview (157), the colour names for Alpha (152 logs), the arsenal Limit while editing (147). Still open: skills not playing in the preview without story progress (toaf), Risryn's joins (Norton), Norton blocking Setup.bat. The developer PC's save is back in LocalState\pdnet\saves (the fresh test save went to the Recycle Bin).
 
-## 7. What's left
+Log webhook change undone (2026-11-12, the user's request): a new log_webhook was put in private\links.ini and private\public-links.ini, then taken back; both have the earlier URLs again (restored from the Experimental 157 and Stable 12 kits). Only the Experimental 158 kit zip had the new one; 159 has the old one again. Update zips never carry webhooks.
 
-1. ~~Repair the source tree~~ Done and smoke-tested in game (Â§6).
-2. ~~Replace sign-in and title storage~~ Done in Xbox-free mode (Â§4.8).
-3. **Sessions shared between players** (stage B): **written and tested against EOS without the game (Â§4.9); in-game test next.**
-   Then the guide's test plan (two PCs, soak, `xbox=on`/Teredo regression).
-4. **In-match connections between players** (stage C). For now the Direct build's networking is pdnet's direct UDP (Â§4.4): it should work on a LAN,
-   and over the internet only if the host forwards ports. Not done; see Â§8.
-5. **Two-PC testing** of anything multiplayer, once the user has a second PC or tester (the test kit, Â§4.5, is for that).
-6. Remaining Xbox-free stubs that only affect local features (stats, presence, profiles, events) currently return defaults; they can stay.
-7. Optional: give the Direct build its own package identity once it no longer needs Xbox Live at all, so it can coexist with the Teredo build.
-   Card packs and paid content: the agreed scope is restoring play, not unlocking paid content.
+Preview hang cause: Select (2026-11-12, Experimental 157, found by the tester Nuion; not yet tried in game). Pressing Select in the editor or stock list froze the preview, and leaving the editor then hung. While a town session runs, the pause object [0x1404c0130] (CPauseMenuClass; modes in the table at 0x1403e7b70, 0x18 each: handler, -, flags (1 = paused bit 0x140530034 bit 0, 2 = pause menu 49 on its own menu manager), next mode; FUN_140167580 switches) is in mode 6 (0x1404bca04, set by FUN_14012ab20 in game state 3). Mode 6's handler FUN_140166a50 switches to mode 14 on the pause button (FUN_1401669f0(1)); mode 14 (flags 3) pauses the game and opens the town's pause menu out of sight. The live read during the hang had 0x140530034 = 0x167 (bit 0) against 0x166 while running. Now:
+- the table entries for FUN_140166a50 / FUN_140166b30 (modes 1, 4, 5, 6, 8) point to wrappers that do nothing while pdnet's session is there (NoPauseUnderPreview);
+- if the paused bit is set anyway during the session, the pause object goes back to mode 6 (UnpauseUnderPreview, logged);
+- 154's safety net (the town's update run from the menu frame) stays.
 
-## 8. Difficulties encountered
+Story NPCs invisible (2026-11-12, Experimental 156, the user's report on 155; no log of it, cause inferred). 155's NameAiPlayers named every slot with a status record and no name "CPU N" whenever game state was 6, which includes the story's towns, where the NPCs hold those slots with no name. The slots (0x1404bca30 + i*0x41) are read by more than the nametag: FUN_1401ca1e0 builds the characters' names from them, FUN_140151f90 / FUN_140153a10 / FUN_140155310 copy them. Now: only with the multiplayer profile (MultiplayerProfile), and the names pdnet wrote are cleared once the match is over (they stayed in the slots before). If NPCs still vanish on 156, the cause is elsewhere: a log is needed.
 
-- **Four responses were stopped by Anthropic's safety classifier**, and per its instruction they must not be reproduced:
-  1. while writing the plug-and-play internet connectivity layer (automatic public-address discovery and NAT traversal on the game's socket);
-  2. while writing the stage 3 relay server (`pdserver.py`), which forwards game traffic between players;
-  3. (2026-10-18) while writing a passive "link monitor" for the Teredo build, which would have logged the state of
-     Windows' player-to-player endpoint pairs to diagnose "cross lagging" (see Â§11). Its partial file was deleted and nothing was installed;
-  4. (2026-10-19) while starting stage B, connecting the game's multiplayer sessions to EOS lobbies. Nothing had been written yet;
-     the stopped step only read the EOS SDK headers.
+Nametags in debug-menu AI battles (2026-11-12, Experimental 155, the user's report, not yet seen in game). The developer PC's log of a debug battle had "nametag colours: no teams, 0 enemy, 1 -, 2 -, 3 -": the AI players have no name at 0x1404bca30 + i*0x41, so their nametag drew nothing. NameAiPlayers (in the nametag colour thread) names a slot with a status record (DAT_1404bc608[i], count 0x1404bc628) and no name "CPU <slot + 1>", only in game state 6 (by then the game has written every real player's name). And a slot now counts as "left the match" (no nametag) only if it was a connected player earlier in that match, so the named AI players aren't hidden as left.
 
-  I don't know the exact reasons. All four involve code for connecting players to each other. The user was told this session couldn't continue
-  those parts, and asked whether switching models would get around it; the answer given was no, it shouldn't be used to get around a safeguard,
-  and that likely false positives should be reported to Anthropic (thumbs-down feedback or `/bug`). The next session should know this
-  happened and talk it through with the user rather than recreating those pieces.
-- Bash heredocs in this environment turned `\\` into `\` (and `\n` into real newlines) inside embedded Python. Use the Write/Edit tools for source edits.
-- `WINRT_LEAN_AND_MEAN` strips the `produce<>` code needed to implement Windows interfaces. C++/WinRT coroutines that call `get_strong()` can't be `const`.
-- Ghidra didn't define most of the UTF-16 log strings, so finding functions by string missed them. Finding them by import callers (`DumpCallers.java`) worked.
-- An AppContainer can't reach loopback, so a server on this PC can't be reached from the game unless the *user* runs
-  `CheckNetIsolation LoopbackExempt -a -n=Microsoft.MSEsper_8wekyb3d8bbwe` (a system setting; it's the user's call).
-- Only one registration per package identity, which is why builds are switched instead of installed side by side.
-- Inbound UDP to the game needs the `internetClientServer` / `privateNetworkClientServer` capabilities (added only to the Direct build).
-- Windows suspends the game when it's minimized (a Store app), which froze an EOS test run; that's what `nosuspend.ps1` is for.
-- The EOS SDK can't store its device ID in the sandbox (Credential Manager blocked); fixed by `credstore.cpp`.
-- Xbox-free bring-up crashed twice before the main menu: first on an unhandled E_NOTIMPL, so stubs now return defaults; then on an empty title-storage
-  result, so title storage is now served locally. Expect this "run, read `xboxfree.ps1 -Report`, implement the next piece" loop for new areas.
-- This PC's clock jumped back about an hour during one session; log timestamps are wall-clock, so don't trust them across that.
+Preview hang safety net (2026-11-12, Experimental 154, untested in a real hang). The object at [0x1404c51e8] is pdGameCtrlClass (FUN_1401d1030, registered once at start-up with priority 0x807531); its update FUN_14017cd00 runs the town. 153 on the developer PC (fresh save): 1211 updates counted, header constant, and the hang didn't come back in several tries, so it is intermittent (toaf's freezes didn't follow arsenal saves either). Now, while pdnet's session is there and the count hasn't moved for 10 menu frames, pdnet calls the original update itself each menu frame (same thread), so the preview's states and the session's end go on; "running the town's update from the menu frame" is logged every 300 runs. preview_unstick=off turns it off (testing). toaf's own freeze stopped every log line, so it may be another case.
 
-## 9. User preferences learned
+Preview hang without story progress, read live (2026-11-12, Experimental 153, diagnostics). Reproduced on the developer PC with a fresh save (saves moved to LocalState\pdnet\saves.backup-20261111): leaving the editor, preview state 4 stuck. Found with Ghidra (C:\Users\ryhol\tools, headless scripts in ghidra-scripts):
+- Preview states run from a table at 0x1402dd1a0 (state 1 FUN_140275030, 2 FUN_140275170, 3 FUN_140275210, 4 FUN_140275590 (always to 5), 5 FUN_140275650), called by FUN_14012b110 when mode 0x1404bc9d4 is 0. Menu command 105 (FUN_14024bc40 case 0x69, FUN_140274fa0) sets 4; 106 waits for 0.
+- FUN_14012b110 is called only from FUN_140129ac0 (game state 6), which is called only from FUN_14017cd00, the update (vtable slot 3, 0x14047bc30) of the scene object at [0x1404c51e8]. Its gate 0x140509a44 was 1, game state 6, bbc36 1, bc41c 0: the task runner stopped calling the scene's update. A 1 s memory diff with the window in front: nothing changed. (The watchdog's stack was the window's message wait while the game was in the background.)
+- 153 counts the scene's update calls (vtable slot hooked), logs the scene's header (+8..+0x48) on each change while pdnet's session is there, and logs once when the count stalls, with the game's states. Next: reproduce and compare the header before and after.
 
-- Keep the Teredo build and the master dump playable and untouched; back things up before changing anything.
-- Debug menu stays on Multiplayer â†’ Split Screen.
-- Server language: Python (the user had no preference). Testing will be on 2 PCs once available.
-- They like short, practical explanations, with one-command scripts for anything they have to run.
-- They actively play online with the Teredo build, so leave it registered when you're done testing.
-- EOS credentials live in `_netmod\eos.local.ini` (git-ignored) and get copied to the Direct build as `eos.ini`. The client secret was visible
-  to session 1 through a file-change notice. Before any build with credentials is shared, create a separate client in the Epic portal.
-- They want as little player setup as possible: no Epic accounts for players, and no port forwarding or router changes.
+Colour names, Alpha still wrong (2026-11-11, Experimental 152, diagnostics). Chaos Murloc on 151: capitals fine, but with Alpha ("player") picked the COLORS box showed the character before it (Edgar: BLACK / WHITE / ORANGE / BLUE). The code maps "player" to Alpha, and the earlier logs only list each text once, so the order of draws around Alpha is unknown. 152 logs every change of the name line ("character select: name line now '...'") and each change of the character the COLORS rows use ("COLORS rows for ..."), up to 300 each.
 
-## 11. "Cross lagging" (reported 2026-10-18, Teredo build)
+Colour names in capitals (2026-11-11, Experimental 151, the user: "the UI is odd"). Chaos Murloc's screenshot (149): "COLOR Orange" ran past the COLORS box, and the font's lowercase letters looked out of place. The row is now only the colour's name in capitals ("BLACK", "FULL BLUE"), keeping the number's style code \a1f; one text buffer per row. The same screenshot showed Edgar's colours on Alpha ("player"), fixed in 150.
 
-- **Symptom:** in a 4-player online match, two players stop seeing and interacting with each other, while the other two still see
-  everyone. When one of the two dies, the other's game decides no opposing team is left and ends the match. It's random, but more common with poor or
-  international connections.
-- **Interpretation:** a missing or dropped link in the full peer mesh (each pair of players has its own Teredo/SDA link).
-- **Not caused by pdnet:** in teredo mode every `Windows.Networking.XboxLive.*` activation goes to the OS. During matches the DLL only
-  writes small save blobs (`progress.dat`, `0.dat`) on background threads.
-- **This PC:** Teredo qualified, NAT restricted (port) with no UPnP (Xbox "Moderate"), wired, ~10 ms to the Teredo server, with Teredo set by Group Policy (Enterprise Client).
-- **Tools:** `_netmod\lagmonitor.ps1` (read-only, logs Teredo state, ping and loss to a Desktop CSV). Open NAT on the user's side (UPnP or port forwarding) is the user's call.
+Colour names, Alpha (2026-11-11, Experimental 150). MojoJoey's 149 log: the name line is "\a130c%s" with the character's name as its argument ('Ommato', 'Freia', 'Cuff Button', 'pH', ...), and no "left as a number" lines, so 149 swapped the colours. Alpha's name is drawn as "player", so it kept the character before it: "player" now counts as Alpha, and a name not in the list clears the character (its number stays).
 
-## 10. Session history
+Colour names, second try (2026-11-11, Experimental 149). 148 didn't change anything: MojoJoey's log (DESKTOP-SPGBBIA, 148 code) had only two texts on the character select, '%s' and 'COLOR %d', so no character name was ever matched. The %s argument was only read when %s ended the text. Now it is read wherever %s is, and both the whole text and the argument are matched against the names. The log line also has the raw text (\a codes shown) and the argument, and "COLOR N left as a number (...)" says why when nothing changes. If the name turns out not to be text at all (a picture), the character has to come from the game's own state instead.
 
-- **Session 1** (2026-10-17, ~12:00â€“12:50): recon, the pdnet shim (saves, then stage 2 networking), menu move, build folders, this handoff.
-  Two of its responses were stopped by the safety classifier (Â§8). It ended with the source tree broken.
-- **Session 2** (2026-10-17, ~12:54â€“13:10): `git init` in `_netmod`, source repair, smoke test, test peer. Its commits carry the user's git name.
-  `git log` shows the test-peer commit `8abdf07` first even though its author date (12:19) is earlier. Go by commit order, not the date.
-- **2026-10-18:** the user played online with the Teredo build (log entry at 17:10). Session 1 updated this document to match git and the files on disk.
-  Also: the test kit, the cross-lagging diagnosis and `lagmonitor.ps1`, and the third classifier stop.
-- **2026-10-19 (session 1):** EOS plan, feasibility test plus credential store, `nosuspend.ps1`, long-lived EOS sign-in, the sign-in recon in Ghidra,
-  and Xbox-free mode up to stage A (create match works). The fourth classifier stop came at the start of stage B; then this update.
-- **2026-10-19 (session 3):** stage B from `STAGE_B_GUIDE.md`: EOS lobby layer, EOS-backed session store, search handles, change events,
-  `lobbytool` (second EOS client) and its self-test against EOS. No classifier stop this time. Not yet run in the game (Â§4.9).
-- **2026-10-19 (session 3, later):** stage B tester kit for unpacked copies: `testkit-stageb\` + `make-testkit.ps1 -Stage B` â†’
-  `D:\PhantomDust-pdnet-StageB-TestKit-2026-10-19.zip` (DLL `A3755102`, the one tested in game and installed in the Direct build; **no eos.ini
-  inside** â€” send a tester client's eos.ini separately). Also started, **untested and parked**: running pdnet in an unmodified Microsoft Store
-  install via a launcher (`pdnet\tools\pdlaunch.cpp`, `testkit-store\store-setup.ps1`/`store-remove.ps1`): Windows' package-debugger setting
-  starts `pdlaunch.exe`, which injects `pdnet.dll` and calls its new `PdInjectedInit` export; with `xbox=off` the activation hook then answers
-  `Microsoft.Xbox.Services.*` itself. Not needed now (the tester has an unpacked copy). Note: `pdnet\build-stageb` now holds a rebuild with
-  this injected-mode code (dump mode unchanged in intent, but not re-run in game); rerunning `make-testkit.ps1 -Stage B` would package it.
-- **2026-10-19 (session 3): FIRST TWO-PC TEST PASSED (stage B + direct UDP), user + one tester on different home networks.** Kit
-  `PhantomDust-pdnet-StageB-TestKit-WITH-EOS.zip` (DLL `A3755102`, tester EOS client). Run 1: user joined the tester's lobby through the EOS
-  browser and lobby join worked, but the match connection timed out (host's advertised address was a private LAN address on another network).
-  Run 2: user hosted with UDP 43210/43211 forwarded and `advertise_ip=<public IP>`; the tester found and joined the lobby, connected directly
-  (`sda: inbound connection ... (seen as <tester's public IP>)`), and **the user reports everything running correctly** (lobby and match).
-  Remaining: automatic internet connectivity without port forwarding (stage C, e.g. EOS P2P relays â€” see Â§8 before starting), longer soak,
-  `xbox=on`/Teredo regression check.
-- **2026-10-20 (session 3): stage C â€” match traffic through EOS P2P (`network_mode=eos`), commit `76c4d44`, DLL `pdnet\build-stagec`
-  (MD5 `C5F9697B`), design at the top of `src\p2p.h`.** Device addresses v2 carry the EOS product user id; pairs to v2 peers handshake over
-  EOS P2P and the game sends to a local "link" socket that pdnet bridges to the peer (Epic does NAT traversal, relays as fallback). v1 peers
-  (older kits, other modes) keep direct UDP â€” so both players need this build in `network_mode=eos`. EOS thread pumps every ~2 ms
-  (`timeBeginPeriod(1)`). Every 10 s each link logs ping/jitter/loss/path/traffic (`p2p: link ...`).
-  **One-PC test passed in game (Direct build, 00:09):** `lobbytool p2ppeer 20` = 4/4 PASS over EOS P2P (ping, connect/ack, HELLO both ways,
-  heartbeats, delete), ping 3â€“4 ms, 0 loss. `lobbytool p2ppeer 30 force` (Epic relays only) = 4/4 PASS, ping ~42 ms, 0 loss.
-  Known issue: the direct/relayed label is unreliable (EOS reported "direct" with forced relays; the game side kept a stale label because no
-  close event came between runs) â€” use the ping. Next: two-PC test with no port forwarding, then measure real matches; redundancy later.
-- **2026-10-20: stage C tester kit** `testkit-stagec\` (README for no port forwarding, `network_mode=eos`) built with
-  `make-testkit.ps1 -Stage C -EosIni .\eos.tester.ini` â†’ `D:\PhantomDust-pdnet-StageC-TestKit-C5F9697B-with-eos.zip`. Kit zips are now named
-  after the DLL's MD5 prefix (the clock jumps made dated names ambiguous). Both players need stage C; the user's Direct build already matches.
-- **2026-10-20: wrong card names in Xbox-free mode** ("Aura Particle" shown as "Rebirth", still behaving as Aura). Cause: the dump's
-  `Assets\Data\gstorage\gsdata_en.dat` (C519B2D8, 2022-07-12) is an edited copy; next to it are `gsdata_en.dat.bak` (984175A8) and
-  `gsdata_en - Copy.dat` (892EEDB6, 2022-07-06, header matches the untouched gsdata_ja.dat). Card text is identical in all three; the header
-  differs: u32 at 0x14 = 374 originally (750 edited) and u32 at 0x18 = 301 originally (300 edited, off by one = names shifted by one entry).
-  On Xbox Live the game downloaded the real blob, so this only shows with pdnet serving local files. Fix (Direct build only): the original
-  copy as an override, `D:\PhantomDust-Direct\titlestorage\gsdata_en.dat` (pdnet checks `titlestorage\` first). Master and Teredo untouched.
-  Not yet confirmed in game. Testers with the same dump would see the same bug.
-- **2026-10-19/20: crash when leaving a lobby (both players)** â€” access violation at PDUWP.exe+0xA7083. Ghidra: `FUN_14009c7c0` is the
-  game's session-write task; it polls `TryWriteSessionAsync` every frame and calls `GetResults` on it more than once, then reads
-  `WriteSessionResult.Succeeded` without a null check. C++/WinRT coroutines move their result out on the first `GetResults`
-  (`return std::move(m_result)` in windows.foundation.h), so the second read was null. Fix: `xsapi\repeatable.h` wraps every implemented
-  MultiplayerService operation (writes, reads, by-handle, search) so results can be read again. Build `build-stagec` MD5 `61C45C57`.
-  **Not yet confirmed in game.** Other stand-ins still use plain coroutines; wrap any that crash the same way.
-  Installed in the Direct build (61C45C57) and packaged as `D:\PhantomDust-pdnet-StageC-TestKit-61C45C57-with-eos.zip` (replaces the
-  C5F9697B kit, which has the leave crash).
-  **Confirmed by the user (2026-10-19): leaving a lobby no longer crashes; stage C kit 61C45C57 works between the two PCs.**
-- **2026-10-20: nametag investigation (user wants nametags kept on dead bodies).** The over-head nametag is the white gamertag (from the
-  session, i.e. pdnet). Ghidra: players in a 4-entry table `DAT_1404bc9d8` (position at +0x12e40, flags +0x10/+0x20/+0x24), names for HUD
-  panels in `DAT_1404bca30` (65 bytes each); HUD panels/scoreboard (`FUN_140155310`, `FUN_140150c30`, `FUN_1401ca1e0`) draw via
-  `FUN_1402477e0` â€” none of that is the floating nametag, which is probably remaster code reading the gamertag via the XSAPI classes.
-  New debug option `name_trace=on` (`xsapi\nametrace.*`, commit `9acf2fe`, DLL `pdnet\build-nametrace` 7D824149, not shipped): hardware
-  breakpoints on copies of other players' gamertags, logs the PDUWP.exe call chains that read them. One-PC check (lobbytool in the lobby):
-  works, no crash, 23 heap copies, reads from chains under `140009b06 <- 140008953 <- 1400c58f6`. Next: a real match with the tester while
-  name_trace is on (only the PC that should see the tags needs it), someone dies, then compare chains during life vs after death.
-  The Direct build currently runs build-nametrace with name_trace=on; switch back to build-stagec (61C45C57) for normal play.
+Colour names on the character select (2026-11-11, Experimental 148, the user's request, not yet seen in game). livecharasel (menu 46) draws "COLOR \a1f%d" through the draw-text command (HookedDrawText) with the colour number 1-4 as its argument. ColourNameText swaps it for the colour's name from the user's list (kCharacterColours: Freia Grey/Red/White/Black, Alpha, Edgar, ... Scoto). The character is the last text drawn on that screen that matches a name in the list (\a codes left out, any case); every distinct text drawn there is logged once ("character select draws '...'") to check the names match. The user's list gave Chunky "3 red" twice; read as 4 red. No list entry for Mechano, Euroto, Hedono, Germano, Belono: they keep the number.
 
-## Discord lobby watcher (lobbytool watch)
-`pdnet\tools\out\lobbytool.exe watch` searches the Phantom Dust lobby bucket every `interval_seconds` (default 15, min 10) and posts to a Discord webhook:
-- new lobby -> "opened a lobby" (lobbies already open when the watcher starts are only logged)
-- member count change -> "n/max players"
-- gone from search twice -> Read by id: still there with members -> "full" (search hides full lobbies), else "closed"
-- lobbies with 0 members are ignored (Epic keeps an empty lobby for a while after the host leaves)
-Settings: `lobbywatch.ini` next to the exe: `webhook_url=...` and `interval_seconds=`. tools\out is git-ignored; never commit the webhook URL.
-`lobbytool.exe watch dry` prints the messages instead of posting (the console shows emoji as mojibake; the webhook body is UTF-8).
-Uses the eos.ini credentials next to the exe like the other lobbytool modes.
+Preview hang watchdog (2026-11-11, Experimental 147, diagnostics). toaf and now mitocato (both without story progress) have the game stop for good on leaving the editor or stock list; toaf's last line was the preview's state 4 (stopping). If the menu frames stop for 3 s while pdnet's town session is there, a thread pauses the game's main thread, logs its call stack in Ghidra addresses ("preview: the game has stopped for N s ... main thread at: ..."), and resumes it; up to 3 times per stop. A fresh-save test on the developer PC is next.
 
-## Discord announcements from every player's game (discord_webhook=)
-pdnet.ini `discord_webhook=<URL>` (src/discord.*): the PC that owns a public SearchableGame lobby posts to the webhook
-on a worker thread: opened (mpsd Write, created + owner), player count / full (OnLobbyEvent -> LobbyChanged),
-closed (Write leave when last member -> LobbyLeft; EOS Closed/Kicked -> LobbyLost). Host migration: the old owner stops,
-the new owner adopts the lobby silently and announces later changes. A crashed/killed host posts no "closed".
-The stage C kit pdnet.ini has `discord_webhook=`; make-testkit.ps1 fills it from -Webhook or pdnet\tools\out\lobbywatch.ini
-(-Webhook none = off). The URL is then inside every kit: if abused, delete the webhook in Discord and rebuild kits.
-Don't also run `lobbytool watch` on the same channel, or lobbies are announced twice.
+Arsenal case number while editing (2026-11-11, Experimental 147, the tester MojoJoey on Stable 12: "Limit[1]" on a 2-school arsenal). The thread that keeps each case's school number (+0x50) in step with its skills ran only in game states 0 and 13, so never during a match. Since the skill preview (135) the editor runs on top of pdnet's town session, game state 6, so the arsenal being edited kept its old number until the player left the Lab (the log then has "arsenal case N: 2 school(s) in it, number 2 (was 1)"). It now also runs while the menu is one of the Lab's (InLabMenus).
 
-Discord messages: 'opened' is posted once the lobby has the game's search handle and names gametype (0 Battle Royale, 1 Tag Team, 2 One-on-One) and gamerule (0 Standard Battle ... 11 Annihilate the Odd One, order from Assets\Data\Menu\livesession_en.ssb); no rating. Confirmed in game with build-discord2 (7C6381D2), installed in the Direct build.
+Blank lobby rows (Experimental 138): done, the user confirmed (2026-11-10).
 
-Discord toggles (pdnet.ini, default on): discord_lobby_messages (opened/closed), discord_player_messages (<name> joined/left/full). Join/leave messages name players from each member's PD_NAME.
+Stable update zip says DO NOT DOWNLOAD (2026-11-10, the user's request). build.bat promote uploads pdnet-update-<build>.zip with the GitHub label "DO NOT DOWNLOAD - automatic updates only (pdnet-update-<build>.zip)" (PublishRelease's $labels). Only the shown name changes: pdlaunch finds the asset by its download link, which keeps the file name. The stable-12 release had lost its update zip (removed on GitHub after publishing, so Stable kits couldn't update to 145); it was uploaded again from out\ (same sha256 as in the notes) with the label.
 
-"Closed" on game exit (2026-10-27): when the game exits while alone in its lobby, pdnet writes `discord-close.txt` and pdlaunch edits the message to "closed". Both now skip this when discord_lobby_messages is off (before, it still happened whenever player posts were on). Fix ab55850 on master, c081b28 on kit27; testers need the new pdnet.dll and pdlaunch.exe.
+Stable 12 (2026-11-10): Experimental 145 promoted at the user's request (build.bat promote 145), the first Stable as the public version. Tag stable-12 = master 68ca15f, pushed. The release has the whole kit PhantomDust-Rebirth-Stable-12.zip (eos.ini and the public links from private\public-links.ini) and pdnet-update-145.zip. Since Stable 11: the skill preview in the multiplayer Lab and lobby (135/136), relay and join fixes (138-140), the 22 s P2P join wait, Setup's firewall step (142), the network self-test (141/143), Online Settings, the Public channel folded into Stable. Not in it: the dead-player free camera (Conceptual only).
 
-Options > Sound row (2026-10-27, works): Aura Particle Beeps (On / Off, settings.ini aura_beeps) under Music / Sound Effects Volume. A Menu Sounds row was tried and dropped (the cursor sounds come from the game's own code at 0x14024B456 / 0x14024B118, not only from menu cmd g1 #43). The SOUND window (menu 4 option, window 4, built at 0x01350 of option_en.ssb = the dump's option_enx.ssb) gets the rows from HookedAddItem; its key handler (0x02AF4) and row drawing use option 4 + cursor row via menu cmd 66 / 67, so option 6 is pdnet's while the script state is SOUN (menu cmd 12 / 6). Every sound starts in FUN_140240870 (2D) or FUN_140240a00 (3D): bank edx, cue r8d, sound r9d; both inline-hooked (SoundOff). sound_log=on logs every sound once, with its caller (for 3D sounds through FUN_140276330, that function's caller). Aura beep: bank 1 sounds come from the stage's sound emitters (FUN_1402214c0: mode 0 replays its cue on a timer, mode 1 starts a loop once). Muting 3D bank 1 cue 4 (the loop, Experimental 34) or cue 1 (the timed one, Experimental 35) did not stop the beep. The beep is the aura counter: FUN_14024de20 raises a player's aura and plays 2D bank 0 cue 5 each time the whole number goes up (own player only; call at 0x14024DF22). Experimental 36 mutes exactly that call when aura_beeps=off: confirmed in game by the user (2026-10-27, the beeping stopped). 3D bank 0 cues 34 / 35 are footsteps (FUN_140231010 / FUN_1402311e0).
+Confirmed by the user (2026-11-10): Experimental 136 (lobby joins after using the skill preview: game state 13 -> 0) and Experimental 139/140 (relay remakes: only the lower-id PC remakes, the waiting PC leaves its connection alone) count as done.
 
-Texts (2026-10-28, Experimental 50): the build label now reads "pdrebirth <kit>" (was "pdnet <kit>"; "Rebirth <kit>" from Experimental 52); the Settings screen's Voice Mode hint is shorter ("Modern: Mic mutes only you. Classic: Off mutes everyone."); every menu text saying Xbox Live says Online (RenameXboxLive, run on every menu script by the MenuTextPatches watcher, now always started): phrases first ("Go to Xbox Live" -> "Go online", "Use Xbox Live to connect" -> "Connect", "signed out of Xbox Live" -> "signed out", ...), then "Xbox Live" -> "Online", "XBOX LIVE" -> "ONLINE"; all shorter, written in place. kMenuItems / kSettingsTexts also accept the "Online Options" / "ONLINE OPTIONS" spellings (still renamed Settings). The Help item's "Copy your Xbox Live save" stays (it is the Xbox save). Experimental 51: the multiplayer menu types its header out on its first visit, before the 50 ms watcher renamed it ("Xbox Live_"), so RenameXboxLive also runs in an inline hook on FUN_1402aa620 (prepares each script right after it is read, before it runs; starts `test rcx,rcx / jz 0x1402aa7d8`, replayed with an absolute jump).
+Release model reframed (2026-11-10, the user's request): Stable is now the public version (the newest bug-fixed, smooth build); Experimental is for testing and bug fixing; Conceptual stays separate. The Public kind is gone.
+- pdlaunch: channels are stable, experimental, off. A leftover update_channel=public, or a "Public" kit label, follows Stable. Options > Updates cycles Stable > Experimental > Off and reads public the same way. Texts in config.cpp, pdnet.ini and README updated.
+- build.bat promote N now does what public N did: the Stable kit gets private\public-links.ini, tag stable-M, and the release carries the whole kit (PhantomDust-Rebirth-Stable-M.zip, for first installs) plus pdnet-update-<build>.zip. build.bat public is removed.
+- The public-1 release and tag were deleted (GitHub and local). Public 1 players switch Options > Updates to Stable themselves. Their old launcher won't follow Stable by itself; the first update brings the new one.
+- Stable 11 still has the tester links; the next promote is the first Stable with the public links.
 
-Players removed with the admin tool (2026-10-28, Experimental 49): the admin tool (outside the repo) zeroes every stat of a removed player, the PlayerName stats included, but EOS keeps a 0 entry on each board, which the game showed as "Player 0002dc" with 0. scores.cpp Ranks now leaves out entries with score 0 and no name stats at all (a real player always has a name: pdnet sends it every session, so a removed player who plays again shows up, named, as normal).
+Self-test, more detail (2026-11-10, Experimental 143). Risryn has the loopback exemption (CheckNetIsolation -s lists it) and the Windows Firewall entirely off, yet UDP to the PC's own address doesn't arrive. The self-test now:
+- tests 127.0.0.1 as well as the own address;
+- lists every adapter that is up (name, description, type, addresses), to show a VPN or virtual adapter;
+- runs again when the first link opens, so 'UDP port 43210 held by' shows the game's bound IPv4 address.
 
-Discord "closed" after a host hand-over (2026-10-28, Experimental 48): when the host left with others still in, the player who took the lobby over only marked the message closed if their OWN lobby-posts setting was on, so with it off the message stayed "Open". Since Experimental 41 a message exists only if the original host posted "opened", so "closed" (LobbyLeft, LobbyGone, the exit note and pdlaunch's CloseDiscordMessage) no longer checks this PC's setting: it edits the message whenever there is one, and Send still drops it when there isn't.
+If 127.0.0.1 works and the own address doesn't, pdnet could route game <-> link traffic over 127.0.0.1 (sda pair addresses and GameAddress use net::InterfaceIp now). Not done yet; it depends on the address the game's socket is bound to.
 
-Joins that hang (2026-10-28, Experimental 47): logs from SnowRyze, hammy and toaf showed the same thing: the joiner joins the lobby, voice works, but its join requests (p2p control channel) get no answer for 50 s or never, until EOS's link comes up (then the host answers within 250 ms). The host only accepted a connection when Epic's "wants to connect" notice reached it (OnRequest), and that notice travels over Epic's notification socket, which toaf's log showed dropping ("Client didn't send heartbeat"). Now every lobby member's connection is accepted as soon as they show up in the lobby (mpsd OnLobbyEvent -> p2p::Expect: EOS_P2P_AcceptConnection on the EOS thread, plus a ping from this side so the connection is opened from both ends; once per player per minute). Log: "accepted ahead of its request", "reached from this side".
+Setup lets the game through the firewall (2026-11-10, Experimental 142, the user's request).
+- Risryn's 141 self-test: 'UDP to this PC's own address (192.168.0.109) does NOT get through (nothing arrived, error 10060)'; the game's port was held by nobody else.
+- The admin step moved to kit\pdnet\firewall.ps1 (one prompt, as before, elevated with a hidden window). -Add:
+  - sets the loopback exemption;
+  - adds Windows Firewall allow rules for the app (group "pdnet", UDP in and out, by its AppContainer SID from DeriveAppContainerSidFromAppContainerName);
+  - switches off every enabled Block rule naming the app (by SID, or a program path ending \PDUWP.exe). Windows makes one when its firewall question is cancelled, and Block wins over Allow. Their names go to firewall-disabled.txt.
+  - It logs to pdnet\firewall.log, and Setup says when it switched block rules off.
+- -Remove (Remove.bat, Restore-XboxLive.bat) deletes the exemption and the pdnet rules and switches those rules on again.
+- Tested on the developer PC: -Add elevated gave exit 0 and both rules added (netsh shows the inbound one enabled). There were no block rules here, and -Remove wasn't run (it would drop the exemption). A normal PowerShell can't list the rules (Get-NetFirewallRule needs admin); netsh can.
+- For Risryn: update to 142, close the game, run Setup.bat (from the kit folder), allow the prompt.
 
-Discord lobby message layout (2026-10-27, Experimental 45, from the community's spec): one message, edited in place:
-  🌐 3/4 Open Lobby - Rated Standard Tag - toaf joined the lobby
-  AnoMayCry / Snow Ryze / toaf / < public slot > (one line per slot: host first, then join order)
-"Full Lobby" at 4/4; first event "<host> opened the lobby"; closed: "🔴 Closed Lobby - <match> - <host>'s lobby closed". ShortMatch: rated, rule, type in short terms (BR / Tag / 1v1; Standard, Ante, Quick, Puny, Heavy, Spec Enviro, 1 School, Highlander, Puny Only, Heavy Only, KO, Odd One Out). Plain text (Experimental 46: the user didn't want 45's code spans); names markdown-escaped (Plain -> Name). The webhook gets the real 🌐, not ":globe_with_meridians:" (webhooks don't convert shortcodes). lobbytool watch still uses MatchDescription.
+Network self-test (2026-11-10, Experimental 141). Risryn (OTTER, Public 1) still can't join anyone, also after running Setup.bat again (loopback exemption).
+- Every OTTER log shows "game out 0" on every link, though the links connect (19:34: 3 ms direct to Bosharoo, 50 ms relayed to the user) and the other games' packets arrive ("in 5"). The game gives up about 30 s after joining (menus 84 / 53). Voice works: it's EOS RTC, not the game's socket. Bosharoo's game traffic with others is normal (18:51: 131 packets each way).
+- So something on Risryn's PC keeps the game's packets from reaching pdnet's link socket.
+- pdnet now logs, 3 s after p2p starts:
+  - 'p2p: self-test: UDP to this PC's own address ... gets through / does NOT get through': a socket like a link's sends to another one at InterfaceIp.
+  - 'UDP port 43210 held by: the game / OTHER process <pid>' (GetExtendedUdpTable).
+  - The monitor logs '<peer>'s game packets arrive, but this game has sent none into the link for 20 s'.
 
-Scoreboard entry hidden (2026-10-27, Experimental 44): the user asked to remove "phantomdust.online" from the leaderboard. A game client can't delete another player's EOS stats (only the Epic Developer Portal / server tools can), so scores.cpp Ranks drops entries whose name matches kHidden (case-insensitive; never this PC's own), moves the ranks below up, and logs the hidden product user id ("is off the boards") so it can be matched by id later. Players on older kits still see it.
+Waiting PC leaves its connections alone (2026-11-10, Experimental 140, untested). In 139 the higher-id PC still forced relays (EOS_P2P_SetRelayControl) while the lower-id PC remade the connection.
+- 19:04 (Bosharoo on 139, Risryn on Public 1): EOS answered 'Failed to set new PeerConnection configuration ... unsupported way', the connection closed on that side, and the other side's signalling was dropped ('from unknown peer'). The relay link only formed after EOS's 30 s signalling timeout, by when Risryn's game had shown its join error (it gives up about 30 s after joining the lobby).
+- 19:12, three PCs (host 00024f6b DESKTOP-ANDG88R, Risryn, Bosharoo with its VPN off):
+  - Bosharoo's join request to 00024f6b went unanswered, though 00024f6b showed 'connected: relayed' to it after 1 s.
+  - Bosharoo's relay flip at +6 s broke both of its connections ('unsupported way' twice).
+  - The link to 00024f6b took EOS's 45 s, and the pair Risryn-Bosharoo carried only pings.
+  - With one mesh pair missing, no game data flowed (game out 0 / in 0-6 on every link), and all games gave up after ~30 s (menus 84 / 53).
+- Now the higher-id PC changes nothing (it only logs 'leaving it to the other PC'). The lower-id PC's relay-only remake still reaches it: its accepted connection takes the relay candidates.
+- Everyone in a lobby needs 140 for this; Public 1 players don't have it.
 
-Player identity kept outside the game (2026-10-27, Experimental 43): the scoreboards (EOS Stats / Leaderboards) count the EOS product user, which comes from the device-ID credential pdnet keeps in LocalState\eos\credentials\*.cred (credstore.cpp: the sandbox can't use Credential Manager), next to LocalState\pdnet\identity.txt. Uninstalling the game deletes LocalState, so a reinstall signed in as a new Epic user (a duplicate on the boards). pdlaunch (KeepIdentity) now copies each of those files, as they are (DPAPI-protected), into Windows Credential Manager (generic "pdnet/identity/<file>", CRED_PERSIST_LOCAL_MACHINE, this Windows user) the first time it sees them; before every game start it puts a missing or different file back, so the first identity kept is the player's for good. Lost only with the Windows user profile (or by deleting those entries in Credential Manager).
+Joins that never connect after a relay switch (2026-11-10, Experimental 139, untested). Logs from Risryn (OTTER, Public 1 kit) joining Bosharoo (LAPTOP-T9HL9H1M, host on 10.2.0.2):
+- Both sides switched to Epic's relay on their own, 2 s apart: Risryn 18:33:54.5 'didn't answer a request in 6 s', host 18:33:56.6 'gave no answer in 8 s'. Each closed and remade the connection, and the remakes collided: EOS 'connection candidate address for unknown session id', 'no-longer signaling'.
+- Both then showed "connected: relayed", but 5/5 pings were lost both ways from then on. The first join request did get through once (18:33:59); every later join attempt (18:34:57, 18:36:05) went unanswered, and the game showed its join-error menus.
+- NoAnswer never remade a connection that was already relayed, so it stayed dead for the game run.
+- Change (p2p.cpp NoAnswer):
+  - Only the PC with the lower EOS product user id remakes the connection. The other forces relays (g_relayWanted) and waits; if it is asked again a minute later (the other side may run an older pdnet), it remakes it itself.
+  - Monitor's 'answered none of the last pings' now also remakes a relayed connection (deadRelay).
+- Needs both players on 139+ to avoid the collision. Public players (like Risryn) only get it with a new Public.
 
-Start-up volume in matches (2026-10-27, Experimental 42): a match has no menu (CurrentMenu -1), which SignalPastTitle counted as the intro, so matches played at splash_volume. "No menu" now counts as the intro only before the player is first past the title.
+Blank lobby rows and slow joins (2026-11-10, Experimental 138, untested). The user's screenshot: a Tag Team lobby with two rows with no name, character or rating (red hand, ping shown).
+- The user's log: the user joined as a client and connected to all three PCs within 0.3 s. Every 12 s the host link carried ~185 packets each way, but the links to the two other clients only ~159 out and ~37 in (pings): their game data never came.
+- 00022146 dropped and rejoined (18:14:14-19), sent its own join request to the user, and was symmetric after. 000261da ("Player 000261", ~260 ms) never sent one. 000261da is a PC whose first answer takes more than 6 s whenever someone joins it (18:12:59, 17:48).
+- Same pattern in toaf's 15:28 join: the request went unanswered for 6 s, p2p reconnected through Epic's relay, the answer arrived at 15:28:26.955, 0.1 s after sda's 12 s P2P wait ended. sda then fell back to 3 s of direct UDP, which timed out, and the game had to retry.
+- Change: the sda join waits 22 s over EOS P2P before trying direct UDP.
+- Still open: why existing clients don't open their own link to a new joiner (000261da). Needs that player's log.
 
-Discord, no posts for an unannounced lobby (2026-10-27, Experimental 41): a host with lobby posts off still got a "closed" message, posted by another player's game after EOS handed it the lobby (host migration adopts the lobby as announced; with no PD_DISCORD message id its "closed" became a new POST). Now only the "lobby opened" job (Job::opening) may create a message; player posts and "closed" only PATCH an existing one (else logged "has no message (not announced) - nothing posted"). Every player needs Experimental 41+ for this.
+"Online Settings" (2026-11-10, Experimental 137, the user's request): the multiplayer menu's Settings item (was Xbox Live Options) and its screen heading read Online Settings / ONLINE SETTINGS (kMenuItems, kSettingsTexts). The heading is relabelled in place: it fits, as the script's text was "XBOX LIVE OPTIONS". The README, pdnet.ini comments and FEATURES say so too. Not yet seen in the game.
 
-Controllers (2026-10-27, Experimental 40, untested beyond Xbox): the game reads pads only through Windows.Gaming.Input.Gamepad (factory IGamepadStatics fetched once, FUN_1400deb80; no XInput / DirectInput), which lists Xbox and XInput pads only. pdnet answers that class (hooks.cpp -> gamepads.cpp PadFactory): Gamepads = the OS list + one VirtualPad per pad in LocalState\pdnet\pads.bin (padshare.h; seqlock, heartbeat), GamepadAdded/Removed for those too, Vibration written back. pdlaunch's ReadControllers thread loads SDL3.dll (3.4.18, next to pdlaunch, from C:\Users\ryhol\tools\downloads\sdl3; build-pdlaunch.cmd copies it to tools\out, make-testkit ships it) and writes non-Xbox pads every 4 ms in Xbox layout (SDL south/east/west/north = A/B/X/Y; Y axes flipped), rumbles them from the game's Vibration. Xbox types (SDL XBOX360/XBOXONE, incl. XInput off-brands) are skipped; SDL hints: HIDAPI_XBOX off, WGI off, background events on. pdnet.ini more_controllers=off turns both sides off.
+Public kits default to the public channel (2026-11-10, the user's request). build.bat public N now writes update_channel=public into the Public kit's pdnet.ini; Options > Updates (settings.ini) still wins. Public 1 was built with the line empty, which already meant public: pdlaunch and the Updates row both take the kit's kind from "Public" in kit-version.txt. Updates never change an installed pdnet.ini, so this reaches only kits downloaded from the next Public on.
+- Public 1 rebuilt with it (user's request, 2026-11-10): D:\PhantomDust-pdnet Public 1.zip got update_channel=public, and the release's PhantomDust-Rebirth-Public-1.zip was replaced.
+  - The release had lost its update file pdnet-public-133.zip; it was uploaded again from out\ (same sha256 as in the release notes).
+  - Tested: a fresh unzip, pdlaunch -update: 'up to date (build 133, public channel)'.
 
-Kit layout (2026-10-27, from Experimental 39): Setup.bat alone at the top of the zip, everything else in a pdnet\ folder (README, the other .bat/.ps1 files, pdlaunch.exe, pdnet.dll, pdnet.ini, eos.ini, EOS SDK, xaudio2_9redist.dll, kit-version.txt). Setup.bat runs pdnet\setup.ps1; every script uses its own folder ($PSScriptRoot / %~dp0) and pdlaunch / pdnet look next to themselves, so the debugger command line and the icacls grant point at the pdnet folder. make-testkit.ps1 writes the zip entry by entry with forward-slash names (Compress-Archive and ZipFile.CreateFromDirectory on .NET Framework write backslashes), reads kit-version.txt from pdnet/ (or the top, older kits), and takes -Commit <kit27 commit> for the Source line. The active kit folder (pdnet.log "config: reading") is now <kit>\pdnet.
+Skill preview fixes (2026-11-10, Experimental 136, untested):
+- (1) Lobby joins after a preview. The tester toaf joined the user's lobby right after using the preview and showed as "half-joined" on the host: red row, ping "-". On toaf's side the EOS P2P link came up, then after 6 s the game opened its join-error menus (84 livegterr, 53 liveerror) and left. A town session started with "menu after" -1 ends in game state 13 (FUN_14012b7a0), not the menus' 0, and the join failed there. The successful join before it had logged 'game state 0 (lobby / menus)'. Now, once the session has closed, a game state of 13 is set to 0.
+- (2) The game stuck for good after leaving the Lab (the user's PC). Read live: game state 13, the audio loader idle (+0x48 = 0) with 3 jobs left in its queue (+0x70). RestoreMenuAudio (FUN_14021a6a0 + FUN_14021ad70, DSP_Menu) had run as the player backed out of the Lab into the multiplayer menu, which loads its own sound. It is no longer called.
+- Open:
+  - toaf (no story progress, a PD Helper modpack): the preview runs, but "doesn't use the skills", and the game freezes on the last stop as they leave the editor (state 4, then nothing; it restarts about 15 s later). Stops inside the editor work.
+  - On the user's PC (story save) both are fine. Not reproduced yet; a fresh-save test here was offered and is on hold.
 
-Version label raised (2026-10-29, Experimental 67): on the main menu the game's "Skill Update 1.40 applied" and pdnet's version line under it (HookedDrawText) are drawn 24 px higher, so the version line no longer runs into the hint line (the item descriptions, drawn on the same row from the left).
-Community button (2026-10-29, Experimental 66): the main menu's old Help & Support button, which pdnet had turned into Import Xbox Save, is now "Community" (help_main / help / help_hint texts) and opens discord_invite (new pdnet.ini key) in the browser: gamesave.cpp's Launcher stand-in catches the game's xbox.com request as before and launches the invite instead of ImportCloudSave (kept, unused). make-testkit fills discord_invite from discord_invite_url= in the untracked lobbywatch.ini. The user will change the invite and both webhooks for the first public version and wants a reminder before that build.
-Clock check (2026-10-29, Experimental 59-64): the MSI tester PC (clock about 31 h fast) and the user's desktop connected (direct and through Epic's relay) but never passed a packet; with the clock corrected they joined at once. EOS's encrypted P2P link seems to fail when two PCs' clocks are more than about a day apart. From 64 the Windows clock is not changed at all: pdlaunch, before injecting pdnet, reads the Date header of a HEAD to https://api.epicgames.dev/ (certificate date errors ignored; 3 s timeouts) and writes the seconds this PC is behind into LocalState\pdnet\clock-offset.txt (deleted at each start; clock_check=off: none). pdnet's eossdk::Load then calls CorrectEosClock (src\eosclock.cpp): if the offset is a minute or more, the EOS SDK module's imports GetSystemTimeAsFileTime, GetSystemTime, GetLocalTime (kernel32), _time64 and _ftime64 (api-ms-win-crt-time) return the corrected time, in that DLL only. Logged as "clock: ..." in both logs. Not yet tried in a match with a wrong clock. History: 59/60 asked with a message box and 61 with an admin prompt from pdlaunch, all of which opened behind the full-screen game or only flashed in the taskbar (a background process can't take the foreground); 62/63 had Setup.bat add a SYSTEM scheduled task "Phantom Dust clock" (62 as an -EncodedCommand, which Windows never started: an encoded PowerShell command making a web request is held, probably by Defender's script scanning; 63 as C:\Program Files\Phantom Dust pdnet\clock.ps1). The user asked for no Setup step, so the task is gone from Setup; Remove.bat still deletes the task and that folder.
+Lobby Arsenal Lab: no "Player 2 copied arsenal" warning (2026-11-07, Experimental 132, confirmed by the user in Stable 11; 131 was the dynamic-cases build from pull request #5). Reported in Experimental 130: the lobby's Arsenal Lab button could show the split-screen warning "Player 2, edits made to the copied arsenal data will only be in effect for the current game session". The Laboratory reads menu variable 2 as it starts (script cmd 14) and hands it to g5 #112, which keeps bit 16 at [0x1404bec08]+0xb58 (the same flag g5 #119 returns: see the paused skill preview note). The multiplayer menu zeroes variables 0-2 before the Lab, but OpenLobbyArsenalEditor fixed only variable 0. A value left by the lobby's screens (likely the arsenal picker, menu 67, opened just before in the log) set it. Now OpenLobbyArsenalEditor saves variable 2 and sets it to 0, and both back-to-the-lobby paths (HookedPushMenu, HookedPopMenu) restore it (RestoreLobbyVariable2). Not confirmed live: the variable's value was never read.
 
-Options > Send Log (2026-10-29, Experimental 56; item shown from 57, picking works from 58): a seventh item in the main menu's OPTIONS list (option_enx.ssb, after Keyboard). LogItems adds it and its hint through HookedAddItem with no menu check: the list is built before menu 4 counts as current, which kept the item out in 56. Only the Options scripts add $KEYBOARD items, and no script has an aMAIN_S6 label. Picking item N: each frame the script passes its state ("aMAIN") to menu command 6, which writes the label to run for that frame's input at manager +0x1062c (FUN_140245f00: state + "_S<N>" for input event 100 + N at +0x10414). There is no aMAIN_S6, so the game does nothing; HookedSetState (the cmd 6 wrapper) sees event 106 and that name in menu 4 and runs discord::SendLogs on a thread (3 s debounce): one multipart POST to log_webhook (new pdnet.ini key) with "Log from <name> - <kit>", the last 8 MB of LocalState\pdnet.log and the last 1 MB of the kit's pdlaunch.log. The item's text shows Sending Log... / Log Sent / Log Not Sent: <reason>. Experimental 57 hooked FUN_1402ab6b0 instead, which was wrong: it takes (vm, name) and menu picks never go through it. The kit gets log_webhook from log_webhook_url= in the untracked pdnet\tools\out\lobbywatch.ini.
+Stable 11 (2026-11-07): Experimental 132 promoted at the user's request (build.bat promote 132). Tag stable-11 = master 6a35d38, pushed; release stable-11 published. Since Stable 10: Stable kits see Stable releases again (pdlaunch reads all release pages; kits still on Stable 10's launcher pick it up only now that a newer Stable exists near the top), pdnet stays set up after a restart, Setup installs Store-signed unpacked copies, How to Play is back, dynamic arsenal cases (PR #5), keyboard fixes and partner lock (Modern / Classic), Test Arsenal picks, the lobby Arsenal Lab fix.
 
-Relay fallback (2026-10-29, Experimental 55): a log from the user's MSI PC showed one player (0002c46a, 10.0.0.180) never reachable from it although EOS reported the connection "direct" (pings unanswered, joins timing out both ways), while p2p_relay=force had fixed a similar join before. With p2p_relay=allow (the default), p2p::NoAnswer now switches EOS to ForceRelays for the rest of the game run and closes + re-accepts that player's connection (relay settings only apply to a connection made anew), when: the host's lobby ping (Expect) gets no answer in 8 s, a Request (join) gets none in 6 s, or a link answers none of its last 4+ pings. Not for connections already relayed; once per player per minute. Logged as "... - reconnecting through Epic's relay" / "relays forced for the rest of this game run". p2p_relay=force still forces from the start; off disables both.
-
-Lobby join crash fix (2026-10-31, from contributor DeadMan009, pull request #3, merged; in Experimental 71): the C++/WinRT used for xsapigen has a bug in weak_ref<implementation>::get(): for an object that is gone it returns a non-null garbage pointer, so code that checked "if (auto self = weak.get())" crashed. It crashed the game when a second player joined a lobby: the session change went to every MultiplayerService, including one the game had released. xsapiweak.h (SafeWeak) keeps the weak reference on the default interface, whose get() returns null correctly; MultiplayerService's service list and RepeatableOperation use it. Tested by the contributor under Wine.
-Auto-updater (2026-10-31, code in; first release not yet published): installed kits update themselves from this repository's GitHub Releases. build.bat experimental publishes a pre-release build-<N> and build.bat promote a release stable-<M>, each with the asset pdnet-update-<N>.zip (the kit without eos.ini and without the Discord links) and the line "sha256 pdnet-update-<N>.zip <hex>" in its notes; kit-version.txt gains "Build: <N>" (the Experimental number, which a Stable keeps). Publishing needs a fine-grained GitHub token (Contents read/write) in privategithub-token.txt, and the commit must be pushed. At game start, before injecting pdnet, pdlaunch (CheckForUpdate) reads api.github.com/repos/<update_repo>/releases, takes the highest pdnet-update-<N> on its channel (update_channel=stable|experimental|off; empty = the kit's own kind, off for development builds) above its own build, downloads it into pdnetupdate (inside the kit folder, so the files inherit the folder's read access for the game's sandbox; files moved in from elsewhere would keep their own), checks the sha256, unpacks with Windows' tar.exe, moves the current files to pdnetupdatebackup and the new ones in (a running pdlaunch.exe can be renamed though not overwritten), puts everything back on any failure, and never touches eos.ini or pdnet.ini. A pdnet.dll whose MD5 doesn't match kit-version.txt (a test build installed by hand) is never updated. pdlaunch.exe -update runs only the check. Logged as update: lines in pdlaunch.log. Tested end to end on 2026-10-31: Experimental 72 was published as the first pre-release (https://github.com/SnowRyze/Phantom-Dust-Rebirth/releases/tag/build-72); a fresh copy of the Experimental 71 kit, run with pdlaunch.exe -update, downloaded it, checked the sha256 and installed 15 files in about a second, keeping eos.ini and the Discord links, with the old files in pdnet\update\backup; a second run said "up to date (build 72)"; in a copy given the same read access as Setup grants, the new pdnet.dll and pdlaunch.exe inherited it ((I)(RX) for ALL APPLICATION PACKAGES). Kits from Experimental 71 on update themselves; older kits need one manual install of 71 or later.
-Switching channels re-labels the kit (2026-11-07, Experimental 134). The user: Public 1 switched to Experimental "did not change the build". Public 1 is build 133, the same as the newest Experimental, so it said up to date and stayed "Public 1". Now each channel takes only its own tag (build- / stable- / public-), and a kit of another kind goes to that channel's newest build even when the number is the same, getting that kind's label. Tested on a temporary kit:
-- Public 1 on experimental: installed Experimental 133.
-- Experimental 133 on experimental: up to date.
-- Experimental 133 on stable: installed Stable 11.
-- Stable 11 on stable: up to date.
-Kits pick this up once they run the new launcher (from 134).
 Public 1 published (2026-11-07): the stash below was resumed and committed (6013822). Built as Experimental 133, then build.bat public 133. Tag public-1 (pushed). The full release has PhantomDust-Rebirth-Public-1.zip (the whole kit: eos.ini, the public Discord links, everything for a first install; the user said so) and pdnet-public-133.zip (the secret-free update).
 - Tested with pdlaunch -update on a temporary kit (LOCALAPPDATA redirected):
   - Stable 11 on stable: up to date. It ignores the newer Experimental 133 and Public 1.
@@ -388,15 +236,15 @@ Public 1 published (2026-11-07): the stash below was resumed and committed (6013
   - After publishing, Public 1 on its own channel: up to date.
   - Stable 11 set to public: 'going to Public build 133', downloaded and installed.
 - Not tried in the game: the Options > Updates row showing Public.
-Earlier note (written while paused): the user chose to build from Stable 11's code and to include the webhooks in the public kit. The new public links are in private\public-links.ini (git-ignored).
-- The stash adds build.bat public N: Experimental N becomes "Public P" with the public links, tag public-P, and a full release with the whole kit (PhantomDust-Rebirth-Public-P.zip, for first installs) plus the secret-free pdnet-public-<build>.zip.
-- In pdlaunch: update_channel=public; the stable / public channels take only their own tag (/download/stable- or /download/public- in the asset link), and paging stops at that tag. A non-Public kit on the public channel goes to the newest Public; going back installs even the same build number, to get that kind's label.
-- In the game, Options > Updates cycles Public > Stable > Experimental > Off. The config, pdnet.ini and README texts are updated.
-- The public asset name differs on purpose: Stable 11's launcher takes any full release's pdnet-update-N.zip, so it would have moved Stable kits onto a Public.
-- It compiled. Not tested, nothing published.
-- Plan when resumed: commit, build.bat experimental (133), test the public channel with pdlaunch -update on a temporary kit, then build.bat public 133 and push the tag.
-Stable 11 (2026-11-07): Experimental 132 promoted at the user's request (build.bat promote 132). Tag stable-11 = master 6a35d38, pushed; release stable-11 published. Since Stable 10: Stable kits see Stable releases again (pdlaunch reads all release pages; kits still on Stable 10's launcher pick it up only now that a newer Stable exists near the top), pdnet stays set up after a restart, Setup installs Store-signed unpacked copies, How to Play is back, dynamic arsenal cases (PR #5), keyboard fixes and partner lock (Modern / Classic), Test Arsenal picks, the lobby Arsenal Lab fix.
-Lobby Arsenal Lab: no "Player 2 copied arsenal" warning (2026-11-07, Experimental 132, confirmed by the user in Stable 11; 131 was the dynamic-cases build from pull request #5). Reported in Experimental 130: the lobby's Arsenal Lab button could show the split-screen warning "Player 2, edits made to the copied arsenal data will only be in effect for the current game session". The Laboratory reads menu variable 2 as it starts (script cmd 14) and hands it to g5 #112, which keeps bit 16 at [0x1404bec08]+0xb58 (the same flag g5 #119 returns: see the paused skill preview note). The multiplayer menu zeroes variables 0-2 before the Lab, but OpenLobbyArsenalEditor fixed only variable 0. A value left by the lobby's screens (likely the arsenal picker, menu 67, opened just before in the log) set it. Now OpenLobbyArsenalEditor saves variable 2 and sets it to 0, and both back-to-the-lobby paths (HookedPushMenu, HookedPopMenu) restore it (RestoreLobbyVariable2). Not confirmed live: the variable's value was never read.
+
+Kits pick this up once they run the new launcher (from 134).
+
+Switching channels re-labels the kit (2026-11-07, Experimental 134). The user: Public 1 switched to Experimental "did not change the build". Public 1 is build 133, the same as the newest Experimental, so it said up to date and stayed "Public 1". Now each channel takes only its own tag (build- / stable- / public-), and a kit of another kind goes to that channel's newest build even when the number is the same, getting that kind's label. Tested on a temporary kit:
+- Public 1 on experimental: installed Experimental 133.
+- Experimental 133 on experimental: up to date.
+- Experimental 133 on stable: installed Stable 11.
+- Stable 11 on stable: up to date.
+
 Skill preview online (2026-11-07, Experimental 135, confirmed by the user: "works well enough"). The Arsenal editor (menu 64) and View Stock List (63) show the skill preview from the multiplayer menu's Lab and the lobby's Arsenal Lab. How (gamepatches.cpp, after HowToPlay; the notes below are how it was found):
 - g5 #119 (HookedLabPreviewMode) is 1 in menus 63 and 64.
 - Menu cmd 70 / 102 with no player starts the story's town session under the menu: StartPreviewTown, FUN_140212720 (g4 #461: stage 9).
@@ -436,69 +284,177 @@ Skill preview in the multiplayer Lab (2026-11-07, PAUSED by the user, in git sta
   - Player objects are made only by the field / battle load: FUN_140128cc0 builds each slot from the setup at 0x1404bc420 (FUN_14024e060, 0x60000 bytes per slot from DAT_140530058). They are freed by FUN_14012bea0 and loaded over frames by the game-state-2/5 loop.
   - Doing that from a menu means re-creating a field load. Parked again; the user's kit is back on its working build.
 - Next to look at, if resumed: what else the town provides (character model / textures loaded for the field, g5 #140 scene layers, DAT_1404bc9d8 player object). Helper: scratchpad scene.ps1 reads these values live.
+
 The kit folder is back on the working build.
+
 Main menu HOW TO PLAY back (2026-11-07, Experimental 130, confirmed by the user): mainmenu_en.ssb adds HOW TO PLAY (id 150, hint $HOW_TO_PLAY_HINT) only when g10 #1 (FUN_1400bd6a0) finds a "how_to_play_url" in the title options. Mode 0 checks it; mode 1, on a pick, opens it through Windows.System.Launcher. The options are the parsed list at DAT_1404bbc38 (from saveoptions.ini, and from tms_options.csv: Xbox Live title storage, now the copy in the save). Read live, it has only live_shop_chapter, help_url, the Product_* shop packs, Quest26Skip / QuestDefaultSkip and MandatoryBuild / MandatoryRevDate: no how_to_play_url, so the item was hidden. pdnet hooks the lookup FUN_1400c2d80(key, default) (15-byte prologue) and answers how_to_play_url with https://phantomdust.online (the user's choice). The Launcher stand-in passes non-xbox.com links to Windows. Log: 'gamepatch: main menu How to Play -> ...'.
+
 Setup installs Store-signed unpacked copies (2026-11-07, Experimental 129): Register() in setup.ps1 first moves AppxSignature.p7x, AppxBlockMap.xml and AppxMetadata\CodeIntegrity.cat into <game folder>\_store_signature, if present (see the next note: with them, Add-AppxPackage -Register fails with 0x80073CFF). Tested: that block on a scratch folder holding the three real files (moved, subfolder kept), and setup.ps1 parses. The registration itself was proven by hand on D:\PhantomDust-Clean. A full Setup run on an unregistered copy hasn't been done with the new script.
+
 Clean game install on the developer PC (2026-11-07): at the user's request the game is now registered from D:\PhantomDust-Clean, a fresh unpack of the same 1.3.25854.2 dump (PDUWP.exe, Microsoft.Xbox.Services.dll and the manifest are identical to the master dump's; the master dump has edited and extra files from earlier work). Use 7-Zip: Windows' tar fails on that rar. Add-AppxPackage -Register refused it with 0x80073CFF ("Windows Store origin cannot be sideloaded") until AppxSignature.p7x, AppxBlockMap.xml and AppxMetadata\CodeIntegrity.cat were moved out (to D:\PhantomDust-Clean-StoreSignature). Players unpacking the same rar will hit that, and Setup.bat doesn't handle it yet. Removal used -PreserveApplicationData, and the saves were kept (also backed up; the package data is EFS-encrypted, so the backup is on C:). Setup from the Experimental 127 kit then worked: pdnet loaded, the kit updated itself to 128, and 'attach: sign-in entry set (0)'. The microphone permission went back to Prompt.
+
 pdnet stays after a restart (2026-11-07, Experimental 128; the paused stash, resumed): the user: after a PC restart players had to run Setup again. Setup's IPackageDebugSettings::EnableDebugging (what makes Windows start pdlaunch with the game) doesn't survive it. Now a per-user sign-in entry, HKCU\...\CurrentVersion\Run "PhantomDust pdnet" = "<kit>\pdlaunch.exe" -attach, sets it again at each sign-in (no admin needed; Attach() calls EnableDebugging for every installed MSEsper package with this kit's pdlaunch). Setup.bat adds the entry; pdlaunch also adds or corrects it at each game start (KeepAttached), so kits set up earlier get it after one start; Remove.bat and Restore-XboxLive.bat delete it. The last kit set up or started wins. Tested: pdlaunch -attach in the Experimental 127 folder logged 'attach: ... -> 0x00000000'. Not yet tested across a real restart. On this PC no DebugInformation key was found under HKCU\Software\Classes\ActivatableClasses\Package while attached, so where Windows keeps it is unknown.
+
 Stable kits couldn't see a Stable (2026-11-06, Experimental 127): reported from the Conceptual session. pdlaunch read releases?per_page=30, and stable-10 had dropped to position 36 (56 releases), so on the stable channel: 'no Stable build is published yet', no going back. Now per_page=100, and the stable channel reads further pages until a page has a non-prerelease (5 at most; a later page failing keeps what was read). Tested with pdlaunch -update on a temporary kit and LOCALAPPDATA, labelled Experimental at build 78 so nothing downloads: the old exe logs 'no Stable build', the new one 'up to date (build 78, stable channel)'. Kits already on the stable channel run the old pdlaunch and can't update themselves past this until a newer Stable is published near the top of the list (build.bat promote), or Options > Updates goes to Experimental. Conceptual releases are pre-releases with asset pdnet-conceptual-N.zip, which the '/pdnet-update-' check skips: not offered to normal kits. Conceptual has its own per_page=100 line: expect a conflict when master is merged in there.
+
 Keyboard bridge focus check (2026-11-04, Experimental 126, not yet tried in game; a 125 zip was built but never published, the push was behind pull request #4): on 124 still no key, and pdlaunch.log has no 'first key seen'. An outside probe (GetForegroundWindow, GetAsyncKeyState every 15 ms) on the developer's PC: keys read fine, with the game in front the foreground is ApplicationFrameWindow (ApplicationFrameHost) with an empty title and no child, and no CoreWindow of PDUWP could be found at all. So GameHasFocus was never true. It now also accepts that frame when its title is empty or holds 'Phantom Dust'. Possibly related to why the window gets no key events: unconfirmed.
+
 Keyboard bridge (2026-11-04, Experimental 124, not yet tried in game): 123's test on the developer's PC: 'keyboard: assigning row 22' and no run of the game's key handler, while typing a name works (CharacterReceived). So that window gets characters but no key-down / key-up events, and none from AcceleratorKeyActivated either; every keyboard control in the game is dead there. Why isn't known (not seen whether it's this PC, the dump or Windows). pdlaunch's ReadKeyboard (not sandboxed; every 8 ms while GameHasFocus) writes GetAsyncKeyState flags to pads.bin (Shared::keys, keyHeartbeat; appended, so kVersion stays 1). pdnet's KeyboardBridge passes each change to the game's own handlers with a stand-in KeyEventArgs (FakeKeyArgs; self = *0x1405ae170): HookedGameKey (FUN_140008490) on down, FUN_140008600 on up, so moves, skills, rebinding and partner_lock_key all work as if the window had delivered them. It stops for good when a real key event arrives (g_windowKeys), so PCs whose window works get nothing twice. Off while a name is typed. Mouse not touched. A kit that updates to this needs one more game start: the old pdlaunch writes no keys in the run that installs the update.
+
 Keyboard diagnosis (2026-11-04, Experimental 123, logging only): on 122 the user says NO row in Options > Keyboard senses a key, the game's own included, and 122's log has 'keyboard key 0x09 (hooked)'. FUN_140008490 is registered by FUN_1400073a0 on ICoreWindow vtable +0x110 (KeyDown), the same event pdnet's subscription didn't see. So keys may not be reaching the game's window at all on this PC; not known yet whether keyboard play works there or on an untouched game. The log now shows each change of the assigning row (0x1403dd3d8) and the first 25 runs of the handler. If assigning changes and the handler never runs, Windows isn't delivering key-down to the window. The sign-in re-attach work is still in git stash.
+
 Partner key from the game's handler (2026-11-04, Experimental 122, not yet tried in game): on 121 the Lock Onto Partner row showed but picking it sensed no key: AcceleratorKeyActivated never reported a key either, like KeyDown before it (why isn't known; CharacterReceived on the same window works). Keys now come from an inline hook on the game's own key-down handler FUN_140008490 (this, sender, KeyEventArgs; the one that does its key rebinding): HookedGameKey runs the original, then reads get_VirtualKey (vtable +0x30) and get_KeyStatus (+0x38, WasKeyDown at byte 10), and calls HookedKey. Windows subscriptions removed (SubscribePartnerKeyOnce). Log: 'keyboard key 0x09 (hooked)'.
+
 Partner lock fixes (2026-11-04, Experimental 121, not yet tried in game): the user: both modes work on a controller, but Classic doesn't turn off on a 2nd press; on keyboard Modern does nothing; and there's no controls field for the key. (1) Keyboard: this PC's whole log has no 'key pressed' line though the key was subscribed, so CoreWindow KeyDown didn't report it; 121 tried Dispatcher.AcceleratorKeyActivated, which didn't work either (see Experimental 122). (2) Classic: the log has no '(classic)' line, so the fault wasn't seen; the code flipped the byte once and could leave a downed partner targeted. Now g_classicOption holds the state for the match (read from the byte at the first update, reset outside a match) and writes the byte every update; off clears any teammate target (TargetIsTeammate, target object +0xb8 +0x61a0 team), alive or down. Not proven to be the cause: send a Classic log if it still happens. (3) Options > Keyboard gets a row after the game's 22 (0x16): g10 #18 wrapped (HookedKeyRow: name, key from the table 0x1403dd470, PRESS A KEY while assigning), g10 #19 needs no change (FUN_1400be9f0 and the Enter/Esc branch of FUN_140008490 ignore rows past 0x15, so 0x1403dd3d8 stays 0x16 until HookedKey takes the key and clears it); Restore Default Settings (g10 #20 wrapped) puts Tab back. Saved as partner_lock_key in settings.ini, as a name for Tab / Backspace, else the decimal code. Controllers stay RB: there's no binding table for pads. The paused sign-in re-attach work is in git stash ('paused: re-attach pdlaunch at sign-in'), not in this build.
+
 B button for logos, movies and hung match loads (2026-11-04, Experimental 120, not yet tried in game): the user asked for B / cancel on all logos, cut scenes and loading screens, backing out to the last menu, and during a match load only after it has hung. Sign-in, search, join and create already have the game's own Cancel (scripts: '3#Cancel'), so nothing was added there. Menu manager update FUN_140248230 is hooked by its vtable slot 0x14048e358 (HookedMenuFrame, BackButtonTick runs after the scripts, on the game thread); InstallEarlyHooks does it, and the session command 154 wrap (moved from Apply), at injection, since the logos end before Apply runs (about 7 s). Logos: playdatasel_en.ssb's wait routine 0x7e8 is patched in memory on the game thread (PatchLogoWait; if (arg1) i = g10 #17(0) becomes i = session command 154(i, arg1)), and HookedOptionChanged -> LogoWait returns a huge i on B. Movies: B while 0x1405b1790 (the playing movie) is set sets the game's stop flag 0x14050e123 (FUN_1401bdb00 -> FUN_1401bde70; FUN_1401bcbe0 clears it). Only movies: scripted in-engine story scenes weren't looked at. The dump's movies are 21 KB stubs, so this needs a full copy to test. Hung load: g_matchLoadingSince starts at the lobby's LOADING heading (HookedButtonBar) or game state 1-5 (normal: state 2, then a 90-frame state 5, about 3.5 s), cleared when neither holds; after kHungLoadMs (30 s; not for AI battles) the log says so, in the lobby the heading reads STUCK LOADING? PRESS B TO LEAVE, and B: still in the lobby -> menu 84 (as a lost lobby: leaves the session, ends in menu 36); in the match -> FUN_140211940, the pause menu's Give Up (ends in the lobby; in a Rated match it may count like giving up). No message on screen in the match states. B is 0x2020 from g1 #37. Log: 'B: start-up logos can be skipped', 'B: start-up logo skipped', 'B: movie stopped', 'B: the load into the match has taken N s', 'B: leaving the hung load'.
+
 Level screen heading (2026-11-04, Experimental 119, not yet seen in game): livestagesel kept the heading AI OPPONENT'S ARSENAL: its "LEVEL LIST" isn't the heading line (it goes through a script subroutine to the window). pdnet now sets LEVEL SELECT before opening it.
+
 Lock Partner field removed (2026-11-04, Experimental 118): the user finds it redundant with Partner Aim. Back to Experimental 110's behaviour: Settings has Partner Aim only (10 rows); in Classic RB / partner_lock_key flips the game's byte 0x14052dfb9 directly (Options > Details shows it). A leftover lock_onto_partner line in a settings.ini is ignored.
+
 Lock Partner field (2026-11-04, Experimental 117, not yet seen in game): the user wants the Lock Onto Partner setting in Multiplayer > Settings, not Options. New row Lock Partner (kPartnerOption, after Partner Aim; 11 rows, as many as the list once had), key lock_onto_partner=on|off (default off). With partner_aim=classic it decides the game's byte 0x14052dfb9 on every target update of this PC's player, whatever Options > Details says; RB / the key flips it and saves it to settings.ini. With modern it does nothing (the byte is held at 0, partner lock is the button). Options > Details keeps its own row (the game's; removing it means changing that script's positions), but in Classic pdnet's value wins at the next update.
+
 Test Arsenal order (2026-11-04, Experimental 116, not yet tried in game): the user wants the player's picks first. Now: Lab > Test Arsenal > your character (46) > your arsenal (67) > AI's character (46) > AI's arsenal (67) > map (47) > livedbtl (74) with parameter 0 = 1 (starts the battle; before, it opened with 0 and went through its own arsenal choice, so 74 opened fresh with 1 is new: first thing to check). All in one step table in HookedPopMenu (g_testPicking; g_testPickingOpponent is gone). Livearsel's pick goes to 0x1403de844 both times, so the player's is kept in g_testArsenal and put back after the AI's is copied out. Variable 0: 1 for 46, 0 for 67 and 47. MNET is loaded when Test Arsenal starts. Cancelling the first screen is a plain back to the Lab; later ones open the Lab with g_labAfterTest. Lock Onto Partner, the game's option, is under Options > Details (option_en.ssb 0x1200; byte 0x14052dfb9, g4 #451 reads it).
+
 Test Arsenal character screen labels (2026-11-04, Experimental 114, not yet seen in game): the user found it unclear which pick was whose. livecharasel has no heading, so the 'Select a character.' relabel in HookedAddItem now also sets the heading line (menu command 88 = 0x140207650, line 1, as 'LOADING' and 'LEVEL LIST' use it): AI OPPONENT'S CHARACTER / YOUR CHARACTER. The hint reads 'Choose the character the AI OPPONENT plays as.' / 'Choose the character YOU play as.'. livearsel sets no heading of its own, so it would have kept YOUR CHARACTER: Experimental 115 sets YOUR ARSENAL before it opens. To check: the headings on the map and arsenal screens.
+
 Test Arsenal, opponent's character (2026-11-04, Experimental 113, not yet tried in game): flow now Lab > Test Arsenal > opponent's arsenal (67) > opponent's character (46) > map (47) > your character (46) > livedbtl (74) > your arsenal (67) > battle. HookedTestStart writes the pick to the setup's player 1 +8 (setup + 0x50; the game's own value is 0x17). HookedAddItem relabels the screen's title line 'Select the OPPONENT's character.' / 'Select YOUR character.'. Menu variable 0 is 1 for each livecharasel and 0 for livestagesel. Open: whether the AI (eneprog006.ssb) plays properly with any character; its name stays Test Opponent.
+
 Test Arsenal portraits and the flash (2026-11-04, Experimental 112, not yet tried in game): on 111 the map, character and battle all took (log: map 14, character 196618 = 0x3000A, high word the colour), but the character screen was only its name text, and the multiplayer menu flashed after a battle. Portraits: livecharasel draws from the texture file MNET in slot 3; livemain frees that slot before it opens the Lab (0x16e4, g2 cmd 20) and loads it when it comes back (0x1a84), so nothing had it. LoadMultiplayerTextures does menu commands 16 / 17 as the scripts do (up to 3 s, on the game thread) before opening livestagesel; a cancel frees it; livedbtl frees it before the battle (0x25a4, 0x2990). Flash: the detour through menu 36 from Experimental 100 is gone (its reason was wrong, see Experimental 108): the skipped feedback screen opens the Lab directly with ResetLabVariables and g_labAfterTest, as in 87-99. The window background on that screen isn't known to come from MNET: check it.
+
 Test Arsenal map and character (2026-11-04, Experimental 111, not yet tried in game): the user wants them chosen as in multiplayer. Flow now: Lab > Test Arsenal > opponent's arsenal (67) > livestagesel (47) > livecharasel (46) > livedbtl (74) > own arsenal (67) > battle. Each picker ends with a back, picked or not (g2 cmd 1), so its value is set to -1 first and -1 afterwards means cancelled: back to the Lab, with g_labAfterTest. g4 #576 = FUN_140213c00: entry 0x14051775c, map id 0x140527bc8 from table 0x140509ba0 + entry * 0x28 + 0x18, random layout 0x140527c54. g4 #571 = 0x140213b80: 0x140527bc0 and 0x140527c20[lobby slot]. livecharasel's back, with menu variable 0 == 0, runs g4 #557 (abandon the session) and leaves; the lobby sets variable 0 to 1 first (livelobby_en.ssb 0x420c), so pdnet does too, and clears it after. The battle (FUN_140214770, g4 #661) passes map 2 and layout 0 as immediates, and its setup struct (0x48 per player: +0 present, +4 team, +8 character, as FUN_140187710 fills DAT_140527800 from 0x140527c20) has player 0 character 0, the AI 0x17, so the call at 0x140214a09 to FUN_140128990 goes through HookedTestStart (cave), which replaces them. The opponent's character stays 0x17. Open for the test: the pickers were only ever run from a lobby / create-game; whether the character value needs anything more, and the stage list's contents. Log: "Test Arsenal: map N, layout N", "character N", "battle on map N, layout N, character N".
-Partner Aim setting (2026-11-02, Experimental 110): the user asked for a Classic / Modern toggle like Voice Mode, in Multiplayer > Settings. New row Partner Aim (kPartnerAim, after Voice Mode; 10 rows, 11 fitted before), key partner_aim=modern|classic (pdnet.ini default modern, settings.ini when saved). Modern is Experimental 103's system. Classic: RB / partner_lock_key only flips the game's own Lock Onto Partner byte 0x14052dfb9 (so switch target can cycle through teammates) and pdnet leaves targeting alone; turning it off with the partner targeted sets the target to -1 so the game goes back to an enemy. The byte is the option itself, so Options shows the change. Modern still holds the byte at 0 for this PC's player's update, whatever Options says. No on-screen feedback in Classic beyond what the game shows; log: "lock onto partner (classic): the game's option is on / off". Not yet tried in the game.
+
+Reported 2026-11-04: B button 'works' (the user, Experimental 120), but this PC's log has 'start-up logos can be skipped' and no 'B: start-up logo skipped' in either run, so which part was tested is still to be asked. Confirmed 2026-11-04: the keyboard works in the game through pdlaunch (Experimental 126, the user). update_channel=off in settings.ini ('update: off (update_channel=off)' in the user's pdlaunch.log, Experimental 119). Test Arsenal picks, all of it (Experimental 119), Edit Arsenal after a test battle, Mind Reading (85), the lobby's Arsenal Lab > View Stock List after a match (108), the Partner Aim row exists in Settings (saving and match behaviour not yet confirmed). A Conceptual kit doesn't need a test (the user).
+
 Modpack guard rewritten (2026-11-03, Experimental 109): pewchy's log (Experimental 108, DESKTOP-DD6A8L0) has the mod gone in game 2 with no guard line at all, only 'guard ready (differs from the game files)' after the full 60 s wait, then 'modpack loaded'. This PC logs the same with no mod. The guard's vanilla was the game folder's file, but the game runs on another copy: after the file load (FUN_14017da90, done flag 0x140509b90), g10 #0 = FUN_1400bd660 (livejoinssn_en.ssb 0x2fe0, mainmenu_en.ssb 0x77c) copies the stored online gsdata over the block once (FUN_14017e0a0; buffer 0x1403dd458, size 0x1403dd460, done flag 0x1403dd465, cleared only by a real title storage download in FUN_1400bd470; the data comes from the save's UserConfig\gsdata_<lang>.dat). A crash dump with no mod: block vs file 2627 bytes apart, header 374 vs 750 (section 10's edited dump file). So the guard took the game's own data as the mod and any revert as an edit. Now: stock = the block once loaded, taken again when the stored copy lands; a modpack differs from stock; a revert means bytes back at stock or the file; the first 20 edits are logged; each match start logs 'match starting, N bytes of skill data are modded'. Writers of the block found: the start-up load, FUN_14017df00 (Quick override at +0x33804), FUN_14017e0a0. None should fire between games on these kits, so the cause of game 2 is NOT found. Next log: if N drops at a match start, or 'went back to vanilla' shows, the block changed (the line names the menu); if N stays the same while the mod is gone in play, the cause is outside this block. Not yet tried with a modpack.
+
 Test Arsenal stock list crash, real cause (2026-11-03, Experimental 108): Experimental 100's reason was wrong; the user's game still crashed. The event log and dump (PDUWP+0x15a257, FUN_14015a230, null source, list 2; called through g5 #133 = FUN_140218180 -> FUN_14015bac0 from labostock_en.ssb 0x3518, list = g5 #113 = +0xb50) showed menu variable 0 (DAT_140533c10, ints) = 2. laboratory_en.ssb and labostock_en.ssb set +0xb50 from variable 0 & 0xff, and only lists 0 and 1 exist (FUN_14015a520). livemain_en.ssb sets variables 0-2 to 0 right before it opens the Lab (0x175c), but pdnet opens the Lab itself; a battle leaves variable 0 at 2 (likely command_en.ssb 0x50d4, the writer wasn't traced). ResetLabVariables now does the same before the Lab after a test battle and when livedbtl is cancelled. The lobby's Lab has the same gap, after a match: the lobby script itself uses variable 0 (0 or 1), so there only a value above 1 becomes 0 ("menu variable 0 was N"). The multiplayer menu between the battle and the Lab stays (it's what makes the Lab's back safe). Helper for later crashes: read the exception, registers and stack straight from %LOCALAPPDATA%\CrashDumps\PDUWP.exe.<pid>.dmp (minidump streams 4, 5/9, 6; the dump holds module data like the variables, not the heap). Not yet checked in the game.
+
 update_channel in settings.ini (2026-11-03, Experimental 107): the user asked for the updater's off setting to be configurable in settings.ini. update_channel=off already worked if typed exactly, but the line only appeared after using Options > Updates. Now: config Load adds an empty update_channel= line at game start if there is none (which also creates settings.ini), and the file gets a third header line naming the choices (kSettingsUpdates). An empty value changes nothing, so pdnet.ini's still applies (config.cpp, and pdlaunch's Setting for every key). pdlaunch's Setting accepts "key = value" and indented lines as config.cpp does; SaveSettings finds such a line too (IsKeyLine) instead of adding a second. A value that isn't stable / experimental / off is logged and means the kit's own kind, in pdlaunch and in the Updates row: before, a typo counted as stable and would take an Experimental kit back to a Stable. Tested with pdlaunch -update on a temporary kit copy and a temporary LOCALAPPDATA: update_channel=off and "  update_channel = OFF  " give "update: off", banana logs and uses experimental, empty uses experimental. Not yet seen in the game: the line being added to settings.ini at start.
+
 Linux version text (2026-11-03, Experimental 106): the user reported that the Linux version's main menu says "development build". BuildLabel reads kit-version.txt next to the DLL, and build-linux.sh makes only Microsoft.Xbox.Services.dll, so there is none. build-linux.sh now passes PDNET_BUILD_LABEL = "Linux Experimental <tools\kit-counter.txt>", used only when there is no kit-version.txt (the main menu reads "Rebirth Linux Experimental N"); a new number deletes obj/gamepatches.obj, since compile() only compares file dates. Options > Updates shows Off for a Linux label: no pdlaunch there, so no updates. The Windows path is unchanged and built here; the Linux build was only syntax-checked (bash -n), no Linux build or run here.
+
 Updates row without Conceptual (2026-11-03, Experimental 105): at the user's request Options > Updates no longer has a Conceptual case ("Updates: Off (Conceptual)", picking did nothing); it is Stable / Experimental / Off for every kit. pdlaunch still never updates a Conceptual kit.
-Conceptual branch (2026-11-02, Experimental 104): the user asked for a branch outside the auto-updater, named Conceptual, then said its commits go to GitHub as a branch; it is "Conceptual" locally and on GitHub. Branch `Conceptual` (from master, on GitHub) is for trying out ideas. `build.bat conceptual "notes"` builds a kit labelled "PhantomDust-pdnet Conceptual <N>" (numbered from the Conceptual zips in the kits folder, no Build line, no kit-counter change) and saves it next to the other kits; nothing is published. pdlaunch's CheckForUpdate stops for a Conceptual label whatever update_channel says ("update: off (Conceptual build)"), and Options > Updates reads "Updates: Off (Conceptual)" and does nothing when picked. The user puts very experimental work there, so it differs from master. Updates go one way only: merge master into Conceptual (git checkout Conceptual; git merge master; push origin Conceptual); Conceptual is never merged into master. Its own folder (git worktree, 2026-11-02): D:\PhantomDust-Conceptual, branch Conceptual, so a Conceptual session and a master session can work at once; deps\eos-sdk and private\ there are junctions (to the EOS SDK download and to _netmod\private), out\ is its own. Merging master in: from D:\PhantomDust-Conceptual, git merge master (the worktrees share one repository, so master there is always current). Don't check out Conceptual in _netmod (git refuses while the worktree has it).
+
 Lock onto partner, separate from enemy targeting (2026-11-03, Experimental 103): on 102 the user had to target an enemy before partner lock showed, and wants the two kept apart. Partner lock only set the target (+0x10), not the locked flag (+0x4), which only the game's lock-on (pad bit 0x800 pressed, player +0x14264) sets; FUN_1402531d0 aims only while +0x4 is set. Now: partner lock sets +0x4 = 1 with the target; off clears +0x4 / +0x10 / +0x14 (unlocked). While on, a press of the game's lock-on (0x800) or switch-target (0x400) turns partner lock off and goes to an enemy (+0x10 = -1 and +0x14 = 0 first, so lock-on locks a new enemy instead of unlocking, and switch-target goes from "none" to the first enemy). The option byte 0x14052dfb9 is held at 0 for this PC's player's update whenever partner lock is off, so lock-on and switch-target never reach a teammate, whatever Options > Lock Onto Partner says. The hook now runs for this PC's player every frame. Not yet tried in a match; lock mode 1 (DAT_14052dfb7, lock only while held) may drop the partner lock each frame.
+
 Lock onto partner, right hook (2026-11-03, Experimental 102): the user's Tag Team match on 101 logged "RB pressed" many times but never "on" / "off" and no "camera hook running" (it ran once, in a Test Arsenal battle). FUN_14024ec80 calls FUN_1401775b0 (camera +0x142d0, the 94-96 hook) only for computer players (player +0x30 == 0); a human player's target is the block at player +0x13f10, updated by FUN_140252a20 (call at 0x14024f120): +0x10 target = index into the 32 targetable objects DAT_1404bcb50 (+0xb8 = that player's status record = player +0x40 / DAT_1404bc608[slot]; position +0x60), +0xc distance band, +0x4 lock held, +0x300 the player. FUN_1402531d0 inside keeps a target only if FUN_1402543e0 accepts it, and that refuses a teammate unless the byte 0x14052dfb9 (Options > Lock Onto Partner) is set; the switch-target button is pad bit 0x400 (FUN_140252f70 = next valid target). HookedTargetUpdate (cave on the 0x14024f120 call): for this PC's player while partner lock is on, sets +0x10 to the partner's index (PartnerTarget), sets 0x14052dfb9 for the call only, and sets the partner again afterwards; off sets +0x10 to -1 so the game picks its own. Log: "target hook running for this PC's player N", "lock onto partner on / off". Not yet tried in a match.
+
 New title lettering (2026-11-03, Experimental 101): the user supplied a new "Rebirth" artwork (845x247, real transparency, the word with spiked bars either side), now tools\rebirth-word\rebirth-art.png. make.ps1 now also scales art bigger than the title's room (88 rows under the logo's 549 columns) down to fit, keeping its shape (high-quality bicubic); the new word is 337x88 (was 375x88). Placement code unchanged (centred under the logo). Not yet seen in the game.
+
 [Reason below was wrong: see Experimental 108.] Test Arsenal stock list crash (2026-11-03, Experimental 100): toaf's game crashed three times on View Stock List (labostock 63) right after a test battle; each time the menus were 1 (battle) -> 75 (skipped) -> 45 (Lab) -> 63, while 36 -> 45 -> 63 worked in the same log. No crash address (none in the log). The Lab is no longer opened on top of the battle: the skipped feedback screen now opens the multiplayer menu (36), as the game's own scoreboard battle ended (75 -> 41 -> 36), and OpenPendingLab (after menu command 6, like OpenPendingTestArsenal) pushes the Lab on it once 36 is current with no input for 0.3 s ("Test Arsenal over - back to the Lab"). The Lab's back is then a normal back to 36; g_labAfterTest is only for the Lab opened when livedbtl is cancelled. Not yet checked in the game.
+
+Confirmed 2026-11-03: View Stock List after Test Arsenal (Experimental 108), nametags always on (Experimental 73), the new Rebirth logo (101; good for now), scoreboard names not pickable (99), Options > Updates without Conceptual (105).
+
+Partner Aim setting (2026-11-02, Experimental 110): the user asked for a Classic / Modern toggle like Voice Mode, in Multiplayer > Settings. New row Partner Aim (kPartnerAim, after Voice Mode; 10 rows, 11 fitted before), key partner_aim=modern|classic (pdnet.ini default modern, settings.ini when saved). Modern is Experimental 103's system. Classic: RB / partner_lock_key only flips the game's own Lock Onto Partner byte 0x14052dfb9 (so switch target can cycle through teammates) and pdnet leaves targeting alone; turning it off with the partner targeted sets the target to -1 so the game goes back to an enemy. The byte is the option itself, so Options shows the change. Modern still holds the byte at 0 for this PC's player's update, whatever Options says. No on-screen feedback in Classic beyond what the game shows; log: "lock onto partner (classic): the game's option is on / off". Not yet tried in the game.
+
+Conceptual branch (2026-11-02, Experimental 104): the user asked for a branch outside the auto-updater, named Conceptual, then said its commits go to GitHub as a branch; it is "Conceptual" locally and on GitHub. Branch `Conceptual` (from master, on GitHub) is for trying out ideas. `build.bat conceptual "notes"` builds a kit labelled "PhantomDust-pdnet Conceptual <N>" (numbered from the Conceptual zips in the kits folder, no Build line, no kit-counter change) and saves it next to the other kits; nothing is published. pdlaunch's CheckForUpdate stops for a Conceptual label whatever update_channel says ("update: off (Conceptual build)"), and Options > Updates reads "Updates: Off (Conceptual)" and does nothing when picked. The user puts very experimental work there, so it differs from master. Updates go one way only: merge master into Conceptual (git checkout Conceptual; git merge master; push origin Conceptual); Conceptual is never merged into master. Its own folder (git worktree, 2026-11-02): D:\PhantomDust-Conceptual, branch Conceptual, so a Conceptual session and a master session can work at once; deps\eos-sdk and private\ there are junctions (to the EOS SDK download and to _netmod\private), out\ is its own. Merging master in: from D:\PhantomDust-Conceptual, git merge master (the worktrees share one repository, so master there is always current). Don't check out Conceptual in _netmod (git refuses while the worktree has it).
+
 Ghost battles removed (2026-11-02, Experimental 99): the user doesn't need scoreboard battles for now. The ghost upload (SubmitOwnGhost, SendOwnGhostOnce, scores::SubmitGhost), the download (HookedClipDownload, g4 #659), the pickable rows (HookedRowClip, g4 #650), g_ghostBattle and xsapi::EosUserOfName are gone, so scoreboard names can't be picked again (as before Experimental 91). Test Arsenal is unchanged. To bring ghosts back: the notes for Experimental 91 / 92 below and git history (Experimental 98). The Ghost0-13 stats stay in the EOS portal, unused.
+
+Confirmed 2026-11-02: match freeze fix (Experimental 69), Discord close (70), going back to Stable (77), start-up crash
+
+fix (78, not seen again), Updates: Off (98).
+
 Updates: Off (2026-11-01, Experimental 98): the user asked for a way to turn the auto-updater off in the game. Options > Updates now goes Stable -> Experimental -> Off -> Stable (SwitchUpdates); Off saves update_channel=off to settings.ini, and pdlaunch then skips the check at the next start ("update: off (update_channel=off)"). Hint: "... Off: no automatic updates."
+
 Modpack guard (2026-11-01, Experimental 97, not yet tried with a modpack): players load skill modpacks with PD Helper's ModLoader (Skill Editor 3.2.4, D:\PDHELPERv4.1\ModLoader.exe; .sp3 packs), which writes into PDUWP's memory: the in-memory gsdata_<lang>.dat at 0x1404c5240 (ModLoader holds base + 0x4c5240; pointer DAT_1404c5228; 0x44004 bytes). The user: it sometimes goes back to vanilla after matches, online / lobby screens and the title screen (everyone loads the pack). In the code the block is only loaded at start-up (FUN_14017c690 -> FUN_14017da90 -> FUN_140196ee0, polled by FUN_14017dc10 / the loading machine FUN_14017d020); nothing else found writes it (only the Quick-deck override FUN_14017df00 at +0x33804 from tms_options.csv). SkillDataGuard (thread): reads the vanilla file from the game folder, waits for the start-up load, then every 200 ms compares the block with the last modded state: changes that aren't a return to vanilla become the modded state (Skill Editor live edits); when 64+ modded bytes (or half of them) return to vanilla at once with little else new, those bytes are put back and logged ("skill data went back to vanilla (... menu N, game state N) - modpack put back"), which should also show what triggers it.
+
 Lock onto partner logging (2026-11-01, Experimental 96): in 95 the game started and the key was subscribed ("keyboard key 0x09"), but a Tag Team match logged no "lock onto partner" line at all (user: "it did not work"). Now logged: each press ("lock onto partner: RB / key pressed", or "not in a match: ignored"), the first camera hook call ("camera hook running"), a camera that isn't this PC's player while a press waits (its player pointer vs DAT_1404bc9d8[DAT_1404bbe00]), and a failing read of the Xbox controllers (gamepads::AnyPadHolds).
+
 Lock onto partner start-up crash fix (2026-11-01, Experimental 95): 94 crashed the game at start-up for the user (Application Error: twinapi.appcore.dll, 0xc000027b, a WinRT error left unhandled in the window's thread), one second after "lock onto partner: keyboard key 0x09": pdnet subscribed CoreWindow KeyDown from its own thread right at injection. The key is now subscribed once from the game's thread when the menus run (SubscribePartnerKeyOnce from HookedSetState, like the Settings name typing), with errors caught inside the dispatcher callback too.
+
 Lock onto partner (2026-11-01, Experimental 94, not yet tried in a match): the user wants a button that locks onto the partner: RB on controllers, a configurable key on the keyboard (partner_lock_key=, default Tab, none = off; pdnet.ini / settings.ini; config KeyCode takes letters, digits, F1-F24 and key names). The game has Options > Lock Onto Partner (switch-target may then cycle to the partner) but no direct button. The lock target is the camera's: player object +0x142d0 is the camera, FUN_1401775b0 (camera update, from FUN_14024ec80) calls FUN_14017b220(camera +0x138 "lock") at 0x140177616, which runs the camera's lock script, then copies lock +0xc (target slot) into player +0x13f20 (DAT_1404bc608[slot] +0x60) and +0x13f1c (distance band 1-3 from the table 0x1404bbe20, limits 0x1402f8040 / 0x1402f8138). That call now goes through HookedCameraLock (code cave): after the original, while partner lock is on for this PC's player (DAT_1404bc9d8[DAT_1404bbe00]), the partner (same team at object +0x1c, alive: record +0xc > 0) is written to all three. A press toggles it (handled on the game thread); it goes off when the partner is gone or down, or outside a match (game state 0x1404bc950 0 / 13). RB: gamepads::AnyPadHolds(RightShoulder 0x800) polled every 16 ms over the OS pads and pdlaunch's SDL pads (the game's own RB was the HUD names toggle, already a no-op). Key: CoreWindow KeyDown (subscribed when the window exists). Unknowns for the test: whether the target sticks without the lock-on trigger held, and whether skills aim at it.
+
 Updater cleans up (2026-11-01, Experimental 93): the user asked that old files be deleted after an update. pdlaunch now deletes pdnet\update\ after a good swap (the backup, the download, the unpacked files); the old pdlaunch.exe can't go while it runs, so ClearOldUpdate deletes whatever is left in pdnet\update\ at the start of every check ("update: old update files deleted"). The backup is still used to put files back when a swap fails. Tested on a copy of the kit: after the update only update\backup\pdlaunch.exe was left, and the next run of the new pdlaunch deleted the folder. Kits pick this up one update late (the new pdlaunch arrives with the update, then cleans up the next time).
+
 Ghost battles, rows pickable (2026-11-01, Experimental 92): in 91 the ghost upload worked (Ghost0-13 created in the portal by the user; "14 stats sent (Ghost0...) - EOS_Success") but no scoreboard name could be picked. liveranking only allows a pick when g4 #650 (FUN_1402145e0, args[0] = row) returns the row's clip text, which needs the Xbox privilege check FUN_1400bf4d0 and a non-empty RatingGameClip string, plus g4 #681(0) (bit 0 of DAT_14051c93c, the rules this player can play, set by FUN_1401831f0) and g4 #840 (DAT_14051c0dc, a busy flag). HookedRowClip (g4 #650 wrapped, original 0x1402145e0) answers a placeholder text for rows whose EOS player is known (RowUser: row id, else row name); the ghost itself is still fetched on the pick.
-Ghost battles (2026-10-30, Experimental 91, not yet run in game): the user asked for the original scoreboard ghost feature (pick a player on the scoreboard, fight their arsenal driven by the AI). Original: after a rating change FUN_1400bf1f0 encoded the arsenal record (FUN_1400bf560 -> FUN_140109060 signature -> FUN_140109360 text "x%08x|...") and sent it as the event RatingClipUpload (dimensions Ranking, GameClip; FUN_1400b8fb0 -> FUN_1400b6010); the scoreboard read it per row as the Xbox Live text statistic RatingGameClip (FUN_1400e2a20, string per row at 0x140594140 + row * 0x20). The clip holds the record's +0, +0x50, +0x52, +0x54..+0x60 and the 30 skills. pdnet: EOS stats Ghost0-13 (Latest; Developer Portal, see Scoreboard) packed by PackGhost (marker bit 30 | +0 high, +0 low, +0x50, +0x52, 3 skills of 10 bits per stat, 0x3ff = empty; battle results dropped). Sent after each finished online match (SubmitOwnGhost, the arsenal at save +0x3b08) and once per game run when the scoreboard opens (SendOwnGhostOnce from scores::Ranks). Download: g4 #659 wrapped (HookedClipDownload, table 0x1403f0090 + 659 * 8, original 0x140214740): after the original copies the row, the row's player (row +0 id via xsapi::EosUserOf, else the row name via EosUserOfName) gets scores::GhostOf on a thread, status 0x140519abc 1 (wait) -> 3 with the record at 0x1404bc8e0, or 4 (the game's "clip damaged") without a ghost. g_ghostBattle (like g_testBattle, AiBattle()): no left-player nametag hiding, no wins, and the rating hook applies no change in AI battles (before, a test battle could take the last session's Rated setting). The feedback screen 75 was already skipped.
-Test Arsenal opponent choice fix (2026-10-30, Experimental 90; confirmed working by the user, opponent choice included): in 89 the opponent's livearsel closed by itself 1.6 s after opening with the first arsenal picked (the user: "closed by itself"): it was opened on the frame of the A press that picked Test Arsenal, and that press confirmed its first entry as soon as it loaded. The pick now only sets g_testPendingAt; OpenPendingTestArsenal (run after each menu command 6 in HookedSetState) opens it 0.3 s later on a frame with no input event while the Lab is still current.
-Test Arsenal opponent choice (2026-10-30, Experimental 89): the user asked to pick the opponent's arsenal instead of a mirror. livearsel (67) in scoreboard mode (its menu parameter 0 = 1, as livedbtl sets it) stores a pick with g4 #575 (0x1403de844) and sets livedbtl's (74) parameter 0 to 1, or 2 when cancelled, then goes back (command 1). Test Arsenal now opens 67 from the Lab first (g_testPickingOpponent; its hint "Select an arsenal." reads "Select the OPPONENT's arsenal..."); HookedPopMenu on that back copies the pick in as the opponent (CopyArsenalToOpponent) and opens 74 with parameter 0 = 0, where the player picks their own; a cancel goes back to the Lab. Backing out of 74 now always opens the Lab with g_labAfterTest (its back goes to the multiplayer menu), since 74 no longer sits right on the Lab.
-Test Arsenal back-out fix (2026-10-30, Experimental 88; Test Arsenal confirmed working in game by the user): in 87, backing out of the Lab after a test battle froze on a black screen: the Lab opened in place of the feedback screen sits on top of menu 1 (the battle) in the menu stack, so its back returned into the battle. g_labAfterTest: that Lab's back now opens the multiplayer menu (36). Backing out of livedbtl before the battle is now a back (pop) to the Lab it was opened from, instead of opening a second Lab on top.
-Test Arsenal fixes (2026-10-30, Experimental 87): 86 worked for the user (log: 45 -> 74 -> 67 -> back -> 1 battle -> 49 pause, 66 battle end -> 75 -> 41 -> 36), with two problems. (1) No nametag on the AI: pdnet's left-player check (UpdateLeftPlayers) marked "Test Opponent" as left because it is no network peer; it now marks nobody while g_testBattle is set. (2) After the battle came livedbtlres 75, Xbox Live player feedback on the opponent ("Send this feedback?", Cheating), deprecated: HookedPushMenu now never opens 75 - a test battle goes back to the Lab, any other battle to the scoreboard (41), where 75 would have led.
-Test Arsenal (2026-10-30, Experimental 86, first try; worked): the user wants arsenals tested against an AI from the Lab (not the lobby's Lab). The game has no vs-CPU menu; its AI opponent is the scoreboard battle (the user: pick a player on the scoreboard, play an arsenal of your choice against "them"). liveranking (41) picks a row, g4 #659 = FUN_140183e80 "downloads" its game clip: copies the row (0x4c bytes at 0x14051d4c0 + row * 0x4c: id 8, number 4, name 0x40; written by FUN_140284110 from the leaderboard results) to 0x14050d230.., and decodes the row's arsenal text (std::string per row at 0x140594140 + row * 0x20, "x%08x|%08x|..." with a signature, FUN_1401094c0 / FUN_1401091b0) into the opponent's 100-byte arsenal record 0x1404bc8e0 (FUN_1400bf950; same layout as the save's arsenals at *(save + 0x3a30)); status 0x140519abc (g4 #660: 1 busy, 3 done, 4 damaged). Then g4 #575 (0x1403de844 = arsenal to use), command 111 (74, 0, 0) and open livedbtl 74: its menu parameter 0 (command 111/110 = word 0x1403fa3d8 + menu * 0x18 + slot * 2) 0 = open livearsel 67 to choose an arsenal, 1 = start the battle (menu 1), else back to 41; compe_res 78 ends in the multiplayer menu 36. pdnet's EOS scoreboard has no arsenal texts, so that battle never worked under pdnet. OpenTestArsenal does the download's work itself with a copy of the player's current arsenal (save +0x3b08) as the opponent, named "Test Opponent", and opens 74. Lab row "Test Arsenal" (id 5, kRowTest) only when the Lab isn't the lobby's (g_editorFromLobby). Back to 41 from 74 goes to the Lab; wins while g_testBattle is set aren't sent to the EOS scoreboard (Events stub). Later idea: real ghosts (other players' arsenals) through EOS.
-Mind Reading (2026-10-30, Experimental 85): the user reported the skill does nothing. Its text (gsdata_en.dat) is "Listen in on target team's conversation": it is a voice skill. The game's voice rule (FUN_1400c61f0, GameChat post-decode, per buffer) plays a buffer when the chat manager *(DAT_1404bbc48 + 0x18) has +0xac set or the sender's channel equals +0xa8; FUN_140187180(slot) sets this PC's +0xa8 = team (player +0x1c) and +0xac = status effect 0x25 (Mind Reading), every match frame (FUN_140187a90, game loop table 0x1403e8428; remote consoles get the same through FUN_1400c7420). pdnet's own Tag Team voice channels (lobbies.cpp ApplyTeamChannels) muted the other team regardless. gamepatches::MindReading reads that +0xac byte; while it is set in a Tag Team match the other team is heard too. Log: "voice: Mind Reading on / over". Not yet checked in a match.
-Arsenal Lab case stock (2026-10-30, Experimental 84; confirmed working in game by the user the same day): in 83 Buy / Sell opened the right screens, but the buy screen had no cases. The case screens (arsenalbuy InitMenu: g3 #317) only show the shop's stock, which the shop builds as it opens: livemain sets menu variable 2 = 768 (command 13 writes DAT_140533c10[args[0]] = args[1]; the shop sets var 3 = item 0-4 before opening 27/29/30/28/31) and the shop's InitMenu then calls g3 #310 = FUN_1401ce100 (multiplayer prices from *0x1404c5228 + 0x33c04, then FUN_1401cd730 / cd970 / cdef0; #347 = FUN_1401cdef0 alone is the other branch). OpenCaseMenu now calls FUN_1401ce100 first. Script call groups: table 0x1402ddd00 + group * 8 (group 2 = 0x1403eede0, entry = command + 64; group 3 = 0x1403ef390; group 9 = 0x1403dd3e0).
-Arsenal Lab picks by position (2026-10-30, Experimental 83): in 82 Buy opened the Lab's movie list. The Laboratory's window reports picks by POSITION (FUN_14024b000 uses the stored id only for windows in mode 1), and its labels are aMAIN_S0-S2 (checked with the game's label hash: base-40, two 6-character halves, FUN_1402847c0, table 0x1402f76a0; no aMAIN_S3/S4), so Buy at position 2 ran aMAIN_S2 (the tutorial movies) and Sell at 3 hit pdnet's old "103 = Buy". HookedAddIdItem now records each row's id by window and position (g_rowAction; reset when a list starts), the case rows as Buy / Sell; on a Lab pick (aMAIN_S<p>) pdnet opens the case menu for those, and rewrites the label to aMAIN_S<id> for an original row that moved down (View Tutorial Movie in modes that have it).
-Arsenal Lab crash fix (2026-10-30, Experimental 82): in 81 the rows showed and the pick was seen, but opening arsenalbuy crashed the game (PDUWP+0x2ab62e, FUN_1402ab5d0 run-label with a null script). The frame's menu update FUN_140248230 runs the state script (command 6 is called in it), then runs the picked label at manager +0x1062c on the CURRENT menu's script; after pdnet's push that is menu 30, whose script is still loading (FUN_140246020 starts the load when the entry's script is null; it is set and InitMenu runs on a later frame). OpenCaseMenu now clears +0x1062c after the push.
-Arsenal Lab rows fix 2 (2026-10-30, Experimental 81): the user's log from 80 showed the command 59 wrap ready but no rows added: in multiplayer the Laboratory has no View Tutorial Movie row (the script adds it only after a check, g5 #119). The rows (ids 3, 4) and hints now follow View Stock List / "Display your stock list.". A pick in an id list is event 100 + id (FUN_14024b000 reads the id stored at +0x24 + (row + 0x100) * 4), so the picks stay 103 / 104 wherever the rows sit.
-Arsenal Lab rows fix (2026-10-30, Experimental 80): in 79 the lobby's button opened the Laboratory as planned, but the Buy / Sell rows never appeared. The Laboratory adds its rows with menu command 59 (add item with an id: args[0] id, args[1] text; script word 0x207B0201), not command 40, which it uses only for the hints. Script call words are 0x2NNN0A01 with NNN = command + 64 (0x2068 = command 40). HookedAddIdItem (command 59 wrapped, 0x140207ec0) adds ids 3 and 4 after "View Tutorial Movie"; CaseItems now only adds the two hints. Log: "gamepatch: Arsenal Lab: Buy / Sell Arsenal Case items added".
-Arsenal cases in the Lab (2026-10-29, Experimental 79): the user wants arsenal cases bought and sold from the Arsenal Lab, the lobby's too. Menus: arsenalbuy 30, arsenalsell 31 (the shop opens them on top; back returns), laboratory 45 (items Edit Arsenal, View Stock List, View Tutorial Movie; state MAIN). CaseItems (HookedAddItem) adds Buy Arsenal Case / Sell Arsenal Case after View Tutorial Movie, with the shop's hints after its hint. A pick is event 103 / 104 with the missing label aMAIN_S3 / aMAIN_S4 (seen after menu command 6, like Send Log); OpenCaseMenu then clears 0x1404bbc34 and pushes 30 / 31, as the script's open command FUN_140207020 does. The lobby's Arsenal Lab button now opens the Laboratory (45) instead of arsenaledit (64): the menu stack nests (log: 36 -> 45 -> 64, back, back), so Edit Arsenal and the case menus return to the Lab and the Lab's back returns to the lobby. From the lobby, leaving the Lab's menus (45/63/64/30/31) for any other menu becomes a back; the red hand and lobby-ended handling now key on leaving 45. Needs lobby_arsenal_editor (menu hooks) and the command 6 wrap. Not yet checked in the game.
-Start-up crash fix (2026-10-30, Experimental 78): the user's game crashed seconds after start on Experimental 77 (Application Error 1000, pdnet.dll +0x63a8c, access violation). The pdb puts it in InstallActivationHooks -> PatchModule (hooks.cpp): a module from K32EnumProcessModules was unloaded by another thread before its import table was read. TryPatchModule now catches the access violation; a module that vanished is skipped and not marked checked. A timing race, not caused by the recent changes. To map a crash offset: the out\pdnet.pdb of the same build (MD5 in kit-version.txt) with dbghelp SymFromAddr / SymGetLineFromAddr64.
-Stable 10 (2026-10-30): first Experimental 77 (b687163); then, at the user's request, rebuilt from Experimental 78 to include the start-up crash fix: the first stable-10 release and tag were deleted and Experimental 78 promoted again. Now tag stable-10 = master 5a9d7cb, release stable-10 with pdnet-update-78.zip, pushed. The first Stable published as a GitHub release (stable-10, pdnet-update-77.zip), so kits on the stable channel update to it and Experimental kits switched to Stable go back to it. Since Stable 9: nametags always on, hand-editable settings.ini, Online Store removed, Trade reads Theater, Options > Updates, going back to Stable.
+
+## October 2026
+
+Lobby join crash fix (2026-10-31, from contributor DeadMan009, pull request #3, merged; in Experimental 71): the C++/WinRT used for xsapigen has a bug in weak_ref<implementation>::get(): for an object that is gone it returns a non-null garbage pointer, so code that checked "if (auto self = weak.get())" crashed. It crashed the game when a second player joined a lobby: the session change went to every MultiplayerService, including one the game had released. xsapiweak.h (SafeWeak) keeps the weak reference on the default interface, whose get() returns null correctly; MultiplayerService's service list and RepeatableOperation use it. Tested by the contributor under Wine.
+
+Auto-updater (2026-10-31, code in; first release not yet published): installed kits update themselves from this repository's GitHub Releases. build.bat experimental publishes a pre-release build-<N> and build.bat promote a release stable-<M>, each with the asset pdnet-update-<N>.zip (the kit without eos.ini and without the Discord links) and the line "sha256 pdnet-update-<N>.zip <hex>" in its notes; kit-version.txt gains "Build: <N>" (the Experimental number, which a Stable keeps). Publishing needs a fine-grained GitHub token (Contents read/write) in private\github-token.txt, and the commit must be pushed. At game start, before injecting pdnet, pdlaunch (CheckForUpdate) reads api.github.com/repos/<update_repo>/releases, takes the highest pdnet-update-<N> on its channel (update_channel=stable|experimental|off; empty = the kit's own kind, off for development builds) above its own build, downloads it into pdnet\update (inside the kit folder, so the files inherit the folder's read access for the game's sandbox; files moved in from elsewhere would keep their own), checks the sha256, unpacks with Windows' tar.exe, moves the current files to pdnet\update\backup and the new ones in (a running pdlaunch.exe can be renamed though not overwritten), puts everything back on any failure, and never touches eos.ini or pdnet.ini. A pdnet.dll whose MD5 doesn't match kit-version.txt (a test build installed by hand) is never updated. pdlaunch.exe -update runs only the check. Logged as update: lines in pdlaunch.log. Tested end to end on 2026-10-31: Experimental 72 was published as the first pre-release (https://github.com/SnowRyze/Phantom-Dust-Rebirth/releases/tag/build-72); a fresh copy of the Experimental 71 kit, run with pdlaunch.exe -update, downloaded it, checked the sha256 and installed 15 files in about a second, keeping eos.ini and the Discord links, with the old files in pdnet\update\backup; a second run said "up to date (build 72)"; in a copy given the same read access as Setup grants, the new pdnet.dll and pdlaunch.exe inherited it ((I)(RX) for ALL APPLICATION PACKAGES). Kits from Experimental 71 on update themselves; older kits need one manual install of 71 or later.
+
 Back to Stable (2026-10-31, Experimental 77): the user asked that switching Options > Updates from Experimental back to Stable reverts to the newest Stable at the next game start. pdlaunch CheckForUpdate: on the stable channel a kit whose kit-version.txt label isn't a Stable installs the newest Stable release even with a lower build number ("going back to Stable build N"); with no Stable release published it logs that and keeps its build. The sha256 line is now read from the release the chosen asset is in (a Stable's pdnet-update-<build>.zip has the same name as its Experimental's but another kit-version.txt). As of this change GitHub has no Stable release yet (Stable 9 predates publishing), so the revert has nothing to install until the next build.bat promote.
-TODO when public releases get their tag: add a "Public" choice to Options > Updates (SwitchUpdates / RefreshUpdateRow) and update_channel=public in pdlaunch and build.ps1, with the same going-back rule (a kit that isn't a Public goes to the newest Public even if its build is older).
+
 Options > Updates (2026-10-31, Experimental 76): the user wanted the auto-updater's channel chosen in the game. Main menu > Options gets an eighth item after Send Log, "Updates: Stable / Experimental" (LogItems adds it and its hint; picking is event 107 with label aMAIN_S7, seen in HookedSetState like Send Log). Picking switches update_channel between stable and experimental (Off goes to Stable) and saves it to settings.ini, which pdlaunch already reads after pdnet.ini, so it applies from the next game start. Empty update_channel shows the kit's own kind (from kit-version.txt; Off for a development build). Config gained updateChannel. Not yet checked in the game.
+
 Online Store removed, Trade reads Theater (2026-10-31, Experimental 75): the user asked to remove the deprecated Online Store from Main menu > Multiplayer and rename the multiplayer menu's Trade to Theater (it still opens Trade; new function later). HookedAddItem (menu command 40) now remembers the item added before (g_lastItem) and uses kItemsAfter: $STORE / $STORE_HINT are left out only right after "Split Screen" / its hint (mainmenu_en.ssb; the last item, so no numbers shift; the shop's $STORE is untouched), and "Trade" / "Trade a skill." become "Theater" / "Coming soon." only right after "Create Match" / its hint (livemain_en.ssb; livetrade_h also has a "Trade" text). Not yet checked in the game.
+
 Hand-edited settings.ini (2026-10-31, Experimental 74): the user wanted exact nametag hex colours. LocalState\pdnet\settings.ini (in-game Settings, read after pdnet.ini so it wins) already stored hex; now the kit has pdnet\Edit-Settings.bat, which opens it in Notepad (warns if the game runs, since a save in the game rewrites the file), its header gains a line saying it can be edited by hand (added to older files on their next save), and colours accept RRGGBB or #RRGGBB, with a bad value logged and ignored instead of throwing. A custom colour shows as #RRGGBB in the Settings row; left/right from it goes back to the named colours.
+
 Nametags always on (2026-10-31, Experimental 73): the user asked for nametags on by default, with no way to turn them off, and for the in-match nametag button to do nothing for now. The battle HUD (DAT_1404bec00, set up by FUN_140150130) has a "names hidden" switch at +0x5c that starts at 1; pad bit 9 flips it in FUN_140150640, and FUN_140150c30 skips every nametag while it is 1. gamepatches NametagsAlwaysOn removes that skip (jz at 0x140151165 becomes nops) and turns the button's store (0x140150767) into nops. Log: "gamepatch: nametags always on". Not yet checked in a match.
-Discord close fix (2026-10-31, Experimental 70): the user reported lobbies still shown open after the last player left. The exit note (LocalStatepdnetdiscord-close.txt, which pdlaunch uses to mark the message closed when the game exits from a lobby only this PC is in) was only written when an edit went out. So a PC that took the lobby over (it gets the message id from PD_DISCORD but sends nothing) or had player messages off (no edit when others leave) never had one, and the last player closing the game (or killing it after a freeze, as on 2026-10-31 with toaf, who has lobby and player messages off, last in the lobby) left the message open. LobbyChanged now keeps the note (KeepExitNote) whenever the member count of a lobby this PC owns changes, and on a handover, whatever the message settings. Each lobby message sent is now logged ("discord: lobby ... message marked closed / updated (HTTP n)").
+
+Discord close fix (2026-10-31, Experimental 70): the user reported lobbies still shown open after the last player left. The exit note (LocalState\pdnet\discord-close.txt, which pdlaunch uses to mark the message closed when the game exits from a lobby only this PC is in) was only written when an edit went out. So a PC that took the lobby over (it gets the message id from PD_DISCORD but sends nothing) or had player messages off (no edit when others leave) never had one, and the last player closing the game (or killing it after a freeze, as on 2026-10-31 with toaf, who has lobby and player messages off, last in the lobby) left the message open. LobbyChanged now keeps the note (KeepExitNote) whenever the member count of a lobby this PC owns changes, and on a handover, whatever the message settings. Each lobby message sent is now logged ("discord: lobby ... message marked closed / updated (HTTP n)").
+
 Match freeze fix (2026-10-31, Experimental 69): a 4-player Tag Team match froze for everyone (logs of SnowRyze, Snow, Treebo, toaf). The EOS links stayed up the whole time; at 16:00:17 toaf's log had "connection to 00022146 (Snow) interrupted (EOS is trying to restore it)" with 2/5 pings and about 25 game packets lost each way; within seconds every game dropped to keep-alive traffic and never resumed. Game packets were EOS_PR_UnreliableUnordered, so whatever was sent during the interruption was gone, and the match (all players advance together) waited for it forever. A smaller loss at 15:37 (16 packets) did not freeze. Game packets are now EOS_PR_ReliableUnordered (p2p_game_reliable=on, default; off goes back): EOS resends them once the connection is restored, so the match pauses instead of freezing; unordered so nothing waits behind a lost packet, like the UDP the game was made for. Pings stay unreliable (they measure loss). The sender picks the reliability, so mixed kits still play together. Also seen, not yet fixed: links to players from earlier lobbies (00022557, 0002ce7f) stay open and the relay fallback reconnects them every minute for the rest of the run.
+
+Ghost battles (2026-10-30, Experimental 91, not yet run in game): the user asked for the original scoreboard ghost feature (pick a player on the scoreboard, fight their arsenal driven by the AI). Original: after a rating change FUN_1400bf1f0 encoded the arsenal record (FUN_1400bf560 -> FUN_140109060 signature -> FUN_140109360 text "x%08x|...") and sent it as the event RatingClipUpload (dimensions Ranking, GameClip; FUN_1400b8fb0 -> FUN_1400b6010); the scoreboard read it per row as the Xbox Live text statistic RatingGameClip (FUN_1400e2a20, string per row at 0x140594140 + row * 0x20). The clip holds the record's +0, +0x50, +0x52, +0x54..+0x60 and the 30 skills. pdnet: EOS stats Ghost0-13 (Latest; Developer Portal, see Scoreboard) packed by PackGhost (marker bit 30 | +0 high, +0 low, +0x50, +0x52, 3 skills of 10 bits per stat, 0x3ff = empty; battle results dropped). Sent after each finished online match (SubmitOwnGhost, the arsenal at save +0x3b08) and once per game run when the scoreboard opens (SendOwnGhostOnce from scores::Ranks). Download: g4 #659 wrapped (HookedClipDownload, table 0x1403f0090 + 659 * 8, original 0x140214740): after the original copies the row, the row's player (row +0 id via xsapi::EosUserOf, else the row name via EosUserOfName) gets scores::GhostOf on a thread, status 0x140519abc 1 (wait) -> 3 with the record at 0x1404bc8e0, or 4 (the game's "clip damaged") without a ghost. g_ghostBattle (like g_testBattle, AiBattle()): no left-player nametag hiding, no wins, and the rating hook applies no change in AI battles (before, a test battle could take the last session's Rated setting). The feedback screen 75 was already skipped.
+
+Test Arsenal opponent choice fix (2026-10-30, Experimental 90; confirmed working by the user, opponent choice included): in 89 the opponent's livearsel closed by itself 1.6 s after opening with the first arsenal picked (the user: "closed by itself"): it was opened on the frame of the A press that picked Test Arsenal, and that press confirmed its first entry as soon as it loaded. The pick now only sets g_testPendingAt; OpenPendingTestArsenal (run after each menu command 6 in HookedSetState) opens it 0.3 s later on a frame with no input event while the Lab is still current.
+
+Test Arsenal opponent choice (2026-10-30, Experimental 89): the user asked to pick the opponent's arsenal instead of a mirror. livearsel (67) in scoreboard mode (its menu parameter 0 = 1, as livedbtl sets it) stores a pick with g4 #575 (0x1403de844) and sets livedbtl's (74) parameter 0 to 1, or 2 when cancelled, then goes back (command 1). Test Arsenal now opens 67 from the Lab first (g_testPickingOpponent; its hint "Select an arsenal." reads "Select the OPPONENT's arsenal..."); HookedPopMenu on that back copies the pick in as the opponent (CopyArsenalToOpponent) and opens 74 with parameter 0 = 0, where the player picks their own; a cancel goes back to the Lab. Backing out of 74 now always opens the Lab with g_labAfterTest (its back goes to the multiplayer menu), since 74 no longer sits right on the Lab.
+
+Test Arsenal back-out fix (2026-10-30, Experimental 88; Test Arsenal confirmed working in game by the user): in 87, backing out of the Lab after a test battle froze on a black screen: the Lab opened in place of the feedback screen sits on top of menu 1 (the battle) in the menu stack, so its back returned into the battle. g_labAfterTest: that Lab's back now opens the multiplayer menu (36). Backing out of livedbtl before the battle is now a back (pop) to the Lab it was opened from, instead of opening a second Lab on top.
+
+Test Arsenal fixes (2026-10-30, Experimental 87): 86 worked for the user (log: 45 -> 74 -> 67 -> back -> 1 battle -> 49 pause, 66 battle end -> 75 -> 41 -> 36), with two problems. (1) No nametag on the AI: pdnet's left-player check (UpdateLeftPlayers) marked "Test Opponent" as left because it is no network peer; it now marks nobody while g_testBattle is set. (2) After the battle came livedbtlres 75, Xbox Live player feedback on the opponent ("Send this feedback?", Cheating), deprecated: HookedPushMenu now never opens 75 - a test battle goes back to the Lab, any other battle to the scoreboard (41), where 75 would have led.
+
+Test Arsenal (2026-10-30, Experimental 86, first try; worked): the user wants arsenals tested against an AI from the Lab (not the lobby's Lab). The game has no vs-CPU menu; its AI opponent is the scoreboard battle (the user: pick a player on the scoreboard, play an arsenal of your choice against "them"). liveranking (41) picks a row, g4 #659 = FUN_140183e80 "downloads" its game clip: copies the row (0x4c bytes at 0x14051d4c0 + row * 0x4c: id 8, number 4, name 0x40; written by FUN_140284110 from the leaderboard results) to 0x14050d230.., and decodes the row's arsenal text (std::string per row at 0x140594140 + row * 0x20, "x%08x|%08x|..." with a signature, FUN_1401094c0 / FUN_1401091b0) into the opponent's 100-byte arsenal record 0x1404bc8e0 (FUN_1400bf950; same layout as the save's arsenals at *(save + 0x3a30)); status 0x140519abc (g4 #660: 1 busy, 3 done, 4 damaged). Then g4 #575 (0x1403de844 = arsenal to use), command 111 (74, 0, 0) and open livedbtl 74: its menu parameter 0 (command 111/110 = word 0x1403fa3d8 + menu * 0x18 + slot * 2) 0 = open livearsel 67 to choose an arsenal, 1 = start the battle (menu 1), else back to 41; compe_res 78 ends in the multiplayer menu 36. pdnet's EOS scoreboard has no arsenal texts, so that battle never worked under pdnet. OpenTestArsenal does the download's work itself with a copy of the player's current arsenal (save +0x3b08) as the opponent, named "Test Opponent", and opens 74. Lab row "Test Arsenal" (id 5, kRowTest) only when the Lab isn't the lobby's (g_editorFromLobby). Back to 41 from 74 goes to the Lab; wins while g_testBattle is set aren't sent to the EOS scoreboard (Events stub). Later idea: real ghosts (other players' arsenals) through EOS.
+
+Mind Reading (2026-10-30, Experimental 85): the user reported the skill does nothing. Its text (gsdata_en.dat) is "Listen in on target team's conversation": it is a voice skill. The game's voice rule (FUN_1400c61f0, GameChat post-decode, per buffer) plays a buffer when the chat manager *(DAT_1404bbc48 + 0x18) has +0xac set or the sender's channel equals +0xa8; FUN_140187180(slot) sets this PC's +0xa8 = team (player +0x1c) and +0xac = status effect 0x25 (Mind Reading), every match frame (FUN_140187a90, game loop table 0x1403e8428; remote consoles get the same through FUN_1400c7420). pdnet's own Tag Team voice channels (lobbies.cpp ApplyTeamChannels) muted the other team regardless. gamepatches::MindReading reads that +0xac byte; while it is set in a Tag Team match the other team is heard too. Log: "voice: Mind Reading on / over". Not yet checked in a match.
+
+Arsenal Lab case stock (2026-10-30, Experimental 84; confirmed working in game by the user the same day): in 83 Buy / Sell opened the right screens, but the buy screen had no cases. The case screens (arsenalbuy InitMenu: g3 #317) only show the shop's stock, which the shop builds as it opens: livemain sets menu variable 2 = 768 (command 13 writes DAT_140533c10[args[0]] = args[1]; the shop sets var 3 = item 0-4 before opening 27/29/30/28/31) and the shop's InitMenu then calls g3 #310 = FUN_1401ce100 (multiplayer prices from *0x1404c5228 + 0x33c04, then FUN_1401cd730 / cd970 / cdef0; #347 = FUN_1401cdef0 alone is the other branch). OpenCaseMenu now calls FUN_1401ce100 first. Script call groups: table 0x1402ddd00 + group * 8 (group 2 = 0x1403eede0, entry = command + 64; group 3 = 0x1403ef390; group 9 = 0x1403dd3e0).
+
+Arsenal Lab picks by position (2026-10-30, Experimental 83): in 82 Buy opened the Lab's movie list. The Laboratory's window reports picks by POSITION (FUN_14024b000 uses the stored id only for windows in mode 1), and its labels are aMAIN_S0-S2 (checked with the game's label hash: base-40, two 6-character halves, FUN_1402847c0, table 0x1402f76a0; no aMAIN_S3/S4), so Buy at position 2 ran aMAIN_S2 (the tutorial movies) and Sell at 3 hit pdnet's old "103 = Buy". HookedAddIdItem now records each row's id by window and position (g_rowAction; reset when a list starts), the case rows as Buy / Sell; on a Lab pick (aMAIN_S<p>) pdnet opens the case menu for those, and rewrites the label to aMAIN_S<id> for an original row that moved down (View Tutorial Movie in modes that have it).
+
+Arsenal Lab crash fix (2026-10-30, Experimental 82): in 81 the rows showed and the pick was seen, but opening arsenalbuy crashed the game (PDUWP+0x2ab62e, FUN_1402ab5d0 run-label with a null script). The frame's menu update FUN_140248230 runs the state script (command 6 is called in it), then runs the picked label at manager +0x1062c on the CURRENT menu's script; after pdnet's push that is menu 30, whose script is still loading (FUN_140246020 starts the load when the entry's script is null; it is set and InitMenu runs on a later frame). OpenCaseMenu now clears +0x1062c after the push.
+
+Arsenal Lab rows fix 2 (2026-10-30, Experimental 81): the user's log from 80 showed the command 59 wrap ready but no rows added: in multiplayer the Laboratory has no View Tutorial Movie row (the script adds it only after a check, g5 #119). The rows (ids 3, 4) and hints now follow View Stock List / "Display your stock list.". A pick in an id list is event 100 + id (FUN_14024b000 reads the id stored at +0x24 + (row + 0x100) * 4), so the picks stay 103 / 104 wherever the rows sit.
+
+Arsenal Lab rows fix (2026-10-30, Experimental 80): in 79 the lobby's button opened the Laboratory as planned, but the Buy / Sell rows never appeared. The Laboratory adds its rows with menu command 59 (add item with an id: args[0] id, args[1] text; script word 0x207B0201), not command 40, which it uses only for the hints. Script call words are 0x2NNN0A01 with NNN = command + 64 (0x2068 = command 40). HookedAddIdItem (command 59 wrapped, 0x140207ec0) adds ids 3 and 4 after "View Tutorial Movie"; CaseItems now only adds the two hints. Log: "gamepatch: Arsenal Lab: Buy / Sell Arsenal Case items added".
+
+Start-up crash fix (2026-10-30, Experimental 78): the user's game crashed seconds after start on Experimental 77 (Application Error 1000, pdnet.dll +0x63a8c, access violation). The pdb puts it in InstallActivationHooks -> PatchModule (hooks.cpp): a module from K32EnumProcessModules was unloaded by another thread before its import table was read. TryPatchModule now catches the access violation; a module that vanished is skipped and not marked checked. A timing race, not caused by the recent changes. To map a crash offset: the out\pdnet.pdb of the same build (MD5 in kit-version.txt) with dbghelp SymFromAddr / SymGetLineFromAddr64.
+
+Stable 10 (2026-10-30): first Experimental 77 (b687163); then, at the user's request, rebuilt from Experimental 78 to include the start-up crash fix: the first stable-10 release and tag were deleted and Experimental 78 promoted again. Now tag stable-10 = master 5a9d7cb, release stable-10 with pdnet-update-78.zip, pushed. The first Stable published as a GitHub release (stable-10, pdnet-update-77.zip), so kits on the stable channel update to it and Experimental kits switched to Stable go back to it. Since Stable 9: nametags always on, hand-editable settings.ini, Online Store removed, Trade reads Theater, Options > Updates, going back to Stable.
+
 Stable 9 (2026-10-30): Experimental 68 promoted by the user; tag stable-9 = master bcd1f27 (pdnet 273C942F), pushed. The first Stable built by the one-step build.bat; since Stable 8: relay fallback, Options > Send Log, the clock correction for EOS, the Rebirth title with the new artwork in kits, Community (Discord) on the main menu, the raised version label. Promoted by hand (rename, relabel, tag) because build.ps1's promote step was being changed for the auto-updater.
+
+Confirmed by the user (2026-10-30):
+
+Tested and working: Tag Team voice channels (lobby: everyone; match: own team), nametag colours in a real match,
+
+the nametag of a player who left a match vanishing, other players' megaphone following their Mic setting, Arsenal Lab
+
+for non-hosts, Quick Join (non-Quick lobbies; Quick only without a usable arsenal), Online Store removed / Theater
+
+(Experimental 75), the EOS clock correction (joins with a wrong PC clock), and controllers other than Xbox
+
+(Experimental 40). Also confirmed earlier: Options > Updates switching channel, Arsenal Lab Buy / Sell Arsenal Case.
+
+The Xbox save import real test is no longer needed (the user, 2026-10-30).
+
+Version label raised (2026-10-29, Experimental 67): on the main menu the game's "Skill Update 1.40 applied" and pdnet's version line under it (HookedDrawText) are drawn 24 px higher, so the version line no longer runs into the hint line (the item descriptions, drawn on the same row from the left).
+
+Community button (2026-10-29, Experimental 66): the main menu's old Help & Support button, which pdnet had turned into Import Xbox Save, is now "Community" (help_main / help / help_hint texts) and opens discord_invite (new pdnet.ini key) in the browser: gamesave.cpp's Launcher stand-in catches the game's xbox.com request as before and launches the invite instead of ImportCloudSave (kept, unused). make-testkit fills discord_invite from discord_invite_url= in the untracked lobbywatch.ini. The user will change the invite and both webhooks for the first public version and wants a reminder before that build.
+
+Clock check (2026-10-29, Experimental 59-64): the MSI tester PC (clock about 31 h fast) and the user's desktop connected (direct and through Epic's relay) but never passed a packet; with the clock corrected they joined at once. EOS's encrypted P2P link seems to fail when two PCs' clocks are more than about a day apart. From 64 the Windows clock is not changed at all: pdlaunch, before injecting pdnet, reads the Date header of a HEAD to https://api.epicgames.dev/ (certificate date errors ignored; 3 s timeouts) and writes the seconds this PC is behind into LocalState\pdnet\clock-offset.txt (deleted at each start; clock_check=off: none). pdnet's eossdk::Load then calls CorrectEosClock (src\eosclock.cpp): if the offset is a minute or more, the EOS SDK module's imports GetSystemTimeAsFileTime, GetSystemTime, GetLocalTime (kernel32), _time64 and _ftime64 (api-ms-win-crt-time) return the corrected time, in that DLL only. Logged as "clock: ..." in both logs. Not yet tried in a match with a wrong clock. History: 59/60 asked with a message box and 61 with an admin prompt from pdlaunch, all of which opened behind the full-screen game or only flashed in the taskbar (a background process can't take the foreground); 62/63 had Setup.bat add a SYSTEM scheduled task "Phantom Dust clock" (62 as an -EncodedCommand, which Windows never started: an encoded PowerShell command making a web request is held, probably by Defender's script scanning; 63 as C:\Program Files\Phantom Dust pdnet\clock.ps1). The user asked for no Setup step, so the task is gone from Setup; Remove.bat still deletes the task and that folder.
+
+Options > Send Log (2026-10-29, Experimental 56; item shown from 57, picking works from 58): a seventh item in the main menu's OPTIONS list (option_enx.ssb, after Keyboard). LogItems adds it and its hint through HookedAddItem with no menu check: the list is built before menu 4 counts as current, which kept the item out in 56. Only the Options scripts add $KEYBOARD items, and no script has an aMAIN_S6 label. Picking item N: each frame the script passes its state ("aMAIN") to menu command 6, which writes the label to run for that frame's input at manager +0x1062c (FUN_140245f00: state + "_S<N>" for input event 100 + N at +0x10414). There is no aMAIN_S6, so the game does nothing; HookedSetState (the cmd 6 wrapper) sees event 106 and that name in menu 4 and runs discord::SendLogs on a thread (3 s debounce): one multipart POST to log_webhook (new pdnet.ini key) with "Log from <name> - <kit>", the last 8 MB of LocalState\pdnet.log and the last 1 MB of the kit's pdlaunch.log. The item's text shows Sending Log... / Log Sent / Log Not Sent: <reason>. Experimental 57 hooked FUN_1402ab6b0 instead, which was wrong: it takes (vm, name) and menu picks never go through it. The kit gets log_webhook from log_webhook_url= in the untracked pdnet\tools\out\lobbywatch.ini.
+
+Relay fallback (2026-10-29, Experimental 55): a log from the user's MSI PC showed one player (0002c46a, 10.0.0.180) never reachable from it although EOS reported the connection "direct" (pings unanswered, joins timing out both ways), while p2p_relay=force had fixed a similar join before. With p2p_relay=allow (the default), p2p::NoAnswer now switches EOS to ForceRelays for the rest of the game run and closes + re-accepts that player's connection (relay settings only apply to a connection made anew), when: the host's lobby ping (Expect) gets no answer in 8 s, a Request (join) gets none in 6 s, or a link answers none of its last 4+ pings. Not for connections already relayed; once per player per minute. Logged as "... - reconnecting through Epic's relay" / "relays forced for the rest of this game run". p2p_relay=force still forces from the start; off disables both.
+
+Arsenal cases in the Lab (2026-10-29, Experimental 79): the user wants arsenal cases bought and sold from the Arsenal Lab, the lobby's too. Menus: arsenalbuy 30, arsenalsell 31 (the shop opens them on top; back returns), laboratory 45 (items Edit Arsenal, View Stock List, View Tutorial Movie; state MAIN). CaseItems (HookedAddItem) adds Buy Arsenal Case / Sell Arsenal Case after View Tutorial Movie, with the shop's hints after its hint. A pick is event 103 / 104 with the missing label aMAIN_S3 / aMAIN_S4 (seen after menu command 6, like Send Log); OpenCaseMenu then clears 0x1404bbc34 and pushes 30 / 31, as the script's open command FUN_140207020 does. The lobby's Arsenal Lab button now opens the Laboratory (45) instead of arsenaledit (64): the menu stack nests (log: 36 -> 45 -> 64, back, back), so Edit Arsenal and the case menus return to the Lab and the Lab's back returns to the lobby. From the lobby, leaving the Lab's menus (45/63/64/30/31) for any other menu becomes a back; the red hand and lobby-ended handling now key on leaving 45. Needs lobby_arsenal_editor (menu hooks) and the command 6 wrap. Not yet checked in the game.
+
+Texts (2026-10-28, Experimental 50): the build label now reads "pdrebirth <kit>" (was "pdnet <kit>"; "Rebirth <kit>" from Experimental 52); the Settings screen's Voice Mode hint is shorter ("Modern: Mic mutes only you. Classic: Off mutes everyone."); every menu text saying Xbox Live says Online (RenameXboxLive, run on every menu script by the MenuTextPatches watcher, now always started): phrases first ("Go to Xbox Live" -> "Go online", "Use Xbox Live to connect" -> "Connect", "signed out of Xbox Live" -> "signed out", ...), then "Xbox Live" -> "Online", "XBOX LIVE" -> "ONLINE"; all shorter, written in place. kMenuItems / kSettingsTexts also accept the "Online Options" / "ONLINE OPTIONS" spellings (still renamed Settings). The Help item's "Copy your Xbox Live save" stays (it is the Xbox save). Experimental 51: the multiplayer menu types its header out on its first visit, before the 50 ms watcher renamed it ("Xbox Live_"), so RenameXboxLive also runs in an inline hook on FUN_1402aa620 (prepares each script right after it is read, before it runs; starts `test rcx,rcx / jz 0x1402aa7d8`, replayed with an absolute jump).
+
+Players removed with the admin tool (2026-10-28, Experimental 49): the admin tool (outside the repo) zeroes every stat of a removed player, the PlayerName stats included, but EOS keeps a 0 entry on each board, which the game showed as "Player 0002dc" with 0. scores.cpp Ranks now leaves out entries with score 0 and no name stats at all (a real player always has a name: pdnet sends it every session, so a removed player who plays again shows up, named, as normal).
+
+Discord "closed" after a host hand-over (2026-10-28, Experimental 48): when the host left with others still in, the player who took the lobby over only marked the message closed if their OWN lobby-posts setting was on, so with it off the message stayed "Open". Since Experimental 41 a message exists only if the original host posted "opened", so "closed" (LobbyLeft, LobbyGone, the exit note and pdlaunch's CloseDiscordMessage) no longer checks this PC's setting: it edits the message whenever there is one, and Send still drops it when there isn't.
+
+Joins that hang (2026-10-28, Experimental 47): logs from SnowRyze, hammy and toaf showed the same thing: the joiner joins the lobby, voice works, but its join requests (p2p control channel) get no answer for 50 s or never, until EOS's link comes up (then the host answers within 250 ms). The host only accepted a connection when Epic's "wants to connect" notice reached it (OnRequest), and that notice travels over Epic's notification socket, which toaf's log showed dropping ("Client didn't send heartbeat"). Now every lobby member's connection is accepted as soon as they show up in the lobby (mpsd OnLobbyEvent -> p2p::Expect: EOS_P2P_AcceptConnection on the EOS thread, plus a ping from this side so the connection is opened from both ends; once per player per minute). Log: "accepted ahead of its request", "reached from this side".
+
 Stable 8 (2026-10-28): Experimental 54 promoted by the user; tag stable-8 = kit27 d27fc7d (pdnet C7AB4121), on GitHub. Since Stable 7: Rated / Unrated in the lobby's SESSION INFO box, no Nametag Colours on/off row.
 
 Nametag colours toggle removed (2026-10-28, Experimental 54): the Settings row "Tag Colours" (nametag_colors on/off) is gone, from the config, the kit ini and the README too; nametags always use the three colour settings (White is one of the choices). An old nametag_colors line in an ini is ignored.
@@ -509,6 +465,28 @@ Rebirth title (2026-10-28; in tester kits from Experimental 65): the word is now
 
 Stable 7 (2026-10-28): Experimental 52 promoted by the user; tag stable-7 = kit27 572a588 (pdnet 389EDD2F), on GitHub. Since Stable 6: PlayStation / Nintendo / other controllers (SDL3 via pdlaunch), player identity kept in Windows Credential Manager, normal volume in matches, Discord fixes (no posts for unannounced lobbies, closed after a hand-over) and the community message layout, joins accepted ahead of Epic's notice, removed players off the boards, Online instead of Xbox Live, "Rebirth" build label, Aura Particle Beeps setting.
 
+"Closed" on game exit (2026-10-27): when the game exits while alone in its lobby, pdnet writes `discord-close.txt` and pdlaunch edits the message to "closed". Both now skip this when discord_lobby_messages is off (before, it still happened whenever player posts were on). Fix ab55850 on master, c081b28 on kit27; testers need the new pdnet.dll and pdlaunch.exe.
+
+Options > Sound row (2026-10-27, works): Aura Particle Beeps (On / Off, settings.ini aura_beeps) under Music / Sound Effects Volume. A Menu Sounds row was tried and dropped (the cursor sounds come from the game's own code at 0x14024B456 / 0x14024B118, not only from menu cmd g1 #43). The SOUND window (menu 4 option, window 4, built at 0x01350 of option_en.ssb = the dump's option_enx.ssb) gets the rows from HookedAddItem; its key handler (0x02AF4) and row drawing use option 4 + cursor row via menu cmd 66 / 67, so option 6 is pdnet's while the script state is SOUN (menu cmd 12 / 6). Every sound starts in FUN_140240870 (2D) or FUN_140240a00 (3D): bank edx, cue r8d, sound r9d; both inline-hooked (SoundOff). sound_log=on logs every sound once, with its caller (for 3D sounds through FUN_140276330, that function's caller). Aura beep: bank 1 sounds come from the stage's sound emitters (FUN_1402214c0: mode 0 replays its cue on a timer, mode 1 starts a loop once). Muting 3D bank 1 cue 4 (the loop, Experimental 34) or cue 1 (the timed one, Experimental 35) did not stop the beep. The beep is the aura counter: FUN_14024de20 raises a player's aura and plays 2D bank 0 cue 5 each time the whole number goes up (own player only; call at 0x14024DF22). Experimental 36 mutes exactly that call when aura_beeps=off: confirmed in game by the user (2026-10-27, the beeping stopped). 3D bank 0 cues 34 / 35 are footsteps (FUN_140231010 / FUN_1402311e0).
+
+Discord lobby message layout (2026-10-27, Experimental 45, from the community's spec): one message, edited in place:
+  🌐 3/4 Open Lobby - Rated Standard Tag - toaf joined the lobby
+  AnoMayCry / Snow Ryze / toaf / < public slot > (one line per slot: host first, then join order)
+
+"Full Lobby" at 4/4; first event "<host> opened the lobby"; closed: "🔴 Closed Lobby - <match> - <host>'s lobby closed". ShortMatch: rated, rule, type in short terms (BR / Tag / 1v1; Standard, Ante, Quick, Puny, Heavy, Spec Enviro, 1 School, Highlander, Puny Only, Heavy Only, KO, Odd One Out). Plain text (Experimental 46: the user didn't want 45's code spans); names markdown-escaped (Plain -> Name). The webhook gets the real 🌐, not ":globe_with_meridians:" (webhooks don't convert shortcodes). lobbytool watch still uses MatchDescription.
+
+Scoreboard entry hidden (2026-10-27, Experimental 44): the user asked to remove "phantomdust.online" from the leaderboard. A game client can't delete another player's EOS stats (only the Epic Developer Portal / server tools can), so scores.cpp Ranks drops entries whose name matches kHidden (case-insensitive; never this PC's own), moves the ranks below up, and logs the hidden product user id ("is off the boards") so it can be matched by id later. Players on older kits still see it.
+
+Player identity kept outside the game (2026-10-27, Experimental 43): the scoreboards (EOS Stats / Leaderboards) count the EOS product user, which comes from the device-ID credential pdnet keeps in LocalState\eos\credentials\*.cred (credstore.cpp: the sandbox can't use Credential Manager), next to LocalState\pdnet\identity.txt. Uninstalling the game deletes LocalState, so a reinstall signed in as a new Epic user (a duplicate on the boards). pdlaunch (KeepIdentity) now copies each of those files, as they are (DPAPI-protected), into Windows Credential Manager (generic "pdnet/identity/<file>", CRED_PERSIST_LOCAL_MACHINE, this Windows user) the first time it sees them; before every game start it puts a missing or different file back, so the first identity kept is the player's for good. Lost only with the Windows user profile (or by deleting those entries in Credential Manager).
+
+Start-up volume in matches (2026-10-27, Experimental 42): a match has no menu (CurrentMenu -1), which SignalPastTitle counted as the intro, so matches played at splash_volume. "No menu" now counts as the intro only before the player is first past the title.
+
+Discord, no posts for an unannounced lobby (2026-10-27, Experimental 41): a host with lobby posts off still got a "closed" message, posted by another player's game after EOS handed it the lobby (host migration adopts the lobby as announced; with no PD_DISCORD message id its "closed" became a new POST). Now only the "lobby opened" job (Job::opening) may create a message; player posts and "closed" only PATCH an existing one (else logged "has no message (not announced) - nothing posted"). Every player needs Experimental 41+ for this.
+
+Controllers (2026-10-27, Experimental 40, untested beyond Xbox): the game reads pads only through Windows.Gaming.Input.Gamepad (factory IGamepadStatics fetched once, FUN_1400deb80; no XInput / DirectInput), which lists Xbox and XInput pads only. pdnet answers that class (hooks.cpp -> gamepads.cpp PadFactory): Gamepads = the OS list + one VirtualPad per pad in LocalState\pdnet\pads.bin (padshare.h; seqlock, heartbeat), GamepadAdded/Removed for those too, Vibration written back. pdlaunch's ReadControllers thread loads SDL3.dll (3.4.18, next to pdlaunch, from C:\Users\ryhol\tools\downloads\sdl3; build-pdlaunch.cmd copies it to tools\out, make-testkit ships it) and writes non-Xbox pads every 4 ms in Xbox layout (SDL south/east/west/north = A/B/X/Y; Y axes flipped), rumbles them from the game's Vibration. Xbox types (SDL XBOX360/XBOXONE, incl. XInput off-brands) are skipped; SDL hints: HIDAPI_XBOX off, WGI off, background events on. pdnet.ini more_controllers=off turns both sides off.
+
+Kit layout (2026-10-27, from Experimental 39): Setup.bat alone at the top of the zip, everything else in a pdnet\ folder (README, the other .bat/.ps1 files, pdlaunch.exe, pdnet.dll, pdnet.ini, eos.ini, EOS SDK, xaudio2_9redist.dll, kit-version.txt). Setup.bat runs pdnet\setup.ps1; every script uses its own folder ($PSScriptRoot / %~dp0) and pdlaunch / pdnet look next to themselves, so the debugger command line and the icacls grant point at the pdnet folder. make-testkit.ps1 writes the zip entry by entry with forward-slash names (Compress-Archive and ZipFile.CreateFromDirectory on .NET Framework write backslashes), reads kit-version.txt from pdnet/ (or the top, older kits), and takes -Commit <kit27 commit> for the Source line. The active kit folder (pdnet.log "config: reading") is now <kit>\pdnet.
+
 Stable 6 (2026-10-27): Experimental 38 promoted by the user; tag stable-6 = kit27 dae8c87 (pdnet EED1A071, pdlaunch from the same day), on GitHub.
 
 Start-up volume (2026-10-27): splash_seconds is gone (setting, Settings row "Logo Time", kit ini). splash_volume now applies while the title screen or intro is on: pdnet (SignalPastTitle) keeps LocalState\pdnet\past-title.txt while any menu other than 7 (playdatasel, the title) / 80 is on, and deletes it when the player backs out to the title (Experimental 38; 37 only did the first time). pdlaunch (which deletes the file before resuming the game) uses the start-up level while it is missing (before it first appears at most 3 minutes; not at all without pdnet), and remembers Volume Mixer changes only at the normal level.
@@ -516,12 +494,6 @@ Start-up volume (2026-10-27): splash_seconds is gone (setting, Settings row "Log
 Game volume (2026-10-27): Windows never saves a Volume Mixer level for PDUWP.exe (no entry in its PolicyConfig\PropertyStore), so it starts at 100% every time. pdlaunch's WatchVolume remembers it, but used to watch only the first audio session it found and saved volume.txt per kit folder, so nothing was ever saved. Now it re-reads all of the game's sessions every 250 ms, gives any new session the remembered level, and saves to LocalState\pdnet\volume.txt (shared by every kit; the kit folder's volume.txt is still read as a fallback).
 
 Empty lobbies (2026-10-27): after a host's game closes or crashes, Epic keeps the lobby for a while with 0 members, and the game listed it as 0/4. Only its owner can destroy it, so lobby searches and Quick Join now skip any lobby with 0 members (MultiplayerService.cpp, GetSearchHandlesAsyncImpl).
-
-## Stage / variant selection (RE notes, PDUWP Ghidra addresses)
-- Stage id = DAT_1403e0304 (0-29, names in Assets\Data\setup\stageset\stageset*.dat; files Map\stNN.alr/.dat; e.g. 02 Spiral / 12 Lightning / 22 Sunlight Highway). Units digit = arena (camera st%02dcam.alr uses id % 10).
-- Online: the host's stage menu picks a stage-set entry DAT_14051775c (FUN_140213c00); the table at DAT_140509bb8 (40-byte entries, filled at run time) gives [0] stage id and [1] layout count; the host rolls DAT_140527c54 = rand() % count (rolled again for each next round in FUN_140187b70).
-- That layout index (DAT_1404c51f0 / byte DAT_140531dcf) selects a section inside stNN.dat: header uint32 table, slot index+1 (falls back to slot 0 if FFFFFFFF), FUN_140203720. Arena 8 (Zain) forces 0.
-- Sync: not in the session or lobby. The host (slot 0) puts stage id + layout (+ 1405277b4/1405277fc/14051ede0/14050e13c) in its 0x80-byte peer message (FUN_1401910a0 -> FUN_140125430); clients copy them only from slot 0 (FUN_140191a60, "Recv Name %s"). The search handle's stage=3 is unrelated (always 3).
 
 Nametags on dead bodies follow the lobby's game host: the patch is now a jump at 0x1401511be to a cave that skips the health check while a pdnet flag byte is 1 (gamepatches::SetNametagsOnBodies). Each member publishes PD_BODYTAGS (its nametags_on_bodies); mpsd ApplyHostRules uses the PD_HOST member's value on join, lobby events and pushes, and UseOwnSettings on leave/lost. Hosts with an older pdnet publish nothing, so each PC keeps its own setting. build-hostrules (929014AD).
 
@@ -532,27 +504,33 @@ Play Dead (skill id 360, 'Health recovers while immobile'; also status effect 1 
 Play Dead online: other players' records on this PC never show the lying pose (no field changes on lying down / getting up; object+0x12FD4/12FD8 48.0/49.0 is local-player only). Rule now: +0x4b4 == 360 and (+0x4ac == 1 [own player, exact] or status effect 1 value +0x61c8 < 0 [the skill's 30 s slow-down, ends at 30 s or next skill]). Colour routine uses rel32 jumps (256-byte cave). build-playdead5.
 
 Play Dead colour, final rule (build-playdead6): TrackPlayDead thread (20 ms) sets g_playDead[slot] when status +0x4b4 becomes 360 (or the skill-use counter +0x4a4 moves on while it stays 360) and clears it when the player moves > 0.75 units from where they lay (position +0xa0/+0xa4/+0xa8 = object+0xE0.., baseline taken 1 s after lying down), takes damage (+0x0c drops), dies, or uses another skill. The colour routine reads g_playDead[r15] / [rbx]. Logs 'P<n> is playing dead' / 'stopped playing dead (<why>)'.
+
+Lobby settings change (build-rule6, 7AA5EF89) works solo 2026-10-22: the host's Change Stage opens liverulesel (48) with the stage list inside. Fixes found with menu_debug: the menu finishes at once if a stage is chosen (session cmd 41 reads DAT_14051775c; set -1 before opening), and its set-up cmd 80 (0x140213f00) resets type/rule (wrapped in the command table 0x1403f1150 to restore the lobby's values). Game type changes are allowed when the players fit (One-on-One 2, else 4; sets DAT_14051c0a4). Not yet tested with live players: clients' lobby text and battles, arsenal re-checks, and the EOS lobby's own member limit (still the old one; going from One-on-One to a 4-player type may not let more players join until it is updated).
+
+Game type change also resizes the hosted Epic lobby (xsapi::SetHostedSessionsMaxMembers -> SessionStore::SetHostedMaxMembers, owner Push with the new maxMembers), on a background thread. build-rule7.
+
+One kit for both versions, no game files changed (2026-10-22, after the Store tester confirmed injected mode works): make-testkit.ps1 default -Stage Kit packs testkit-store\ (setup.ps1/remove.ps1 + pdlaunch.exe + pdnet.dll) as D:\PhantomDust-pdnet-TestKit-<md5>-with-eos.zip. setup.ps1 handles the Store install and unpacked copies (registers an unpacked folder if not installed), and undoes older DLL-swap installs (restores from _pdnet_backup, or puts Microsoft.Xbox.Services.orig.dll back) before enabling the package debugger, the folder ACL and the loopback exemption. The DLL-swap kits stay available as -Stage C/B.
+
 Confirmed online 2026-10-21: the Play Dead tag turns yellow while lying and white on moving or being hit (build-playdead6, 9E57B28E, installed in the Direct build).
 
 Lobby Arsenal editor (build-lab1, lobby_arsenal_editor=on default): menus are scripts on a stack, manager DAT_140533c58 (+0x105f4 = current menu index), FUN_140246130(mgr, menu, force) = open on top, FUN_1402461f0() = back; script commands FUN_140207020/FUN_140207050 (command table 0x1403eefe0). Menu table DAT_1403fa3d0 (0x18 each): livelobby 44, laboratory 45, labostock 63, arsenaledit 64, livearsel 67. pdnet inline-hooks both (10-byte prologue, trampolines) and logs 'menu: open/back'. The invite button (TitleCallableUI::ShowGameInviteUIAsync) opens 64 while the current menu is 44; while opened from the lobby, the editor's exit to any other menu (except 63/64) is turned into a back. Untested in game when committed.
+
 Confirmed in game 2026-10-21: Invite in the lobby opens the Arsenal editor and backing out returns to the lobby (build-lab1, DA15D5EE).
+
 Confirmed in game: the lobby button reads 'Arsenal Lab' (build-lab2, 0715AFA6; newstrings table DAT_1405b0918 patched in memory, English only).
 
 Lobby rule change (build-rule1, untested): the lobby's Gamertag option (TitleCallableUI::ShowProfileCardUI[ForUser]Async) opens liverulesel (48) for the host (slot DAT_140527bc4 == 0). Live values: game type DAT_14050d2d8, rule DAT_140518cf0 (FUN_140183010 = the menu's left/right with per-type rule limits). Confirm (48 pushing another menu) -> back to the lobby + publish: 1405277b4/1405277fc/140527ab8, property table DAT_14051ef80 (0x18 entries, id 3 type / 4 rule, value at +8), FUN_140283220() session update, FUN_140191210() resend of the host settings message (clients copy type/rule from slot 0 in FUN_140191a60). Back from 48 restores the saved values. Game type changes are refused. Open: client lobby display, arsenal re-check on clients.
 
-Lobby settings change (build-rule6, 7AA5EF89) works solo 2026-10-22: the host's Change Stage opens liverulesel (48) with the stage list inside. Fixes found with menu_debug: the menu finishes at once if a stage is chosen (session cmd 41 reads DAT_14051775c; set -1 before opening), and its set-up cmd 80 (0x140213f00) resets type/rule (wrapped in the command table 0x1403f1150 to restore the lobby's values). Game type changes are allowed when the players fit (One-on-One 2, else 4; sets DAT_14051c0a4). Not yet tested with live players: clients' lobby text and battles, arsenal re-checks, and the EOS lobby's own member limit (still the old one; going from One-on-One to a 4-player type may not let more players join until it is updated).
-Game type change also resizes the hosted Epic lobby (xsapi::SetHostedSessionsMaxMembers -> SessionStore::SetHostedMaxMembers, owner Push with the new maxMembers), on a background thread. build-rule7.
-
 Live test 2026-10-21 (3 players): Tag Team -> Battle Royale worked; Battle Royale -> Tag Team crashed the other players' games (no client log: Collect-Log failed while the game held pdnet.log open). Changes into Tag Team are now refused (build-rule8). Collect-Log scripts copy the log with FileShare.ReadWrite.
-Backing out of the settings menu runs session cmd 29 (wait) then cmd 190 (0x140216150 -> FUN_140181d70, abandon the session being created) and opens 36: from the lobby that tore the lobby down (endless loading). cmd 190 is now a no-op while the menu is opened from the lobby, and 48 -> 36 is a cancel (restore + back). build-rule9.
 
-One kit for both versions, no game files changed (2026-10-22, after the Store tester confirmed injected mode works): make-testkit.ps1 default -Stage Kit packs testkit-store\ (setup.ps1/remove.ps1 + pdlaunch.exe + pdnet.dll) as D:\PhantomDust-pdnet-TestKit-<md5>-with-eos.zip. setup.ps1 handles the Store install and unpacked copies (registers an unpacked folder if not installed), and undoes older DLL-swap installs (restores from _pdnet_backup, or puts Microsoft.Xbox.Services.orig.dll back) before enabling the package debugger, the folder ACL and the loopback exemption. The DLL-swap kits stay available as -Stage C/B.
+Backing out of the settings menu runs session cmd 29 (wait) then cmd 190 (0x140216150 -> FUN_140181d70, abandon the session being created) and opens 36: from the lobby that tore the lobby down (endless loading). cmd 190 is now a no-op while the menu is opened from the lobby, and 48 -> 36 is a cancel (restore + back). build-rule9.
 
 Direct build switched to the launcher setup 2026-10-21: original Microsoft.Xbox.Services.dll back in D:\PhantomDust-Direct, pdnet runs from the kit folder D:\PhantomDust-pdnet (pdnet.dll + pdnet.ini there; install a new build by copying it to D:\PhantomDust-pdnet\pdnet.dll). Confirmed in game: patches, Arsenal Lab, lobby settings change, Epic sign-in. setup.ps1 fix: nosuspend.ps1 -Off runs in its own process (both define the IPackageDebugSettings type). The One-on-One player check now counts pdnet's lobby members (xsapi::SharedSessionMembers); DAT_140594ea4 said 3 in a solo lobby. build-rule11.
 
 Live test (1v1 -> BR, 3rd player joined): host fine, but player 2 (joined as 1v1) never saw player 3: its lobby kept DAT_14050d2d8 / DAT_14051c0a4 from joining; the host message only updates 1405277b4/1405277fc. FollowHostSettings thread: non-host in the lobby applies changes of the host's type/rule to its own type, rule, battle rule and player limit (only changes seen while in the lobby). build-rule12; all players need it.
 
 Volume (pdlaunch, untested): pdlaunch now stays running until the game exits. It finds the game's audio session (IAudioSessionManager2, matched by process id), holds it at splash_volume% of the remembered level for splash_seconds, then the remembered level, and afterwards saves every Volume Mixer change to volume.txt next to pdlaunch.exe. Settings remember_volume / splash_volume / splash_seconds in pdnet.ini (kit folder).
+
 Volume fix confirmed in game 2026-10-21 (quieter splash, Volume Mixer level remembered). Kit D:\PhantomDust-pdnet-TestKit-0CD1AD37-with-eos.zip rebuilt with it.
 
 Reverted the lobby settings change (2026-10-21, user: 'isn't working well'): gamepatches.cpp/.h, config.cpp/.h, mpsd.cpp/.h and xsapi.h are back to cf94720 (Arsenal Lab + label rename, Play Dead, nametags kept). Kept: the one-kit launcher setup, pdlaunch volume fix, Collect-Log fix. The RE notes above (menu 48 / session commands 29, 41, 80, 190) stay for a later attempt. build-audio1 (E3E4A487).
@@ -560,104 +538,35 @@ Reverted the lobby settings change (2026-10-21, user: 'isn't working well'): gam
 Cloud save import (build-import1, 85B0685B): the first time the game asks for its saves (GetForUserAsync), pdnet copies every container/blob of the real Xbox cloud save (real GameSaveProvider for the game's user + SCID; pdnet's own WinRT calls aren't hooked) into LocalState\pdnet\saves, then writes saves\_cloud_import.txt with the outcome. Skipped if local saves exist; 20 s limit for Xbox to answer; read only. cloud_save_import=on|off. Not yet tested against a real cloud save (needs a Store player signed in to Xbox with no pdnet saves). Also: the launcher was pointing at make-testkit's staging folder (Setup.bat run from it); re-pointed to D:\PhantomDust-pdnet, and make-testkit now deletes the staging folder after zipping.
 
 Xbox save import moved to the old Help & Support button (2026-10-21; no automatic import, cloud_save_import setting removed). The game opens http://xbox.com/phantom through Windows.System.Launcher (ILauncherStatics, activated via the hooked RoGetActivationFactory); pdnet answers with a stand-in (gamesave.cpp LauncherFactory) that starts the import for xbox.com addresses and forwards everything else. Labels help_main / help / help_hint renamed in the string table (RenameStrings, also the Arsenal Lab ones). First try on the unpacked Direct copy: the real GameSaveProvider::GetForUserAsync hung outright (no Xbox sign-in) after the live saves had been moved aside; saves restored by hand (+ byte copy in D:\PhantomDust-pdnet\saves-safety-copy-20261021). Now: the Xbox read runs on its own thread into LocalState\pdnet\saves.xbox-import, 90 s limit, and only a complete read swaps folders (live -> saves.before-xbox-import-<date>, import -> saves); game writes are paused after a successful swap until restart; Windows toast on success/failure. build-import3. Still untested against a real cloud save (needs a Store player signed in to Xbox).
+
 build-import3 test on the unpacked Direct copy: the import started, the real Windows.Gaming.XboxLive.Storage.dll loaded (and pdnet IAT-hooked it), no result was ever logged, and the game later crashed in its deck code (PDUWP+0x15aa15, FUN_14015a9d0, bad card index); saves untouched. build-import4: the import refuses on non-Store packages (notification), and the hooks skip Windows.Gaming.XboxLive.Storage.dll. Unconfirmed whether the crash was caused by the import.
+
 Import fallback (build-import5): unpacked copies read the local Xbox save cache LocalState\..\SystemAppData\wgs (containers.index + <folder GUID>\container.<n> + blob files named by GUID, Windows GUID byte order, fields checked and logged); the Store version tries the Xbox service first and falls back to the cache. Cache copies go to saves.cache-import, then the same swap. Untested on a real cache (the Direct PC's wgs is empty).
 
-## Open items (parked 2026-10-21, no testers available)
-- (No longer needed, the user 2026-10-30.) Xbox save import (build-import5 / kit 3F8C59F0): failure path confirmed on the unpacked Direct copy; a real import is untested. Needs a tester who played the Store version on that PC: press IMPORT XBOX SAVE, restart, check story/collection/arsenals, send Collect-Log (it lists every container/blob or where the wgs cache parse stopped).
-- In-lobby game type/rule change: reverted (notes above for a later attempt).
-- Tag Team switching crash, client-side lobby limit: only relevant if the lobby settings change comes back.
-
 Loading watchdog (build-watch1, loading_watchdog=on default, observe only): stubs on both script command tables (menu 0x1403eefe0 x136, session 0x1403f1150 x196) report each command's result; a command polled non-stop (gaps < 1 s) with the same result for 30 s on one menu is logged once ('watchdog: ... waiting on it?'), plus 'menu N has been on screen for 60 s'. Normal screens log a few constant getters; a hang adds the stuck one. Step 2 (time out those specific waits) once hang logs exist.
+
 Watchdog baseline (normal play, 35 menu changes incl. a lobby): only the title/start screen (menu 7) idle logged menu commands 6 and 109 = 1 for 30 s+ - normal, not a hang. Everything else quiet.
 
-## Tester kit names (from 2026-10-22)
-Kits are `D:\PhantomDust-pdnet Experimental <N>.zip` (make-testkit.ps1 numbers them; kit-version.txt inside says the
-build and settings). A kit becomes `Stable <M>` only when the owner says so: `make-testkit.ps1 -Promote <N>`.
-Per-kit settings: `-Set voice_chat=off,p2p_debug=on`; `-Notes "..."` for kit-version.txt.
-Stable 1 = build-hook2 (AFCEAD9F) with voice_chat=off, lobby_gamertag_option=off (a join worked).
-Stable 2 = build-icons7 (F2117D66, was Experimental 7): megaphone mic indicator, nametag colours, join retry,
-lobbytool left out of sessions, Setup name prompt fix (promoted 2026-10-22). kit-counter.txt keeps the last Experimental number.
-Stable 3 = build-vmode1 (92539ABD, was Experimental 10): Stable 2 plus voice_mode (mic/classic) and the cleaned-up
-pdnet.ini text (promoted 2026-10-22). Built from commit 443e445. To go back to the most stable version, use the highest Stable number.
-Stable 4 = build-wins3 (375800B9, was Experimental 25, tag stable-4 -> 1ba798b, promoted 2026-10-24): EOS scoreboard
-(4 global boards, names, Total Wins), Rated / Unrated lobbies (+1 / -1 minimum per match), shop top-up, Lobby Browser
-name, ghost lobbies hidden, shorter join wait, Discord Rated/Unrated.
-Experimental 1 = build-resend1 (70A91FE2): join requests re-sent every 2 s until answered (an intermittent "hung on
-joining": the single request sent while EOS set up the P2P link was lost); voice + Gamertag on, p2p_debug=on.
+Discord messages: 'opened' is posted once the lobby has the game's search handle and names gametype (0 Battle Royale, 1 Tag Team, 2 One-on-One) and gamerule (0 Standard Battle ... 11 Annihilate the Odd One, order from Assets\Data\Menu\livesession_en.ssb); no rating. Confirmed in game with build-discord2 (7C6381D2), installed in the Direct build.
 
-## Confirmed by the user (2026-10-30)
-Tested and working: Tag Team voice channels (lobby: everyone; match: own team), nametag colours in a real match,
-the nametag of a player who left a match vanishing, other players' megaphone following their Mic setting, Arsenal Lab
-for non-hosts, Quick Join (non-Quick lobbies; Quick only without a usable arsenal), Online Store removed / Theater
-(Experimental 75), the EOS clock correction (joins with a wrong PC clock), and controllers other than Xbox
-(Experimental 40). Also confirmed earlier: Options > Updates switching channel, Arsenal Lab Buy / Sell Arsenal Case.
-The Xbox save import real test is no longer needed (the user, 2026-10-30).
-Reported 2026-11-04: B button 'works' (the user, Experimental 120), but this PC's log has 'start-up logos can be skipped' and no 'B: start-up logo skipped' in either run, so which part was tested is still to be asked. Confirmed 2026-11-04: the keyboard works in the game through pdlaunch (Experimental 126, the user). update_channel=off in settings.ini ('update: off (update_channel=off)' in the user's pdlaunch.log, Experimental 119). Test Arsenal picks, all of it (Experimental 119), Edit Arsenal after a test battle, Mind Reading (85), the lobby's Arsenal Lab > View Stock List after a match (108), the Partner Aim row exists in Settings (saving and match behaviour not yet confirmed). A Conceptual kit doesn't need a test (the user).
-Confirmed 2026-11-03: View Stock List after Test Arsenal (Experimental 108), nametags always on (Experimental 73), the new Rebirth logo (101; good for now), scoreboard names not pickable (99), Options > Updates without Conceptual (105).
-Confirmed 2026-11-02: match freeze fix (Experimental 69), Discord close (70), going back to Stable (77), start-up crash
-fix (78, not seen again), Updates: Off (98).
+Discord toggles (pdnet.ini, default on): discord_lobby_messages (opened/closed), discord_player_messages (<name> joined/left/full). Join/leave messages name players from each member's PD_NAME.
 
-## Waiting for testers (as of 2026-10-30)
-1. ~~Mind Reading~~ (confirmed 2026-11-04).
-2. ~~Match freeze fix~~ (confirmed 2026-11-02).
-3. ~~Discord close fix~~ (confirmed 2026-11-02).
-4. ~~Nametags always on~~ (confirmed 2026-11-03).
-5. ~~Edit-Settings.bat / hand-typed colours~~ (confirmed 2026-11-06).
-6. ~~Going back to Stable~~ (confirmed 2026-11-02).
-7. ~~Start-up crash fix~~ (confirmed 2026-11-02).
-8. ~~Test Arsenal, View Stock List after a battle~~ (confirmed 2026-11-03, Experimental 108). Not checked: Edit Arsenal from that Lab, and the lobby's Lab after a match (same fix).
-9. **Lock onto partner** (Experimental 103): in a Tag Team match, with or without an enemy targeted, RB (or Tab)
-   locks onto the partner; again unlocks. While on the partner, lock-on or switch-target goes to an enemy.
-   Switch-target never reaches the partner. Log: "target hook running", "lock onto partner on / off ...".
-10. **Modpack guard** (parked 2026-11-03: the user couldn't recreate pewchy's game 2 bug on Experimental 109; come back to it if it's reported again, with a log). Log: 'modpack loaded (N bytes)', 'match starting, N bytes of skill data are modded' each match, 'skill data went back to vanilla (... menu N, game state N) - modpack put back' on a revert. Note which game the mod vanished in.
-11. **Partner Aim setting** (Experimental 118): Multiplayer > Settings shows the row, left / right switches it, A saves, it stays after a restart. Modern: as item 9. Classic, in a Tag Team match: RB or Tab turns the original option on and off (log says which); while on, switch target also reaches the partner.
-12. ~~Test Arsenal picks~~ (confirmed 2026-11-04, Experimental 119).
-13. **B button** (Experimental 120): start-up logos: B skips each one, and the game still reaches the title normally. Movies (needs a full copy, not the stub dump): B ends a cut-scene movie and the story carries on. Hung match load (needs other players; cut a peer's network during a load): after 30 s, B leaves: from the lobby's LOADING to the multiplayer menu, from a match load to the lobby. A normal load must be unaffected: B does nothing in the first 30 s.
-14. **Partner lock on keyboard** (the keyboard itself is confirmed on Experimental 126; still to check: rebinding rows, Lock Onto Partner's row, the key in Modern and Classic, nothing stuck after alt-tabbing. Notes: pdlaunch reads the keys; before that no key worked on the developer's PC. Start the game twice after updating. Keys work in menus and matches, none stuck after alt-tabbing, typing a name still works): Options > Keyboard shows Lock Onto Partner at the end of the list; picking it reads PRESS A KEY, the key is saved and stays after a restart; Esc cancels; Restore Default Settings gives Tab. In a Tag Team match that key works in Modern and Classic. Classic: a 2nd press turns it off and a targeted partner goes back to an enemy (RB too).
-Known, not fixed: players from earlier lobbies keep their links and get reconnected every minute.
+# Reference notes
 
-## Feature backlog (could be added / revisited)
-Parked ideas and half-finished features, newest first. Each has its notes earlier in this file.
-0. **Auto-updater on Linux** (paused by the user 2026-11-03/04; DeadMan009's pull request #4, merged 2026-11-05, adds kit\pdnet\setup-linux.sh with an updater: read it before picking this up). Linux builds have no pdlaunch, so the updater would go inside pdnet.dll. Open question: does the Windows-built pdnet.dll run under wine-uwp, renamed Microsoft.Xbox.Services.dll? If yes, it can use the same releases. If no, each release also needs a Linux build (CI with the EOS and Windows SDKs; check the EOS license). The user says Linux runs today, with crossplay; no Linux log seen yet.
-1. **Loading-screen timeout** (parked 2026-10-21). Step 1 was built and tested (commit 4cf65cb, observe-only "loading watchdog":
-   stubs on the menu 0x1403eefe0 x136 and session 0x1403f1150 x196 command tables log a command polled with the same result
-   for 30 s and screens up for 60 s; normal baseline = title screen menu 7, commands 6/109). Taken out of the build by request.
-   Next: bring it back (git show 4cf65cb), catch real hangs in the log, then time out those specific waits (step 2).
-2. **Xbox save import, real test** (no longer needed, the user 2026-10-30; built, kit 3F8C59F0+): IMPORT XBOX SAVE (was Help & Support). Failure path confirmed on an
-   unpacked copy; a real import from the Xbox service (Store) or the local wgs cache needs a tester who played the Store version.
-3. **In-lobby game type / rule change** (reverted 2026-10-21, commit 4ff540e). Worked solo; open problems: switching into Tag
-   Team crashed other players; players who joined a One-on-One kept a 2-player limit (follow-host fix untested). Notes: menu 48,
-   session commands 29 / 41 / 80 / 190, settings message 1405277b4/1405277fc.
-4. **Lobby's Gamertag option for future settings** - DONE 2026-10-21 (build-gt5, tested alone): enabled even when alone
-   (lobby_gamertag_option=on). Alone, it opens an empty player list; the window is ready for future settings.
-5. **Spectator mode for tournaments** - feasibility only: camera/HUD switching via the local-player index DAT_1404bbe00 looks
-   testable offline; a non-playing seat is hard (4 fixed player slots). Suggested order: camera/HUD test, spectate-after-
-   elimination, then a spare-slot spectator.
-6. **Tag Team lobby crash / team data** - only matters if 3 comes back.
-7. **Voice chat over EOS** (traced 2026-10-21, plan below, nothing built).
+## Discord announcements from every player's game (discord_webhook=)
+pdnet.ini `discord_webhook=<URL>` (src/discord.*): the PC that owns a public SearchableGame lobby posts to the webhook
+on a worker thread: opened (mpsd Write, created + owner), player count / full (OnLobbyEvent -> LobbyChanged),
+closed (Write leave when last member -> LobbyLeft; EOS Closed/Kicked -> LobbyLost). Host migration: the old owner stops,
+the new owner adopts the lobby silently and announces later changes. A crashed/killed host posts no "closed".
+The stage C kit pdnet.ini has `discord_webhook=`; make-testkit.ps1 fills it from -Webhook or pdnet\tools\out\lobbywatch.ini
+(-Webhook none = off). The URL is then inside every kit: if abused, delete the webhook in Discord and rebuild kits.
+Don't also run `lobbytool watch` on the same channel, or lobbies are announced twice.
 
-Voice chat (backlog 7): the game uses GameChat 1 (`Microsoft.Xbox.GameChat.dll` + `ChatAudio.dll`, in-package). It is not
-behind XSAPI: ChatAudio gets Xbox tokens itself (WebAuthenticationCoreManager) and talks to the Xbox chat service over a
-MessageWebSocket, so it can't work without a real Xbox sign-in. Game side: wrapper `Xb1ChatManager` = `*(DAT_1404bbc48+0x18)`
-(+0x10 the GameChat ChatManager, +8 its lock). FUN_1400c5e20 creates the manager and registers the outgoing-packet (+0x58),
-compare-console (+0x68) and +0x88 handlers; FUN_1400c6850 joins = AddLocalUserToChatChannelAsync(channel 0, user XUID from
-`*(DAT_1404bbc48+0x28)+0xd0`); the JoinChatAsync/LeaveChatAsync errors are caught and logged (game carries on). Mesh console
-added/removed -> FUN_1400fc400 / FUN_1400fc380 -> HandleNewRemoteConsole / RemoveRemoteConsoleAsync. Packets ride the game's
-mesh as message type 3 (CHAT). Lobby option 4 "Voice Chat: On/Off" (`<MUTE TOGGLE>`, livelobby ahlmenu_s3) toggles settings
-flag 15 = byte DAT_1404bad34 (script group 10 #3 get 0x1400bde50 / #4 set 0x1400bdfc0); 1 = voice OFF: FUN_1400c64d0 calls
-MuteAll/UnmuteAll and FUN_1400c61f0 (outgoing packet handler) drops mic packets. FUN_140026150 (the game's debug print) is
-empty in this build. pdnet today: EOS platform created without RTCOptions (eossdk.cpp) and lobbies with bEnableRTCRoom =
-EOS_FALSE (lobbies.cpp), so EOS voice is off at both levels. SDK 1.19.2.1 has eos_rtc*.h.
-Plan: (1) RTCOptions on the platform + bEnableRTCRoom on lobby create (joiners get the room automatically), log
-RTC room connection changes, new pdnet.ini voice_chat=on; (2) follow the game's own Voice Chat On/Off (poll DAT_1404bad34 ->
-EOS_RTCAudio_UpdateSending) so the existing lobby option works; (3) leave GameChat failing quietly (no double audio), optional
-stub later; (4) check whether the EOS lobby lives through the match (mpsd.cpp leaves it when the MPSD member leaves) - if
-not, keep it open or move voice to a room of its own; (5) later: per-player mute (Gamertag window), volume. Needs: the
-tester client policy in the EOS dev portal allowing Voice/RTC, and Windows mic permission for Phantom Dust (manifest
-already declares microphone).
-
-Lobby Gamertag option (backlog 4): greyed (with Kick Player) when nobody else is in the lobby - not an Xbox privilege (CheckGamingPrivilege* never called). The lobby script asks session command 28 (0x140213a80: 1 if the slot is this PC or found in the peer list DAT_140595ea8/0x298 entries) for each slot; Gamertag and Kick share that. menu_debug=on (off by default) logs each distinct lobby script command+arg+result once while menu 44 is up. Fix (gamepatches.cpp LobbyGamertagOption): livelobby.ssb's player-count function (file 0x3634) gates Gamertag's draw (`count < 2` -> grey, 0x4608) and its host/client select handlers (`count > 1`, 0x42B0 / 0x446C -> Gamertag window at 0x3518). A watcher thread patches each loaded copy (menu table entry 44 +0x10) to `count < 0` / `count > -1`; Kick Player (0x46B4 / 0x4320, same pattern, its window titled "Kick Player") is left alone. ssb format: header +0 code base (0x20 in the file, reused at run time), +4 labels, +8 labels end, +12 strings (file offsets; relative to their own field once loaded). Labels are 12 bytes: two base-40 words (table 0x1402f76a0: 0-9 a-z _) + code offset in words from the file start. A select handler label is `a<h|c>lmenu_s<item>` (host/client), a draw handler is `draw_menu`.
+## Stage / variant selection (RE notes, PDUWP Ghidra addresses)
+- Stage id = DAT_1403e0304 (0-29, names in Assets\Data\setup\stageset\stageset*.dat; files Map\stNN.alr/.dat; e.g. 02 Spiral / 12 Lightning / 22 Sunlight Highway). Units digit = arena (camera st%02dcam.alr uses id % 10).
+- Online: the host's stage menu picks a stage-set entry DAT_14051775c (FUN_140213c00); the table at DAT_140509bb8 (40-byte entries, filled at run time) gives [0] stage id and [1] layout count; the host rolls DAT_140527c54 = rand() % count (rolled again for each next round in FUN_140187b70).
+- That layout index (DAT_1404c51f0 / byte DAT_140531dcf) selects a section inside stNN.dat: header uint32 table, slot index+1 (falls back to slot 0 if FFFFFFFF), FUN_140203720. Arena 8 (Zain) forces 0.
+- Sync: not in the session or lobby. The host (slot 0) puts stage id + layout (+ 1405277b4/1405277fc/14051ede0/14050e13c) in its 0x80-byte peer message (FUN_1401910a0 -> FUN_140125430); clients copy them only from slot 0 (FUN_140191a60, "Recv Name %s"). The search handle's stage=3 is unrelated (always 3).
 
 ## Scoreboard
 
@@ -686,8 +595,336 @@ The scoreboard menu (liveranking, menu 41) shows only the 4 Global boards (Patch
 
 ## Rated / Unrated lobbies
 
-rated_lobbies=on: the create-session Rating option (session number ratinglimit 0/1, originally Â±200 join limit) reads Unrated / Rated; the search option finds one kind; ratingmin/ratingmax are forced to 0/1000000 (no join limit). FUN_1401835c0 (rating += change, match start and end) is hooked: change 0 unless the session pdnet holds has ratinglimit 1 (scores::RatedMatch in xsapi/mpsd.cpp). The game's 'Official Battle rules only' checks (0x1401878c9 jg, 0x1401882c8 ja) are NOPed, so any rule can be Rated. The '[Official Battle] Applies toward Scoreboard Total' line is removed from rule descriptions in every menu script. Wins count in both kinds. Log: 'gamepatch: rating change'.
+rated_lobbies=on: the create-session Rating option (session number ratinglimit 0/1, originally ±200 join limit) reads Unrated / Rated; the search option finds one kind; ratingmin/ratingmax are forced to 0/1000000 (no join limit). FUN_1401835c0 (rating += change, match start and end) is hooked: change 0 unless the session pdnet holds has ratinglimit 1 (scores::RatedMatch in xsapi/mpsd.cpp). The game's 'Official Battle rules only' checks (0x1401878c9 jg, 0x1401882c8 ja) are NOPed, so any rule can be Rated. The '[Official Battle] Applies toward Scoreboard Total' line is removed from rule descriptions in every menu script. Wins count in both kinds. Log: 'gamepatch: rating change'.
 
 ## In-game Settings
 
 Multiplayer menu > Settings (was Xbox Live Options, liveoption menu 68). Its Options panel's Cross Play row is left out (g10 #3 flag 3 reads 0 while Settings opens or shows) and the Voice Chat row (and hint) is replaced through menu command 40 by pdnet's rows: Name (typed via CoreWindow CharacterReceived), Voice Mode, Body Tags, Tag/Dead/Ally/Foe colours, Logo Volume/Time, Discord Lobby/Join. Each row's text holds its value; left/right reaches pdnet through the script's empty case (0x05814 patched to session cmd 154, wrapped), with sound 37 (g1 #43). Row mapping patched at 0x0564C/0x05670/0x05674; window raised via menu cmd 37. Changes go to pdnet.ini (SaveSetting).
+
+## Voice chat (GameChat, traced 2026-10-21; EOS voice was built on this plan)
+Voice chat (backlog 7): the game uses GameChat 1 (`Microsoft.Xbox.GameChat.dll` + `ChatAudio.dll`, in-package). It is not
+behind XSAPI: ChatAudio gets Xbox tokens itself (WebAuthenticationCoreManager) and talks to the Xbox chat service over a
+MessageWebSocket, so it can't work without a real Xbox sign-in. Game side: wrapper `Xb1ChatManager` = `*(DAT_1404bbc48+0x18)`
+(+0x10 the GameChat ChatManager, +8 its lock). FUN_1400c5e20 creates the manager and registers the outgoing-packet (+0x58),
+compare-console (+0x68) and +0x88 handlers; FUN_1400c6850 joins = AddLocalUserToChatChannelAsync(channel 0, user XUID from
+`*(DAT_1404bbc48+0x28)+0xd0`); the JoinChatAsync/LeaveChatAsync errors are caught and logged (game carries on). Mesh console
+added/removed -> FUN_1400fc400 / FUN_1400fc380 -> HandleNewRemoteConsole / RemoveRemoteConsoleAsync. Packets ride the game's
+mesh as message type 3 (CHAT). Lobby option 4 "Voice Chat: On/Off" (`<MUTE TOGGLE>`, livelobby ahlmenu_s3) toggles settings
+flag 15 = byte DAT_1404bad34 (script group 10 #3 get 0x1400bde50 / #4 set 0x1400bdfc0); 1 = voice OFF: FUN_1400c64d0 calls
+MuteAll/UnmuteAll and FUN_1400c61f0 (outgoing packet handler) drops mic packets. FUN_140026150 (the game's debug print) is
+empty in this build. pdnet today: EOS platform created without RTCOptions (eossdk.cpp) and lobbies with bEnableRTCRoom =
+EOS_FALSE (lobbies.cpp), so EOS voice is off at both levels. SDK 1.19.2.1 has eos_rtc*.h.
+Plan: (1) RTCOptions on the platform + bEnableRTCRoom on lobby create (joiners get the room automatically), log
+RTC room connection changes, new pdnet.ini voice_chat=on; (2) follow the game's own Voice Chat On/Off (poll DAT_1404bad34 ->
+EOS_RTCAudio_UpdateSending) so the existing lobby option works; (3) leave GameChat failing quietly (no double audio), optional
+stub later; (4) check whether the EOS lobby lives through the match (mpsd.cpp leaves it when the MPSD member leaves) - if
+not, keep it open or move voice to a room of its own; (5) later: per-player mute (Gamertag window), volume. Needs: the
+tester client policy in the EOS dev portal allowing Voice/RTC, and Windows mic permission for Phantom Dust (manifest
+already declares microphone).
+
+## Lobby Gamertag option and the .ssb script format
+Lobby Gamertag option (backlog 4): greyed (with Kick Player) when nobody else is in the lobby - not an Xbox privilege (CheckGamingPrivilege* never called). The lobby script asks session command 28 (0x140213a80: 1 if the slot is this PC or found in the peer list DAT_140595ea8/0x298 entries) for each slot; Gamertag and Kick share that. menu_debug=on (off by default) logs each distinct lobby script command+arg+result once while menu 44 is up. Fix (gamepatches.cpp LobbyGamertagOption): livelobby.ssb's player-count function (file 0x3634) gates Gamertag's draw (`count < 2` -> grey, 0x4608) and its host/client select handlers (`count > 1`, 0x42B0 / 0x446C -> Gamertag window at 0x3518). A watcher thread patches each loaded copy (menu table entry 44 +0x10) to `count < 0` / `count > -1`; Kick Player (0x46B4 / 0x4320, same pattern, its window titled "Kick Player") is left alone. ssb format: header +0 code base (0x20 in the file, reused at run time), +4 labels, +8 labels end, +12 strings (file offsets; relative to their own field once loaded). Labels are 12 bytes: two base-40 words (table 0x1402f76a0: 0-9 a-z _) + code offset in words from the file start. A select handler label is `a<h|c>lmenu_s<item>` (host/client), a draw handler is `draw_menu`.
+
+# Early history (2026-10-17 to 2026-10-20)
+
+How the project started. Paths and builds here are the old ones (before the 2026-10-30 layout); much is superseded.
+
+**Repository layout and building (from 2026-10-30; older notes below use the old paths).** The user couldn't build a Windows SDK 10.0.22000.0 is required: `xsapigen` was made by its C++/WinRT (2.0.210806.1), and on a PC with only SDK 10.0.26100 the build failed with "Mismatched C++/WinRT headers"; build.ps1 checks for it and offers to open Microsoft's standalone installer (Windows SDK 10.0.22000.194, https://go.microsoft.com/fwlink/?linkid=2173743, from the SDK archive page): current Visual Studio 2022 (17.14) no longer has it as a component. A download of the repository as a ZIP (no .git, or no git installed) builds too: the kit's Source line then says "unknown (not built from a git clone)" (before, Windows PowerShell treated git's "not a git repository" as a fatal error).
+**Repository cleanup (2026-10-31).** This log moved to `docs\HANDOFF.md` (the top of the repository is README.md, build.bat, build-linux.sh and the folders). `tools\old` was removed (the old build.cmd / build-pdlaunch.cmd / make-testkit.ps1, lobbytool, the stage A-C test kits, early dev scripts); they are still in git history, for example at tag stable-9. The kit27 branch is retired (it held nothing master lacks: its commits were cherry-picked copies, and its two Linux commits from pull request #1 are identical to master's from #2); its last commit is tag `kit27-final`. It was still GitHub's default branch, so downloads and the repository page showed the old layout until the default was switched to master.
+fresh clone (it needed Python, files from the game install and folders on the developer's PC), so the repository was
+reorganised. Old path -> new path: `pdnet\src` -> `src\`, `pdnet\xsapi` -> `xsapi\` (with `gen\` now committed, so
+`generate.py` never has to run), `pdnet\tools\pdlaunch.cpp` -> `launcher\`, `testkit-store\` -> `kit\` (Setup.bat at
+the top, the rest in `kit\pdnet\`) plus `testkit-stagec\pdnet.ini` -> `kit\pdnet\pdnet.ini`, `pdnet\tools\rebirth-word`
+-> `tools\rebirth-word`, `kit-counter.txt` -> `tools\`, the old notes -> `docs\`, and everything outdated
+(`pdnet\build.cmd`, `build-pdlaunch.cmd`, `make-testkit.ps1`, lobbytool, the stage A-C test kits, the top-level dev
+scripts) -> `tools\old\`. **One `build.bat`** (running `tools\build.ps1`) builds pdnet.dll and pdlaunch.exe into `out\`
+and makes `out\kit` and `out\PhantomDust-pdnet.zip`. `build.bat experimental "notes"` also saves the next numbered
+Experimental zip, and `build.bat promote N` makes a Stable. It needs Visual Studio's C++ tools and Epic's SDK in
+`deps\eos-sdk` (each user downloads that, because of its license; on the developer PC it is a junction to the SDK
+download). SDL3 is in `deps\SDL3`. Secrets live in `private\` (git-ignored): `eos.tester.ini` (the kit's eos.ini),
+`eos.local.ini` and `links.ini` (discord_webhook / log_webhook / discord_invite for the kit's pdnet.ini). The kit27
+branch is retired: kits are built from master (they had become identical, title included). A Linux build from contributor DeadMan009 (pull request #2: `build-linux.sh`, clang-cl + lld-link for wine-uwp, plus Wine support in `generate.py`) was merged into this layout; it sits at the top next to `src\` and writes to `out/linux`.
+
+## 1. Goal
+
+The user owns a decrypted dump of the 2017 Phantom Dust remaster (UWP / Microsoft Store, package
+`Microsoft.MSEsper`, x64, TitleId 267248679). They want its online play to stop depending on Microsoft's
+architecture (Xbox Live accounts, and Teredo for peer-to-peer). They want it as plug-and-play as possible for players
+(no port forwarding, no router changes), and eventually their own server.
+
+**A firm user requirement:** keep the original Microsoft/Teredo networking available and working the whole time.
+Never break the Teredo build or the master dump.
+
+## 4. Done and verified by the user
+
+1. **Recon.** All Xbox code lives in `PDUWP.exe` (C++/CX glue built from Microsoft's Xbox multiplayer samples) plus the XSAPI
+   WinRT DLL. The engine (`WPFLibRelease_UWP.dll`) has no Xbox dependency. The full list of Xbox classes in use (~50) is in `MODDING_PLAN.md` §4b.
+2. **`pdnet` shim DLL** (`_netmod\pdnet`), shipped as `Microsoft.Xbox.Services.dll`; the original is renamed `Microsoft.Xbox.Services.orig.dll`:
+   - It forwards every XSAPI activation to the original and logs it.
+   - It IAT-patches `RoGetActivationFactory` in every loaded module (key one: `vccorlib140_app.dll`, which all C++/CX activations go through) to answer selected OS classes itself.
+   - **Local saves:** it replaces `Windows.Gaming.XboxLive.Storage.GameSaveProvider` (Connected Storage) with plain files. This fixed the
+     **"retrieving profile" hang**: `GetForUserAsync` never completes for the sideloaded copy. Verified: profile creation, save and reload all work.
+   - The static CRT (`/MT`) means it needs nothing from the package. Build with `_netmod\pdnet\build.cmd`.
+3. **Debug menu move.** The dump had `Menu\option_en.ssb` replaced by a patched debug menu, with the real options kept as `option_enx.ssb`.
+   The game loads `Assets\Data\Menu\<name>_en.ssb` by name. Now Options = real options, and Multiplayer → Split Screen
+   (`vsmode_en.ssb`) = debug menu. Script: `_netmod\debugmenu.ps1 [-Revert]`. Verified by the user.
+4. **Stage 2 code (direct UDP instead of Teredo)**, first built 12:26 (still the Teredo build's DLL); the Direct build now runs the rebuilt test-peer version. It replaces
+   `Windows.Networking.XboxLive.*`: device addresses become pdnet snapshots carrying the IP and ports, and endpoint pairs come from a CONNECT/ACK
+   handshake on UDP 43211. QoS uses pings. It loads and doesn't break anything (user verified single player and the lobby browser), but **it has never
+   run a real connection**, because only creating or joining a lobby exercises it and there's no second PC.
+5. **Shareable test kit** (2026-10-18): `D:\PhantomDust-pdnet-TestKit-2026-10-18.zip` (source in `testkit\`). It contains the mod only, no game files;
+   `install.ps1` applies it to the tester's own unpacked copy. Not yet used by a second tester.
+6. **No-suspend** (2026-10-19): `nosuspend.ps1 [-Off]` turns on package debug mode (`IPackageDebugSettings::EnableDebugging`) so Windows
+   doesn't suspend the game when minimized. Verified: no threads suspended in the background. Re-run it after a build switch if pausing returns.
+7. **EOS (Epic Online Services) works inside the game's sandbox** (2026-10-19), with EOS SDK 1.19.2 loaded at run time (`eossdk.*`):
+   - Feasibility test (`eos_test=on`, `eostest.ps1`) passed: device-ID login (no Epic account), NAT query (Moderate), and a lobby created and deleted with presence off.
+   - The sandbox blocks Windows Credential Manager, where EOS keeps the device ID. `credstore.cpp` points the EOS module's
+     `CredRead/Write/Delete/Free` imports at DPAPI files in `LocalState\eos\credentials`.
+   - Long-lived sign-in (`eos=on`, `eos.cpp`, `eosrun.ps1`): stayed signed in for about 75 minutes with no drops (the SDK refreshes device-ID sessions itself).
+     It uses the same product user every launch.
+8. **Xbox-free mode** (`xbox=off`, `xboxfree.ps1`, code in `pdnet\xsapi\`): pdnet answers every `Microsoft.Xbox.Services.*` class itself.
+   - `xsapi\generate.py` runs cppwinrt on the XSAPI winmd: 169 classes. A stub `.cpp` is regenerated until it has hand-written code or a `// pdnet-hand` line.
+     Unimplemented members log `xsapi-stub:` and return safe defaults (empty/zero/default object/finished async).
+   - Hand-written so far: `XboxLiveUser` (local sign-in; name = `display_name`; id kept in `LocalState\pdnet\identity.txt`), `XboxLiveContext`,
+     settings and app config, title storage (served from `titlestorage\` or the game's `Assets\Data(\gstorage)`; missing blobs fail as HTTP 404),
+     and **stage A sessions** (`xsapi\mpsd.*`: in-memory session store plus MultiplayerSession/member/properties/constants/reference/write result
+     and the write/read/events parts of MultiplayerService).
+   - **Verified by the user:** boots without Xbox sign-in; main menu, scenario mode and the multiplayer menu work; **creating a match lobby works**
+     (on this PC only, since sessions exist only in memory).
+9. **Stage B code: sessions shared through EOS lobbies** (2026-10-19, session 3, commit `e689999`, DLL `pdnet\build-stageb`, MD5 `91379196`).
+   Follows [`STAGE_B_GUIDE.md`](STAGE_B_GUIDE.md) steps 1–8. The session ↔ lobby mapping is written down at the top of `xsapi\mpsd.h`.
+   - `src\lobbies.*`: the EOS lobby layer (plain C++, no EOS types, so the XSAPI side can use it). Each call is posted to the EOS thread and
+     the caller waits with a 12 s timeout, so the game can't hang on a lost callback. Notifications go to one worker thread in order.
+   - `xsapi\mpsd.*`: `SessionStore` creates/joins/updates/leaves the lobby inside `Write()`. The lobby id is `pd1` + SHA-256 of the session key,
+     so a session reference or search handle (handle id = lobby id) finds the lobby on any PC. Bucket `pd1|<scid>|<template>` gates mod versions.
+     Writes apply only fields the game edited (stage A copied the whole doc, which would overwrite other players' data).
+     Only the lobby owner can write lobby attributes, so a non-owner's session-level edits go to its `PD_REQ` member attribute and the owner applies
+     them; the owner also numbers members in join order and promotes whichever member the game names as host.
+   - Search handles live on the lobby (`PD_SEARCH`); `GetSearchHandlesAsync` searches the bucket and evaluates the game's filter
+     (`numbers/ratingmin le N and numbers/ratingmax ge N`, `numbers/reqmoney le N`, `numbers/cross eq 0`, `numbers/ratinglimit eq N`, from PDUWP.exe strings).
+   - Remote changes raise `MultiplayerSessionChanged` (respecting `SetSessionChangeSubscription`); EOS sign-out raises `MultiplayerSubscriptionLost`.
+   - `pdnet\tools\lobbytool.exe` (`build-lobbytool.cmd`): a second EOS client on this PC (desktop process, so its own device ID and product user).
+     `search`, `show <id>`, `join <id> [s]` (joins as fake player "lobbytool" with a TEST-NET address), `host <id> [s]` (self-test).
+   - **Verified (no game):** all 40 lobby functions resolve; lobbytool self-test against EOS passed (create, 1300-byte value split and rejoined,
+     read by id, update visible, destroy). A new lobby shows up in bucket searches after a few seconds, not instantly.
+   - **In game (2026-10-19 00:27, Direct build with `build-stageb`, user created a match):** the game created lobby `pd12f7be…` (owner = the
+     game's product user), wrote it 4 times and set its search handle (numbers cross, crossplat, crossplay, gamerule, gametype, language,
+     rating, ratinglimit, ratingmin/ratingmax, reqmoney, reqskill, sendskill, sessiontype, stage, state, version=140; strings gamename,
+     platform). `lobbytool search` found it with all properties. `lobbytool join … 60`: the game numbered the new member 2 within ~150 ms,
+     raised `MemberListChange`, re-read the session (2 members); on leave it raised it again (1 member). No crash, no multiplayer stubs hit.
+     **The lobby screen did not list "lobbytool"** (user, 00:29).
+   - **Test peer in game (00:36, `test_peer=on`, DLL `A3755102`):** first in-game run of pdnet's stage 2 networking: 4/4 PASS (ping, CONNECT/ACK,
+     HELLO both ways — the game named itself `<xuid> [noid]` — then 20 s of heartbeats and a clean DELETE). Right after HELLO the game sent one
+     48-byte type-3 (chat/custom) message that the test peer doesn't answer. **The lobby screen listed nothing either.**
+   - So neither a session member alone nor a mesh peer alone shows up. Likely the UI needs both (a member whose device address matches the
+     connected peer) and/or the game's own player-info exchange after HELLO. Next: Ghidra on the lobby member list and the type-3 message,
+     or a real second PC (which does all of this naturally).
+   - Fixed meanwhile (`4b0a7e1`): EOS hides member ids/attributes from non-members, so search results now carry EOS's member count.
+   - Known gaps: reservations (`AddMemberReservation`) stay on the PC that made them; transfer handles (`SetTransferHandleAsync`) are still a stub;
+     an EOS re-sign-in doesn't rejoin lobbies (the game is told the subscription was lost and should leave/recreate).
+
+## 5. Key technical findings (for whoever continues)
+
+- **Game socket** (Ghidra, `PDUWP.exe`):
+  - `FUN_140027870` creates it: `WSASocketW(AF_INET6, SOCK_DGRAM, UDP)`, with `IPV6_V6ONLY=0` (dual-stack), non-blocking, bound to the
+    `networkmanifest.xml` port **43210**.
+  - `FUN_140029080` sends: it gets the destination from `IXboxLiveEndpointPair::GetRemoteSocketAddressBytes` (vtable +0x48) into a 0x80-byte buffer, then calls `WSASendTo`.
+  - `FUN_140029330` receives: a plain loop, `WSARecvFrom` with no overlapped I/O; it retries on `WSAEWOULDBLOCK` and maps senders back to peers through the endpoint pair lookup.
+  - **So Teredo/SDA only supplies addresses. Game packets are ordinary UDP**, and IPv4-mapped addresses work on that socket.
+- Mesh message types: HELLO, HEARTBEAT, ACK, CHAT, CUSTOM (`PDUWP.NetworkMesh`). Sessions and matchmaking go through `PDUWP.Xbox.Samples.Multiplayer.MultiplayerManager` on XSAPI MPSD, SmartMatch and search handles.
+- On this sideloaded copy, **Xbox Live sign-in, title storage (card data) and the lobby browser still work**. Only Connected Storage hangs.
+- Meld (`MeldRelease_UWP.dll`) requests an Xbox token (`GetTokenAndSignature`), so it probably also calls a separate web backend. Not investigated.
+- Menu scripts: `.ssb`. Name table in `PDUWP.exe` (`menu1, shop, vsmode, option, command, vsmenu, mainmenu, …`).
+- `tms_options.csv` holds the store product definitions and online version gates. Saved copies under `UserConfig` are AES-encrypted by the game.
+
+## 6. Current state of the source tree
+
+**Repaired (2026-10-17, second session).** `_netmod` is now a git repo; the first commit is the broken snapshot, for reference.
+
+- `net.h`/`net.cpp` were rebuilt from the installed DLL's PDB and disassembly, and `config.*` were reverted to the stage 2 fields
+  (`teredo`, `advertiseIp`, `gamePort`, `controlPort`=43211, `qosProbes`; default INI text restored byte for byte).
+- Stage 2 wire format (confirmed from the binary):
+  - snapshot (34 bytes, big-endian) = `"PDN1" | 1 | 0 | gamePort | controlPort | ip[16] | deviceId`
+  - control message = `"PDNC" | type | nonce (4 bytes, native order) | body`, on one dual-stack UDP socket bound to `controlPort`
+  - Ack and Pong complete a pending `Request` by nonce. Everything else goes to the handler.
+- Verified: builds clean with `build.cmd build-repair`. Exports, imports and all UTF-16 strings are identical to the installed DLL,
+  and every `pdnet::net` function exists in both. A loopback harness passed the snapshot and Base64 round trips, connect→ack and
+  ping→pong against a Python peer written from the disassembled format, plus the unsolicited-message path. Not yet run inside the game.
+- `build.cmd [outdir]` now takes an optional output folder. `pdnet\build-stage2-1226\` is a copy of the original good build (DLL + PDB + objs), ignored by git.
+- The rebuilt DLL (`pdnet\build-repair`, MD5 8316A4A1…) was installed in the Direct build and smoke-tested in game on 2026-10-17
+  (13:07: it loaded and lobby creation worked). It was then replaced there by the test-peer build (§6a).
+  The Teredo build and `pdnet\build` still have the original 12:26 DLL (MD5 E3E67884…), which is also kept in `pdnet\build-stage2-1226`.
+- Build output folders: `build` / `build-stage2-1226` = original 12:26, `build-repair` = repaired source, `build-testpeer` = repaired + test peer,
+  `build-eostest` (CAD9F6F4) = EOS test, `build-eos` (5CF6B75D) = long-lived sign-in, `build-xboxoff` (F21B9852) = Xbox-free mode stage A, `build-stageb` (91379196) = stage B, EOS lobbies (current source).
+  Don't build into `build` or `build-stage2-1226`; they're the known-good copies.
+- Since 2026-10-19, `build.cmd` compiles in phases: core sources, then the XSAPI stand-in with a precompiled header (`xsapi_pch.h`) and `/MP`,
+  then link (about 95 s). It needs `xsapi\gen\` first: `py -I pdnet\xsapi\generate.py <master>\Microsoft.Xbox.Services.winmd` (gen\ is git-ignored).
+- Commit messages containing double quotes break when passed through PowerShell to git; write them to a file and use `git commit -F`.
+- `server\pdserver.py` (partial) was deleted; it's still in the first commit.
+
+## 6a. Test peer (one-PC join test)
+
+`pdnet.ini: test_peer=on` (set in **D:\PhantomDust-Direct only**; off by default) starts an in-process fake second player
+3 s after the game first calls `XboxLiveEndpointPairTemplate.GetTemplateByName` (lobby creation). It uses its own sockets
+(control 43212, game 43213) inside the game process, which sidesteps AppContainer loopback isolation. The steps are:
+ping, then CONNECT, then HELLO on the game port, then 20 s of heartbeats with ACKs, then DELETE. It logs `testpeer: n/4 PASS|FAIL` lines to pdnet.log.
+Code: `src\testpeer.cpp`. Verified offline against net.cpp plus a Python stand-in for the game port. The Direct build has this DLL (`build-testpeer`, MD5 632CEAC6…).
+**Not yet run in the game:** as of 2026-10-18, pdnet.log has no `testpeer:` lines. Running it is the next one-PC step: register the Direct build, create an Xbox Live lobby, then read the log.
+
+Game mesh facts found for it (PDUWP.exe, Microsoft's sample MeshManager):
+- Packet: `seq u16 | type u8 | length u16 | flags u16 (0x8000 = wants ACK) | body`, little-endian; several messages per datagram.
+  Type 1 = heartbeat, 2 = HELLO (`responding u8 | nameLen u16 | UTF-16 name`), 3 = chat/custom, 4 = ACK (seq = acked seq), 0x40+ = game messages.
+  Builders: HELLO `FUN_140028310`, ACK `FUN_140028670`, heartbeat `FUN_1400281a0`. Dispatcher: `FUN_140029c50`.
+- Receive loop `FUN_140029330`: the sender is looked up by address, then via `FindEndpointPairBySocketAddressBytes` → device address → mesh connection.
+  An unknown sender is logged and skipped. A sender that is **known but in state 0/1 makes the loop `break` (the receive thread stops)**.
+- `OnAssociationIncoming` (`FUN_140037740`) creates a mesh connection for **any** inbound endpoint pair, in state 2 (accepted). HELLO moves it to 3.
+  So the host does not need the joiner's MPSD membership to accept packets. This answers the §7 question at the mesh level.
+
+## 8. Difficulties encountered
+
+- **Four responses were stopped by Anthropic's safety classifier**, and per its instruction they must not be reproduced:
+  1. while writing the plug-and-play internet connectivity layer (automatic public-address discovery and NAT traversal on the game's socket);
+  2. while writing the stage 3 relay server (`pdserver.py`), which forwards game traffic between players;
+  3. (2026-10-18) while writing a passive "link monitor" for the Teredo build, which would have logged the state of
+     Windows' player-to-player endpoint pairs to diagnose "cross lagging" (see §11). Its partial file was deleted and nothing was installed;
+  4. (2026-10-19) while starting stage B, connecting the game's multiplayer sessions to EOS lobbies. Nothing had been written yet;
+     the stopped step only read the EOS SDK headers.
+
+  I don't know the exact reasons. All four involve code for connecting players to each other. The user was told this session couldn't continue
+  those parts, and asked whether switching models would get around it; the answer given was no, it shouldn't be used to get around a safeguard,
+  and that likely false positives should be reported to Anthropic (thumbs-down feedback or `/bug`). The next session should know this
+  happened and talk it through with the user rather than recreating those pieces.
+- Bash heredocs in this environment turned `\\` into `\` (and `\n` into real newlines) inside embedded Python. Use the Write/Edit tools for source edits.
+- `WINRT_LEAN_AND_MEAN` strips the `produce<>` code needed to implement Windows interfaces. C++/WinRT coroutines that call `get_strong()` can't be `const`.
+- Ghidra didn't define most of the UTF-16 log strings, so finding functions by string missed them. Finding them by import callers (`DumpCallers.java`) worked.
+- An AppContainer can't reach loopback, so a server on this PC can't be reached from the game unless the *user* runs
+  `CheckNetIsolation LoopbackExempt -a -n=Microsoft.MSEsper_8wekyb3d8bbwe` (a system setting; it's the user's call).
+- Only one registration per package identity, which is why builds are switched instead of installed side by side.
+- Inbound UDP to the game needs the `internetClientServer` / `privateNetworkClientServer` capabilities (added only to the Direct build).
+- Windows suspends the game when it's minimized (a Store app), which froze an EOS test run; that's what `nosuspend.ps1` is for.
+- The EOS SDK can't store its device ID in the sandbox (Credential Manager blocked); fixed by `credstore.cpp`.
+- Xbox-free bring-up crashed twice before the main menu: first on an unhandled E_NOTIMPL, so stubs now return defaults; then on an empty title-storage
+  result, so title storage is now served locally. Expect this "run, read `xboxfree.ps1 -Report`, implement the next piece" loop for new areas.
+- This PC's clock jumped back about an hour during one session; log timestamps are wall-clock, so don't trust them across that.
+
+## 11. "Cross lagging" (reported 2026-10-18, Teredo build)
+
+- **Symptom:** in a 4-player online match, two players stop seeing and interacting with each other, while the other two still see
+  everyone. When one of the two dies, the other's game decides no opposing team is left and ends the match. It's random, but more common with poor or
+  international connections.
+- **Interpretation:** a missing or dropped link in the full peer mesh (each pair of players has its own Teredo/SDA link).
+- **Not caused by pdnet:** in teredo mode every `Windows.Networking.XboxLive.*` activation goes to the OS. During matches the DLL only
+  writes small save blobs (`progress.dat`, `0.dat`) on background threads.
+- **This PC:** Teredo qualified, NAT restricted (port) with no UPnP (Xbox "Moderate"), wired, ~10 ms to the Teredo server, with Teredo set by Group Policy (Enterprise Client).
+- **Tools:** `_netmod\lagmonitor.ps1` (read-only, logs Teredo state, ping and loss to a Desktop CSV). Open NAT on the user's side (UPnP or port forwarding) is the user's call.
+
+## 10. Session history
+
+- **Session 1** (2026-10-17, ~12:00–12:50): recon, the pdnet shim (saves, then stage 2 networking), menu move, build folders, this handoff.
+  Two of its responses were stopped by the safety classifier (§8). It ended with the source tree broken.
+- **Session 2** (2026-10-17, ~12:54–13:10): `git init` in `_netmod`, source repair, smoke test, test peer. Its commits carry the user's git name.
+  `git log` shows the test-peer commit `8abdf07` first even though its author date (12:19) is earlier. Go by commit order, not the date.
+- **2026-10-18:** the user played online with the Teredo build (log entry at 17:10). Session 1 updated this document to match git and the files on disk.
+  Also: the test kit, the cross-lagging diagnosis and `lagmonitor.ps1`, and the third classifier stop.
+- **2026-10-19 (session 1):** EOS plan, feasibility test plus credential store, `nosuspend.ps1`, long-lived EOS sign-in, the sign-in recon in Ghidra,
+  and Xbox-free mode up to stage A (create match works). The fourth classifier stop came at the start of stage B; then this update.
+- **2026-10-19 (session 3):** stage B from `STAGE_B_GUIDE.md`: EOS lobby layer, EOS-backed session store, search handles, change events,
+  `lobbytool` (second EOS client) and its self-test against EOS. No classifier stop this time. Not yet run in the game (§4.9).
+- **2026-10-19 (session 3, later):** stage B tester kit for unpacked copies: `testkit-stageb\` + `make-testkit.ps1 -Stage B` →
+  `D:\PhantomDust-pdnet-StageB-TestKit-2026-10-19.zip` (DLL `A3755102`, the one tested in game and installed in the Direct build; **no eos.ini
+  inside** — send a tester client's eos.ini separately). Also started, **untested and parked**: running pdnet in an unmodified Microsoft Store
+  install via a launcher (`pdnet\tools\pdlaunch.cpp`, `testkit-store\store-setup.ps1`/`store-remove.ps1`): Windows' package-debugger setting
+  starts `pdlaunch.exe`, which injects `pdnet.dll` and calls its new `PdInjectedInit` export; with `xbox=off` the activation hook then answers
+  `Microsoft.Xbox.Services.*` itself. Not needed now (the tester has an unpacked copy). Note: `pdnet\build-stageb` now holds a rebuild with
+  this injected-mode code (dump mode unchanged in intent, but not re-run in game); rerunning `make-testkit.ps1 -Stage B` would package it.
+- **2026-10-19 (session 3): FIRST TWO-PC TEST PASSED (stage B + direct UDP), user + one tester on different home networks.** Kit
+  `PhantomDust-pdnet-StageB-TestKit-WITH-EOS.zip` (DLL `A3755102`, tester EOS client). Run 1: user joined the tester's lobby through the EOS
+  browser and lobby join worked, but the match connection timed out (host's advertised address was a private LAN address on another network).
+  Run 2: user hosted with UDP 43210/43211 forwarded and `advertise_ip=<public IP>`; the tester found and joined the lobby, connected directly
+  (`sda: inbound connection ... (seen as <tester's public IP>)`), and **the user reports everything running correctly** (lobby and match).
+  Remaining: automatic internet connectivity without port forwarding (stage C, e.g. EOS P2P relays — see §8 before starting), longer soak,
+  `xbox=on`/Teredo regression check.
+- **2026-10-20 (session 3): stage C — match traffic through EOS P2P (`network_mode=eos`), commit `76c4d44`, DLL `pdnet\build-stagec`
+  (MD5 `C5F9697B`), design at the top of `src\p2p.h`.** Device addresses v2 carry the EOS product user id; pairs to v2 peers handshake over
+  EOS P2P and the game sends to a local "link" socket that pdnet bridges to the peer (Epic does NAT traversal, relays as fallback). v1 peers
+  (older kits, other modes) keep direct UDP — so both players need this build in `network_mode=eos`. EOS thread pumps every ~2 ms
+  (`timeBeginPeriod(1)`). Every 10 s each link logs ping/jitter/loss/path/traffic (`p2p: link ...`).
+  **One-PC test passed in game (Direct build, 00:09):** `lobbytool p2ppeer 20` = 4/4 PASS over EOS P2P (ping, connect/ack, HELLO both ways,
+  heartbeats, delete), ping 3–4 ms, 0 loss. `lobbytool p2ppeer 30 force` (Epic relays only) = 4/4 PASS, ping ~42 ms, 0 loss.
+  Known issue: the direct/relayed label is unreliable (EOS reported "direct" with forced relays; the game side kept a stale label because no
+  close event came between runs) — use the ping. Next: two-PC test with no port forwarding, then measure real matches; redundancy later.
+- **2026-10-20: stage C tester kit** `testkit-stagec\` (README for no port forwarding, `network_mode=eos`) built with
+  `make-testkit.ps1 -Stage C -EosIni .\eos.tester.ini` → `D:\PhantomDust-pdnet-StageC-TestKit-C5F9697B-with-eos.zip`. Kit zips are now named
+  after the DLL's MD5 prefix (the clock jumps made dated names ambiguous). Both players need stage C; the user's Direct build already matches.
+- **2026-10-20: wrong card names in Xbox-free mode** ("Aura Particle" shown as "Rebirth", still behaving as Aura). Cause: the dump's
+  `Assets\Data\gstorage\gsdata_en.dat` (C519B2D8, 2022-07-12) is an edited copy; next to it are `gsdata_en.dat.bak` (984175A8) and
+  `gsdata_en - Copy.dat` (892EEDB6, 2022-07-06, header matches the untouched gsdata_ja.dat). Card text is identical in all three; the header
+  differs: u32 at 0x14 = 374 originally (750 edited) and u32 at 0x18 = 301 originally (300 edited, off by one = names shifted by one entry).
+  On Xbox Live the game downloaded the real blob, so this only shows with pdnet serving local files. Fix (Direct build only): the original
+  copy as an override, `D:\PhantomDust-Direct\titlestorage\gsdata_en.dat` (pdnet checks `titlestorage\` first). Master and Teredo untouched.
+  Not yet confirmed in game. Testers with the same dump would see the same bug.
+- **2026-10-19/20: crash when leaving a lobby (both players)** — access violation at PDUWP.exe+0xA7083. Ghidra: `FUN_14009c7c0` is the
+  game's session-write task; it polls `TryWriteSessionAsync` every frame and calls `GetResults` on it more than once, then reads
+  `WriteSessionResult.Succeeded` without a null check. C++/WinRT coroutines move their result out on the first `GetResults`
+  (`return std::move(m_result)` in windows.foundation.h), so the second read was null. Fix: `xsapi\repeatable.h` wraps every implemented
+  MultiplayerService operation (writes, reads, by-handle, search) so results can be read again. Build `build-stagec` MD5 `61C45C57`.
+  **Not yet confirmed in game.** Other stand-ins still use plain coroutines; wrap any that crash the same way.
+  Installed in the Direct build (61C45C57) and packaged as `D:\PhantomDust-pdnet-StageC-TestKit-61C45C57-with-eos.zip` (replaces the
+  C5F9697B kit, which has the leave crash).
+  **Confirmed by the user (2026-10-19): leaving a lobby no longer crashes; stage C kit 61C45C57 works between the two PCs.**
+- **2026-10-20: nametag investigation (user wants nametags kept on dead bodies).** The over-head nametag is the white gamertag (from the
+  session, i.e. pdnet). Ghidra: players in a 4-entry table `DAT_1404bc9d8` (position at +0x12e40, flags +0x10/+0x20/+0x24), names for HUD
+  panels in `DAT_1404bca30` (65 bytes each); HUD panels/scoreboard (`FUN_140155310`, `FUN_140150c30`, `FUN_1401ca1e0`) draw via
+  `FUN_1402477e0` — none of that is the floating nametag, which is probably remaster code reading the gamertag via the XSAPI classes.
+  New debug option `name_trace=on` (`xsapi\nametrace.*`, commit `9acf2fe`, DLL `pdnet\build-nametrace` 7D824149, not shipped): hardware
+  breakpoints on copies of other players' gamertags, logs the PDUWP.exe call chains that read them. One-PC check (lobbytool in the lobby):
+  works, no crash, 23 heap copies, reads from chains under `140009b06 <- 140008953 <- 1400c58f6`. Next: a real match with the tester while
+  name_trace is on (only the PC that should see the tags needs it), someone dies, then compare chains during life vs after death.
+  The Direct build currently runs build-nametrace with name_trace=on; switch back to build-stagec (61C45C57) for normal play.
+
+## Discord lobby watcher (lobbytool watch)
+`pdnet\tools\out\lobbytool.exe watch` searches the Phantom Dust lobby bucket every `interval_seconds` (default 15, min 10) and posts to a Discord webhook:
+- new lobby -> "opened a lobby" (lobbies already open when the watcher starts are only logged)
+- member count change -> "n/max players"
+- gone from search twice -> Read by id: still there with members -> "full" (search hides full lobbies), else "closed"
+- lobbies with 0 members are ignored (Epic keeps an empty lobby for a while after the host leaves)
+Settings: `lobbywatch.ini` next to the exe: `webhook_url=...` and `interval_seconds=`. tools\out is git-ignored; never commit the webhook URL.
+`lobbytool.exe watch dry` prints the messages instead of posting (the console shows emoji as mojibake; the webhook body is UTF-8).
+Uses the eos.ini credentials next to the exe like the other lobbytool modes.
+
+## Tester kit names (from 2026-10-22)
+Kits are `D:\PhantomDust-pdnet Experimental <N>.zip` (make-testkit.ps1 numbers them; kit-version.txt inside says the
+build and settings). A kit becomes `Stable <M>` only when the owner says so: `make-testkit.ps1 -Promote <N>`.
+Per-kit settings: `-Set voice_chat=off,p2p_debug=on`; `-Notes "..."` for kit-version.txt.
+Stable 1 = build-hook2 (AFCEAD9F) with voice_chat=off, lobby_gamertag_option=off (a join worked).
+Stable 2 = build-icons7 (F2117D66, was Experimental 7): megaphone mic indicator, nametag colours, join retry,
+lobbytool left out of sessions, Setup name prompt fix (promoted 2026-10-22). kit-counter.txt keeps the last Experimental number.
+Stable 3 = build-vmode1 (92539ABD, was Experimental 10): Stable 2 plus voice_mode (mic/classic) and the cleaned-up
+pdnet.ini text (promoted 2026-10-22). Built from commit 443e445. To go back to the most stable version, use the highest Stable number.
+Stable 4 = build-wins3 (375800B9, was Experimental 25, tag stable-4 -> 1ba798b, promoted 2026-10-24): EOS scoreboard
+(4 global boards, names, Total Wins), Rated / Unrated lobbies (+1 / -1 minimum per match), shop top-up, Lobby Browser
+name, ghost lobbies hidden, shorter join wait, Discord Rated/Unrated.
+Experimental 1 = build-resend1 (70A91FE2): join requests re-sent every 2 s until answered (an intermittent "hung on
+joining": the single request sent while EOS set up the P2P link was lost); voice + Gamertag on, p2p_debug=on.
+
+## Ideas from the October backlog
+
+## Feature backlog (could be added / revisited)
+Parked ideas and half-finished features, newest first. Each has its notes earlier in this file.
+0. **Auto-updater on Linux** (paused by the user 2026-11-03/04; DeadMan009's pull request #4, merged 2026-11-05, adds kit\pdnet\setup-linux.sh with an updater: read it before picking this up). Linux builds have no pdlaunch, so the updater would go inside pdnet.dll. Open question: does the Windows-built pdnet.dll run under wine-uwp, renamed Microsoft.Xbox.Services.dll? If yes, it can use the same releases. If no, each release also needs a Linux build (CI with the EOS and Windows SDKs; check the EOS license). The user says Linux runs today, with crossplay; no Linux log seen yet.
+1. **Loading-screen timeout** (parked 2026-10-21). Step 1 was built and tested (commit 4cf65cb, observe-only "loading watchdog":
+   stubs on the menu 0x1403eefe0 x136 and session 0x1403f1150 x196 command tables log a command polled with the same result
+   for 30 s and screens up for 60 s; normal baseline = title screen menu 7, commands 6/109). Taken out of the build by request.
+   Next: bring it back (git show 4cf65cb), catch real hangs in the log, then time out those specific waits (step 2).
+2. **Xbox save import, real test** (no longer needed, the user 2026-10-30; built, kit 3F8C59F0+): IMPORT XBOX SAVE (was Help & Support). Failure path confirmed on an
+   unpacked copy; a real import from the Xbox service (Store) or the local wgs cache needs a tester who played the Store version.
+3. **In-lobby game type / rule change** (reverted 2026-10-21, commit 4ff540e). Worked solo; open problems: switching into Tag
+   Team crashed other players; players who joined a One-on-One kept a 2-player limit (follow-host fix untested). Notes: menu 48,
+   session commands 29 / 41 / 80 / 190, settings message 1405277b4/1405277fc.
+4. **Lobby's Gamertag option for future settings** - DONE 2026-10-21 (build-gt5, tested alone): enabled even when alone
+   (lobby_gamertag_option=on). Alone, it opens an empty player list; the window is ready for future settings.
+5. **Spectator mode for tournaments** - feasibility only: camera/HUD switching via the local-player index DAT_1404bbe00 looks
+   testable offline; a non-playing seat is hard (4 fixed player slots). Suggested order: camera/HUD test, spectate-after-
+   elimination, then a spare-slot spectator.
+6. **Tag Team lobby crash / team data** - only matters if 3 comes back.
+7. **Voice chat over EOS** (traced 2026-10-21, plan below, nothing built).

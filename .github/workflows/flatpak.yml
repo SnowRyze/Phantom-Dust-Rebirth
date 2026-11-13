@@ -1,0 +1,44 @@
+# Builds the Flatpak (flatpak/) from a Stable release's kit and adds it to that release as
+# PhantomDust-Rebirth-Linux.flatpak. Runs by itself when a Stable is published (build.bat promote); Experimental
+# pre-releases are skipped, their kits reach a Flatpak through the kit's own updater. It can also be started by hand
+# for an existing release (Actions > Flatpak > Run workflow).
+name: Flatpak
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Release tag with a PhantomDust-Rebirth-Stable-<N>-PC.zip (for example stable-12)
+        required: true
+
+permissions:
+  contents: write   # to add the file to the release
+
+jobs:
+  flatpak:
+    if: github.event_name == 'workflow_dispatch' || !github.event.release.prerelease
+    runs-on: ubuntu-24.04
+    env:
+      GH_TOKEN: ${{ github.token }}
+      TAG: ${{ github.event.release.tag_name || inputs.tag }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install flatpak-builder
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y flatpak flatpak-builder
+          flatpak remote-add --user --if-not-exists flathub https://dl.flathub.org/repo/flathub.flatpakrepo
+
+      - name: Download the release's kit
+        run: |
+          gh release download "$TAG" --repo "$GITHUB_REPOSITORY" --pattern 'PhantomDust-Rebirth-Stable-*.zip' --dir "$RUNNER_TEMP/kit"
+          ls -l "$RUNNER_TEMP/kit"
+
+      - name: Build
+        run: flatpak/build.sh "$RUNNER_TEMP"/kit/PhantomDust-Rebirth-Stable-*.zip
+
+      - name: Add it to the release
+        run: gh release upload "$TAG" --repo "$GITHUB_REPOSITORY" --clobber out/flatpak/PhantomDust-Rebirth-Linux.flatpak

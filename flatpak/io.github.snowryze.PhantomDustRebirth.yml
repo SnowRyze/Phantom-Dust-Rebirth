@@ -1,0 +1,66 @@
+# Phantom Dust Rebirth as a Flatpak: wine-uwp + this repository's kit + a launcher that runs the kit's setup-linux.sh.
+# Nothing of the game or of Windows is in it. On first start the launcher downloads Microsoft's evaluation ISO and
+# takes the Windows components wine-uwp needs from it, then downloads the game from the Microsoft Store with the
+# player's own account. All of that lives in ~/.var/app/io.github.snowryze.PhantomDustRebirth/data/wine-uwp.
+#
+# Build: flatpak/build.sh (needs flatpak-builder), or the "Flatpak" workflow on a Stable release.
+# The kit is not a source here: build.sh / the workflow put a Stable kit zip next to this file as kit.zip.
+app-id: io.github.snowryze.PhantomDustRebirth
+runtime: org.freedesktop.Platform
+runtime-version: '25.08'
+sdk: org.freedesktop.Sdk
+command: pdrebirth
+build-options:
+  strip: false             # wine-uwp and 7-Zip go in exactly as released
+  no-debuginfo: true
+finish-args:
+  - --share=network           # EOS, the Store download, the kit's updates
+  - --share=ipc
+  - --socket=x11              # Wine's X11 driver (XWayland on Wayland and in Steam's Game Mode)
+  - --socket=pulseaudio       # game audio, microphone for voice chat
+  - --device=all              # GPU and controllers
+  - --talk-name=org.freedesktop.ScreenSaver   # wine-uwp keeps the screen on while a controller is in use
+modules:
+  - name: wine-uwp
+    buildsystem: simple
+    build-commands:
+      - mkdir -p /app/opt
+      - cp -a . /app/opt/wine-uwp
+    sources:
+      - type: archive
+        url: https://github.com/LiveManQuestion/wine-uwp/releases/download/phantom-dust-dbdfa07/wine-uwp-phantom-dust-x86_64.tar.xz
+        sha256: 63287f02c3785dc240aa9c9372281328d0583d85486f369c27be58145d85d281
+
+  # wine-uwp's harvest step unpacks the Windows ISO with 7-Zip, which the runtime doesn't have
+  - name: 7zip
+    buildsystem: simple
+    build-commands:
+      - install -Dm755 7zzs /app/bin/7zz
+      - install -Dm644 License.txt /app/share/licenses/7zip/License.txt
+    sources:
+      - type: archive
+        url: https://www.7-zip.org/a/7z2501-linux-x64.tar.xz
+        sha256: 4ca3b7c6f2f67866b92622818b58233dc70367be2f36b498eb0bdeaaa44b53f4
+        strip-components: 0
+
+  - name: rebirth-kit
+    buildsystem: simple
+    build-commands:
+      - test -f pdnet/pdnet.dll -a -f pdnet/eos.ini -a -f pdnet/setup-linux.sh
+      - mkdir -p /app/share/pdrebirth
+      - cp -a pdnet /app/share/pdrebirth/kit
+    sources:
+      - type: archive
+        path: kit.zip
+        strip-components: 0
+
+  - name: launcher
+    buildsystem: simple
+    build-commands:
+      - install -Dm755 pdrebirth.sh /app/bin/pdrebirth
+      - install -Dm644 io.github.snowryze.PhantomDustRebirth.desktop -t /app/share/applications
+    sources:
+      - type: file
+        path: pdrebirth.sh
+      - type: file
+        path: io.github.snowryze.PhantomDustRebirth.desktop

@@ -20,3 +20,6 @@ links.ini
 *.exp
 *.lib
 tools/rebirth-word/preview.png
+
+# The kit zip the Flatpak is built with (it has eos.ini in it)
+flatpak/kit.zip

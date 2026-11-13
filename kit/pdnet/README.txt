@@ -57,7 +57,7 @@ pdnet\Restore-XboxLive.bat. It asks for administrator permission once.
 
 Linux (wine-uwp)
 ----------------
-Runs under wine-uwp (https://github.com/LiveManQuestion/wine-uwp), a Wine build for Microsoft Store games.
+Runs under wine-uwp (https://github.com/designgears/wine-uwp), a Wine build for Microsoft Store games.
 Needs a Microsoft account that owns Phantom Dust (free in the Store: "Get" it once at
 https://apps.microsoft.com/detail/9PCDNBHR11MR), about 25 GB free, a recent 64-bit distro (glibc 2.38+: Ubuntu 24.04,
 Debian 13, Fedora 39, Mint 22, Arch or newer), and GStreamer for the game's videos:
@@ -70,11 +70,13 @@ Debian 13, Fedora 39, Mint 22, Arch or newer), and GStreamer for the game's vide
    shows a sign-in link for your Microsoft account and downloads the game (about 10 GB). A licence error about the
    newest version is expected; it then takes the older one, which is the one pdnet is made for.
    Then type your player name.
-2. Start the game with the command it prints (~/.local/opt/wine-uwp/bin/wine-uwp run msesper).
+2. Start the game from your app menu ("Phantom Dust Rebirth") or with:  ~/.local/bin/phantom-dust-rebirth
+   (it does pdlaunch.exe's job: updates pdnet, then starts the game).
 3. After a test: bash setup-linux.sh --logs, and send the files it copies to your home folder.
-Updates: as on Windows, the kit updates itself when the game starts, so keep the kit folder where it is. A wine-uwp
-from before that (setup-linux.sh says so) needs  bash setup-linux.sh --update  now and then.
-Either way it gets the newest build on your channel from GitHub and keeps your eos.ini and pdnet.ini. Options >
+Updates: as on Windows, the kit updates itself when the game starts, so keep the kit folder where it is. Started
+with plain "wine-uwp run msesper", only a wine-uwp that runs before-start.sh does that; otherwise use
+bash setup-linux.sh --update  now and then.
+It gets the newest build on your channel from GitHub and keeps your eos.ini and pdnet.ini. Options >
 Updates in the game turns it off. If it can't update, the game starts as it is
 (log: ~/.local/share/wine-uwp/logs/msesper-before-start.log).
 To stop using pdnet: bash setup-linux.sh --remove. Setting up a newer kit: run its setup-linux.sh.
@@ -82,13 +84,13 @@ To stop using pdnet: bash setup-linux.sh --remove. Setting up a newer kit: run i
 
 Settings (pdnet.ini in the pdnet folder)
 -----------------------------------
-Change them in the game: multiplayer menu > Settings (left / right on a row; Name: press left or right, type,
+Change them in the game: multiplayer menu > Online Settings (left / right on a row; Name: press left or right, type,
 Enter). Or edit pdnet.ini with Notepad, then restart the game.
 What you save in the game goes to settings.ini (in the game's own data folder) and overrides pdnet.ini.
 To change those by hand, e.g. an exact nametag colour, close the game and double-click pdnet\Edit-Settings.bat.
 Colours take any hex code: RRGGBB or #RRGGBB.
-Updates: Main menu > Options > Updates picks Public, Stable or Experimental builds, or Off for no automatic updates
-(used from the next game start). Or set update_channel in settings.ini: public, stable, experimental or off.
+Updates: Main menu > Options > Updates picks Stable (the public release) or Experimental (newest, being tested), or Off
+for no automatic updates (used from the next game start). Or set update_channel in settings.ini: stable, experimental or off.
   display_name=          your name (Setup.bat sets it)
   nametags_on_bodies=    on/off: defeated players keep their nametag. In a lobby the HOST's setting applies.
   dead_nametag_color=    colour of a defeated player's nametag (RRGGBB), FFE600 = yellow
@@ -99,7 +101,7 @@ Updates: Main menu > Options > Updates picks Public, Stable or Experimental buil
   voice_mode=            mic: the in-game option is called Mic and turns only your microphone on/off
                          classic: the original Voice Chat option - Off means you neither talk nor hear
   voice_listen=          on/off: hear other players (mic mode only)
-  partner_aim=           what the partner lock input does in a match (Multiplayer > Settings > Partner Aim):
+  partner_aim=           what the partner lock input does in a match (Multiplayer > Online Settings > Partner Aim):
                          modern: locks onto your partner; classic: turns the original Lock Onto Partner option on/off,
                          so switch target can also reach your partner
   partner_lock_key=      keyboard key for that input in a match (default Tab; none = off).
@@ -117,6 +119,8 @@ If something goes wrong
 -----------------------
 - The game starts with Xbox Live as usual: pdnet didn't load. Run pdnet\Collect-Log.bat and send pdlaunch-log.
 - "Windows refused to attach pdlaunch": send a screenshot.
-- Lobbies work but matches don't connect: run Setup.bat again and allow the administrator prompt.
+- Lobbies work but matches don't connect (or joining never finishes): run Setup.bat again and allow the administrator
+  prompt. It also lets Phantom Dust through the Windows Firewall (and switches off firewall rules that block it;
+  pdnet\firewall.log says what it did). A third-party firewall or antivirus can block it too.
 - Nobody hears you: check the lobby's Options > Mic (Voice Chat in classic mode) is On, and that Windows allows
   Phantom Dust to use the microphone (Settings > Privacy > Microphone).

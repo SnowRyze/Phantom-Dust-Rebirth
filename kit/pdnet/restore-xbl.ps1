@@ -76,8 +76,10 @@ public static class PdPlmRestore
 
 # --- 3. Windows network settings (administrator) -----------------------------------------------
 $family = 'Microsoft.MSEsper_8wekyb3d8bbwe'
+$fw = Join-Path $PSScriptRoot 'firewall.ps1'
 $admin = @"
 CheckNetIsolation.exe LoopbackExempt -d -n=$family | Out-Null
+if (Test-Path '$fw') { & '$fw' -Remove -Family $family | Out-Null } # pdnet's firewall rules, and blocking rules Setup switched off back on
 Set-Service iphlpsvc -StartupType Automatic; Start-Service iphlpsvc -ErrorAction SilentlyContinue
 `$xbl = Get-Service XboxNetApiSvc -ErrorAction SilentlyContinue
 if (`$xbl -and `$xbl.StartType -eq 'Disabled') { Set-Service XboxNetApiSvc -StartupType Manual }

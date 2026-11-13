@@ -378,12 +378,50 @@ namespace pdnet::gamepatches
             int32_t state = 0;
             if (!ReadPresence(present, state)) return;
             bool match = state != 0 && state != 13;
+            // Only a player who was connected during this match can leave it: AI players (Test Arsenal, the debug menu's
+            // battles, where every nametag was hidden; 2026-11-12) are never network players.
+            static bool seen[4] = {};
             for (int s = 0; s < 4; ++s)
             {
-                // Test Arsenal's AI opponent is never a network player: nobody counts as left there.
-                uint8_t gone = match && !AiBattle() && v.matchName[s][0] && !present[s] ? 1 : 0;
+                if (!match || !v.matchName[s][0]) seen[s] = false;
+                else if (present[s]) seen[s] = true;
+                uint8_t gone = match && !AiBattle() && seen[s] && !present[s] ? 1 : 0;
                 if (g_slotGone[s].exchange(gone) != gone && gone) Log(L"gamepatch: %S left the match - nametag hidden", v.matchName[s]);
             }
+        }
+
+        // AI players (the debug menu's battles) have no name at 0x1404bca30 + i*0x41, so their nametag drew nothing (the
+        // user, 2026-11-12; log: "0 enemy, 1 -, 2 -, 3 -"). During a match, a slot with a player (status record
+        // DAT_1404bc608[i], count 0x1404bc628) and no name is named "CPU <slot + 1>". Online players always have names.
+        void NameAiPlayers()
+        {
+            __try
+            {
+                // Only once the match runs (game state 6): by then the game has written every real player's name. And
+                // never in the story: its towns hold the NPCs in these slots with no name, and Experimental 155 naming
+                // them made every NPC disappear (2026-11-12); FUN_1401ca1e0 builds the characters' names from them.
+                // The names pdnet wrote are cleared again once the match is over (they stayed in the slots otherwise).
+                static bool named[4] = {};
+                bool running = *reinterpret_cast<int32_t*>(At(0x1404bc950)) == 6 && MultiplayerProfile();
+                for (int i = 0; i < 4; ++i)
+                {
+                    char* name = reinterpret_cast<char*>(At(0x1404bca30) + i * 0x41);
+                    char ours[16];
+                    sprintf_s(ours, "CPU %d", i + 1);
+                    if (!running)
+                    {
+                        if (named[i] && strcmp(name, ours) == 0) name[0] = 0;
+                        named[i] = false;
+                        continue;
+                    }
+                    if (named[i] || i >= *reinterpret_cast<int32_t*>(At(0x1404bc628))) continue;
+                    if (name[0] || !*reinterpret_cast<uint64_t*>(At(0x1404bc608) + i * 8)) continue;
+                    strcpy_s(name, 0x41, ours);
+                    named[i] = true;
+                    Log(L"gamepatch: match slot %d has no name (an AI player) - nametag reads %S", i, name);
+                }
+            }
+            __except (EXCEPTION_EXECUTE_HANDLER) {}
         }
 
         void NametagColours()
@@ -398,6 +436,7 @@ namespace pdnet::gamepatches
                     // Read every pass: the in-game Settings menu can change them (White is one of the colours).
                     uint64_t ally = twice(GetConfig().allyNametagColor), enemy = twice(GetConfig().enemyNametagColor);
                     g_deadColour = twice(GetConfig().deadNametagColor);
+                    NameAiPlayers();
                     TeamView v{};
                     if (!ReadTeamView(v)) continue;
                     UpdateLeftPlayers(v);
@@ -1469,8 +1508,8 @@ namespace pdnet::gamepatches
             { "OptiMatch", "Lobby Browser" },
             { "Search for a game session with the Quick game rule.", "Join the first open game session you can play in." },
             { "Select game attributes, and then search for a game session.", "Choose search options, then pick a session." },
-            { "Xbox Live Options", "Settings" },
-            { "Online Options", "Settings" }, // the script's text once RenameXboxLive got to it
+            { "Xbox Live Options", "Online Settings" },
+            { "Online Options", "Online Settings" }, // the script's text once RenameXboxLive got to it
             { "Display the Options menu.", "Your name, nametags, start-up volume and Discord posts." },
         };
 
@@ -2095,8 +2134,8 @@ namespace pdnet::gamepatches
         }
 
         constexpr Relabel kSettingsTexts[] = {
-            { "XBOX LIVE OPTIONS", "SETTINGS" },
-            { "ONLINE OPTIONS", "SETTINGS" }, // once RenameXboxLive got to it
+            { "XBOX LIVE OPTIONS", "ONLINE SETTINGS" },
+            { "ONLINE OPTIONS", "ONLINE SETTINGS" }, // once RenameXboxLive got to it (it fits: the text was "XBOX LIVE OPTIONS")
         };
 
         int PatchSettingsScript(uint8_t* script)
@@ -2422,21 +2461,23 @@ namespace pdnet::gamepatches
         bool g_logItemReady = false; // menu command 6 is wrapped (SoundOptions)
 
         // Options > Updates: an eighth item, after Send Log, picked the same way (event 107, "aMAIN_S7"). Each pick goes
-        // public -> stable -> experimental -> off -> public in update_channel (settings.ini), which pdlaunch reads at the
-        // next game start (CheckForUpdate; settings.ini overrides pdnet.ini; off: no check at all). Empty means the kit's
-        // own kind (off for a development build).
+        // stable -> experimental -> off -> stable in update_channel (settings.ini), which pdlaunch reads at the next game
+        // start (CheckForUpdate; settings.ini overrides pdnet.ini; off: no check at all). Empty means the kit's own kind
+        // (off for a development build). Stable is the public version since 2026-11-10: the public channel is gone, and a
+        // leftover "public" (a Public kit's pdnet.ini or settings.ini) counts as stable, as in pdlaunch.
         char g_updateRowText[64];
-        const char* kUpdateHint = "Builds to update to at game start. Public: releases. Stable: tested. Experimental: newest.\nOff: no automatic updates.";
+        const char* kUpdateHint = "Builds to update to at game start. Stable: the public release. Experimental: newest, being tested.\nOff: no automatic updates.";
 
         std::wstring UpdateChannel()
         {
             std::wstring channel = GetConfig().updateChannel;
-            for (const wchar_t* known : { L"public", L"stable", L"experimental", L"off" })
+            if (_wcsicmp(channel.c_str(), L"public") == 0) return L"stable";
+            for (const wchar_t* known : { L"stable", L"experimental", L"off" })
                 if (_wcsicmp(channel.c_str(), known) == 0) return known;
             std::string label = BuildLabel(); // empty or a typo in settings.ini: the kit's own, as pdlaunch does
             if (label.find("Linux") != std::string::npos) return L"off"; // no pdlaunch there, so no updates
-            return label.find("Experimental") != std::string::npos ? L"experimental" : label.find("Stable") != std::string::npos ? L"stable"
-                 : label.find("Public") != std::string::npos ? L"public" : L"off";
+            return label.find("Experimental") != std::string::npos ? L"experimental"
+                 : label.find("Stable") != std::string::npos || label.find("Public") != std::string::npos ? L"stable" : L"off";
         }
 
         // Conceptual kits update only from Conceptual releases and don't use update_channel, which is shared with other kits.
@@ -2450,7 +2491,7 @@ namespace pdnet::gamepatches
                 return;
             }
             std::wstring channel = UpdateChannel();
-            sprintf_s(g_updateRowText, "Updates: %s", channel == L"experimental" ? "Experimental" : channel == L"off" ? "Off" : channel == L"public" ? "Public" : "Stable");
+            sprintf_s(g_updateRowText, "Updates: %s", channel == L"experimental" ? "Experimental" : channel == L"off" ? "Off" : "Stable");
         }
 
         void SwitchUpdates()
@@ -2465,7 +2506,7 @@ namespace pdnet::gamepatches
                 return;
             }
             std::wstring now = UpdateChannel();
-            std::wstring next = now == L"public" ? L"stable" : now == L"stable" ? L"experimental" : now == L"experimental" ? L"off" : L"public";
+            std::wstring next = now == L"stable" ? L"experimental" : now == L"experimental" ? L"off" : L"stable";
             EditableConfig().updateChannel = next;
             SaveSetting("update_channel", winrt::to_string(next));
             RefreshUpdateRow();
@@ -2764,8 +2805,12 @@ namespace pdnet::gamepatches
                 for (;;)
                 {
                     Sleep(50);
-                    int32_t state = *reinterpret_cast<volatile int32_t*>(At(0x1404bc950)); // 0 or 13: not in a match
-                    if (state == 0 || state == 13) CasesFollowArsenals(CurrentMenu(MenuManager()) == kEditorMenu);
+                    // 0 or 13: not in a match. In the Lab's own screens too: since the skill preview (Experimental 135)
+                    // the editor runs on top of pdnet's town session, game state 6, and the arsenal being edited kept
+                    // its old number, e.g. "Limit[1]" with 2 schools in it (2026-11-11, Stable 12, MojoJoey).
+                    int32_t state = *reinterpret_cast<volatile int32_t*>(At(0x1404bc950));
+                    int menu = CurrentMenu(MenuManager());
+                    if (state == 0 || state == 13 || InLabMenus(menu)) CasesFollowArsenals(menu == kEditorMenu);
                 }
             }).detach();
             Log(L"gamepatch: dynamic arsenal cases on (limit of %d schools: when adding %s, when saving %s)", kMaxCaseSchools, add ? L"ready" : L"NOT ready", limit ? L"ready" : L"NOT ready");
@@ -3144,8 +3189,14 @@ namespace pdnet::gamepatches
 
         using MenuFrameFn = void (*)(int64_t manager);
         MenuFrameFn g_menuFrame = nullptr;
+        void PreviewWatchdog(); // where the game stops when the preview hangs (below)
+        std::atomic<ULONGLONG> g_menuFrameAt{ 0 };
+        std::atomic<DWORD> g_menuFrameThread{ 0 };
+
         void HookedMenuFrame(int64_t manager)
         {
+            g_menuFrameAt = GetTickCount64();
+            if (!g_menuFrameThread) { g_menuFrameThread = GetCurrentThreadId(); PreviewWatchdog(); }
             g_menuFrame(manager);
             BackButtonTick(manager);
             PreviewTick();
@@ -3225,9 +3276,138 @@ namespace pdnet::gamepatches
             return true;
         }
 
+        // Character select (livecharasel, menu 46): "COLOR \a1f%d" shows a number for each of a character's 4 colours.
+        // The user's list (2026-11-11) names them; the number becomes the name. The character is the last name drawn on
+        // the screen (the texts drawn there are logged once each, to check).
+        struct CharacterColours { const char* name; const char* colours[4]; };
+        constexpr CharacterColours kCharacterColours[] = {
+            { "Freia", { "Grey", "Red", "White", "Black" } },
+            { "Alpha", { "Green", "Red", "Black", "White" } },
+            { "Edgar", { "Black", "White", "Orange", "Blue" } },
+            { "Meister", { "Black", "White", "Yellow", "Red" } },
+            { "Chunky", { "Black", "White", "Yellow", "Red" } },
+            { "Cuff Button", { "Black", "White", "Yellow", "Red" } },
+            { "PH", { "Black", "White", "Yellow", "Red" } },
+            { "Know", { "Green", "Red", "White", "Brown" } },
+            { "Tsubutaki", { "Blue", "Yellow", "Orange", "Teal" } },
+            { "JD", { "Purple", "Green", "White", "Black" } },
+            { "Sammah", { "Yellow", "Blue", "Red", "White" } },
+            { "Vestio", { "Brown", "Black", "Purple", "White" } },
+            { "Ommato", { "Grey", "Blue", "Red", "Black" } },
+            { "Anthro", { "Brown", "White", "Red", "Yellow" } },
+            { "Guard", { "Grey", "Full Blue", "Yellow", "Blue" } },
+            { "Andro", { "Grey", "Red", "Yellow", "Blue" } },
+            { "Ceno", { "White", "Brown", "Purple", "Black" } },
+            { "Partheno", { "Grey", "White", "Red", "Yellow" } },
+            { "Catoptro", { "Brown", "White", "Red", "Blue" } },
+            { "Gyne", { "Maroon", "Yellow", "Red", "White" } },
+            { "Claustro", { "Navy", "White", "Black", "Yellow" } },
+            { "Scoto", { "Navy", "Red", "White", "Yellow" } },
+        };
+        const CharacterColours* g_shownCharacter = nullptr;
+
+        // The text with the game's \a control codes (\a + digits + one letter) left out.
+        std::string PlainText(const char* text)
+        {
+            std::string plain;
+            for (const char* p = text; *p; ++p)
+            {
+                if (*p == '\a')
+                {
+                    while (p[1] >= '0' && p[1] <= '9') ++p;
+                    if (p[1]) ++p;
+                    continue;
+                }
+                plain += *p;
+            }
+            return plain;
+        }
+
+        bool ColourNameText(int64_t* args, int64_t* changed)
+        {
+            if (!args || CurrentMenu(MenuManager()) != kCharacterMenu) return false;
+            char format[64];
+            if (!CopyString(reinterpret_cast<const char*>(args[2]), format, sizeof(format))) return false;
+            std::string text = format;
+            std::string value; // the %s argument (Experimental 148 only read it when %s ended the text, and saw no names)
+            if (const char* percent = strstr(format, "%s"))
+            {
+                char copied[48];
+                if (args[3] > 0x10000 && CopyString(reinterpret_cast<const char*>(args[3]), copied, sizeof(copied)))
+                {
+                    value = copied;
+                    text = std::string(format, percent - format) + value + (percent + 2);
+                }
+            }
+            static std::set<std::string> logged;
+            if (logged.size() < 80 && logged.insert(text).second)
+            {
+                std::string raw; // the text as the script has it, control codes shown as \a
+                for (const char* p = format; *p; ++p) raw += *p == '\a' ? std::string("\\a") : std::string(1, *p);
+                Log(L"gamepatch: character select draws '%S' (text '%S', argument %llX)", PlainText(text.c_str()).c_str(), raw.c_str(), args[3]);
+            }
+            const char* number = strstr(format, "COLOR ");
+            if (!number || !strstr(number, "%d"))
+            {
+                // The name line is "\a130c%s" with the character's name (Experimental 149, MojoJoey's log); the first
+                // character, Alpha, is drawn as "player". Any other name there is a character without a list entry.
+                if (strcmp(format, "\a130c%s") == 0)
+                {
+                    // Diagnostics (151: Alpha still showed the previous character's colours): every change of the name.
+                    static std::string lastName;
+                    static int changes = 0;
+                    if (value != lastName && changes < 300)
+                    {
+                        ++changes;
+                        Log(L"gamepatch: character select: name line now '%S' (argument %llX)", value.c_str(), args[3]);
+                        lastName = value;
+                    }
+                    g_shownCharacter = nullptr;
+                    if (_stricmp(value.c_str(), "player") == 0) value = "Alpha";
+                }
+                for (std::string candidate : { PlainText(text.c_str()), PlainText(value.c_str()) })
+                {
+                    while (!candidate.empty() && candidate.back() == ' ') candidate.pop_back();
+                    while (!candidate.empty() && candidate.front() == ' ') candidate.erase(0, 1);
+                    for (const auto& character : kCharacterColours)
+                        if (!candidate.empty() && _stricmp(candidate.c_str(), character.name) == 0) g_shownCharacter = &character;
+                }
+                return false;
+            }
+            int colour = static_cast<int>(args[3]);
+            static const CharacterColours* lastUsed = reinterpret_cast<const CharacterColours*>(1);
+            static int uses = 0;
+            if (g_shownCharacter != lastUsed && uses < 300)
+            {
+                ++uses;
+                Log(L"gamepatch: character select: COLORS rows for %S", g_shownCharacter ? g_shownCharacter->name : "(no character)");
+                lastUsed = g_shownCharacter;
+            }
+            if (!g_shownCharacter || colour < 1 || colour > 4)
+            {
+                static int told = 0;
+                if (told++ < 5) Log(L"gamepatch: character select: COLOR %d left as a number (%s)", colour, g_shownCharacter ? L"not 1-4" : L"no character name seen yet");
+                return false;
+            }
+            // Only the name, in capitals: "COLOR Orange" ran past the COLORS box, and the font's lowercase letters looked
+            // out of place (the user, 2026-11-11). "COLOR " goes; the number's own style code (\a1f) stays.
+            static char replaced[64], names[4][24]; // a buffer per row: the game may keep the pointer until it draws
+            char* name = names[colour - 1];
+            std::string withName(number + 6);
+            withName.replace(withName.find("%d"), 2, "%s");
+            strcpy_s(replaced, (std::string(format, number - format) + withName).c_str());
+            strcpy_s(name, sizeof(names[0]), g_shownCharacter->colours[colour - 1]);
+            _strupr_s(name, sizeof(names[0]));
+            memcpy(changed, args, 8 * sizeof(int64_t));
+            changed[2] = reinterpret_cast<int64_t>(replaced);
+            changed[3] = reinterpret_cast<int64_t>(name);
+            return true;
+        }
+
         int64_t HookedDrawText(int64_t* args)
         {
             if (int64_t row[8]; CaseRowText(args, row)) return g_drawText(row);
+            if (int64_t named[8]; ColourNameText(args, named)) return g_drawText(named);
             int menu = CurrentMenu(MenuManager());
             if (args && GetConfig().ratedLobbies && (menu == kSessionListMenu || menu == kLobbyMenu))
             {
@@ -4348,8 +4528,85 @@ namespace pdnet::gamepatches
             reinterpret_cast<void (*)()>(At(0x14012b4f0))();
         }
 
+        // Diagnostics for the hang without story progress (2026-11-12, read live on the developer PC with a fresh save):
+        // the preview stuck in state 4 because the town's frame stopped. FUN_14012b110 (state table at 0x1402dd1a0) is
+        // only called from FUN_140129ac0, called from FUN_14017cd00: the update (vtable slot 3, 0x14047bc30) of the scene
+        // object at [0x1404c51e8], whose own gate 0x140509a44 was 1. So the game's task runner stopped calling it. Its
+        // update calls are counted, its header (+8..+0x48) logged on each change while pdnet's session is there, and a
+        // stall of the count logged once with the game's states.
+        using SceneUpdateFn = void (*)(void*);
+        SceneUpdateFn g_sceneUpdate = nullptr;
+        std::atomic<uint32_t> g_sceneUpdates{ 0 };
+        void HookedSceneUpdate(void* self)
+        {
+            ++g_sceneUpdates;
+            g_sceneUpdate(self);
+        }
+
+        void WatchSceneUpdates()
+        {
+            static bool done = false;
+            if (done) return;
+            done = true;
+            auto slot = reinterpret_cast<uint64_t*>(At(0x14047bc30));
+            if (*slot != reinterpret_cast<uint64_t>(At(0x14017cd00))) { Log(L"preview: scene update slot not as expected - not counted"); return; }
+            g_sceneUpdate = reinterpret_cast<SceneUpdateFn>(*slot);
+            uint64_t hook = reinterpret_cast<uint64_t>(&HookedSceneUpdate);
+            Write(reinterpret_cast<uint8_t*>(slot), std::vector<uint8_t>(reinterpret_cast<uint8_t*>(&hook), reinterpret_cast<uint8_t*>(&hook) + 8));
+        }
+
+        void SceneDiagnostics()
+        {
+            WatchSceneUpdates();
+            if (!g_sceneUpdate || !(g_previewTown || g_previewTownClosing)) return;
+            static uint8_t last[0x40] = {};
+            static uint32_t lastCount = 0;
+            static int still = 0;
+            static bool toldStall = false;
+            uint8_t* scene = *reinterpret_cast<uint8_t**>(At(0x1404c51e8));
+            uint8_t now[0x40] = {};
+            if (scene) memcpy(now, scene + 8, sizeof(now));
+            uint32_t count = g_sceneUpdates;
+            auto hex = [](const uint8_t* bytes)
+            {
+                std::wstring text;
+                for (int i = 0; i < 0x40; ++i) { wchar_t two[4]; swprintf_s(two, L"%02X", bytes[i]); text += two; if (i % 8 == 7) text += L' '; }
+                return text;
+            };
+            if (memcmp(now, last, sizeof(now)) != 0)
+            {
+                Log(L"preview: scene +8: %s (updates %u, game state %d, preview state %d)", hex(now).c_str(), count,
+                    *reinterpret_cast<int32_t*>(At(0x1404bc950)), *reinterpret_cast<int32_t*>(At(0x140534798)));
+                memcpy(last, now, sizeof(now));
+            }
+            still = count == lastCount ? still + 1 : 0;
+            if (count != lastCount) toldStall = false;
+            lastCount = count;
+            // The safety net (Experimental 154): while the game doesn't call it, the update runs from the menu frame (same
+            // thread), so the preview's states and the session's end go on and leaving the Lab doesn't hang. Called on the
+            // original, not the hook, so the count shows when the game itself calls it again.
+            if (still >= 10 && scene && GetConfig().previewUnstick)
+            {
+                static int runs = 0;
+                if (runs++ % 300 == 0) Log(L"preview: running the town's update from the menu frame (stalled; %d so far)", runs);
+                g_sceneUpdate(scene);
+            }
+            if (still == 10 && !toldStall)
+            {
+                toldStall = true;
+                Log(L"preview: the scene's update stopped (count %u) - game state %d, preview state %d, mode %d, bbc36 %d, 509a44 %d, bc41c %d, 51c128 %d, menu state %d",
+                    count, *reinterpret_cast<int32_t*>(At(0x1404bc950)), *reinterpret_cast<int32_t*>(At(0x140534798)), *reinterpret_cast<int32_t*>(At(0x1404bc9d4)),
+                    *At(0x1404bbc36), *reinterpret_cast<int32_t*>(At(0x140509a44)), *reinterpret_cast<int32_t*>(At(0x1404bc41c)),
+                    *reinterpret_cast<int32_t*>(At(0x14051c128)), *reinterpret_cast<int32_t*>(At(0x140533744)));
+            }
+        }
+
+        void UnpauseUnderPreview(); // (below)
+
         void PreviewTick()
         {
+            UnpauseUnderPreview();
+            SceneDiagnostics();
             int state = *reinterpret_cast<int32_t*>(At(0x140534798));
             int gameState = *reinterpret_cast<int32_t*>(At(0x1404bc950));
             int mode = *reinterpret_cast<int32_t*>(At(0x1404bc9d4));
@@ -4432,11 +4689,20 @@ namespace pdnet::gamepatches
             // right after: they stay as the game has them.)
             if (g_previewTownClosing && MenuGameState(gameState))
             {
+                // A session started with "menu after" -1 ends in game state 13 (FUN_14012b7a0), not the menus' 0, and
+                // the lobby's join then failed: the tester toaf, right after a preview, was "half-joined" (P2P link up,
+                // then the join-error menus 84 / 53 after 6 s). The menus are back at 0 once the session has closed.
+                if (gameState == 13)
+                {
+                    *reinterpret_cast<int32_t*>(At(0x1404bc950)) = 0;
+                    Log(L"preview: town session closed - game state 13 -> 0 (the menus' own)");
+                }
                 g_previewTownClosing = false;
                 if (!g_previewTownAgain)
                 {
                     RestorePreviewZone();
-                    RestoreMenuAudio();
+                    // (RestoreMenuAudio here jammed the audio loader: 3 jobs left queued and the game stuck for good when
+                    // the player backed out of the Lab at the same moment. Not called; the menus load their own sound.)
                     PreviewAreaBanner(true);
                     KeepPreviewTrack(L"after the session");
                     g_previewTrack = -1;
@@ -4486,8 +4752,118 @@ namespace pdnet::gamepatches
             }
         }
 
+        // Testers without story progress (toaf, mitocato) had the game stop for good as they left the editor or stock list,
+        // the last log line being the preview's state 4 (stopping). If the menu frames stop for 3 s while pdnet's town
+        // session is there, the game's main thread is paused for a moment and its call stack logged (Ghidra addresses),
+        // up to 3 times per stop.
+        void PreviewWatchdog()
+        {
+            std::thread([]
+            {
+                int reports = 0;
+                for (;;)
+                {
+                    Sleep(500);
+                    ULONGLONG since = GetTickCount64() - g_menuFrameAt;
+                    if (since < 3000 || !(g_previewTown || g_previewTownClosing)) { if (since < 3000) reports = 0; continue; }
+                    if (reports >= 3) continue;
+                    ++reports;
+                    HANDLE thread = OpenThread(THREAD_SUSPEND_RESUME | THREAD_GET_CONTEXT | THREAD_QUERY_INFORMATION, FALSE, g_menuFrameThread);
+                    if (!thread) continue;
+                    uint64_t frames[24] = {};
+                    int count = 0;
+                    if (SuspendThread(thread) != static_cast<DWORD>(-1))
+                    {
+                        CONTEXT context{};
+                        context.ContextFlags = CONTEXT_CONTROL | CONTEXT_INTEGER;
+                        if (GetThreadContext(thread, &context))
+                        {
+                            // Unwinding reads only the modules' own tables: nothing here allocates while the thread is paused.
+                            for (; count < 24 && context.Rip; ++count)
+                            {
+                                frames[count] = context.Rip;
+                                DWORD64 base = 0;
+                                PRUNTIME_FUNCTION entry = RtlLookupFunctionEntry(context.Rip, &base, nullptr);
+                                if (!entry)
+                                {
+                                    context.Rip = *reinterpret_cast<DWORD64*>(context.Rsp);
+                                    context.Rsp += 8;
+                                    continue;
+                                }
+                                void* handlerData = nullptr;
+                                DWORD64 establisher = 0;
+                                RtlVirtualUnwind(UNW_FLAG_NHANDLER, base, context.Rip, entry, &context, &handlerData, &establisher, nullptr);
+                            }
+                        }
+                        ResumeThread(thread);
+                    }
+                    CloseHandle(thread);
+                    uint64_t image = reinterpret_cast<uint64_t>(At(kGhidraBase));
+                    std::wstring stack;
+                    for (int i = 0; i < count; ++i)
+                    {
+                        wchar_t one[48];
+                        HMODULE module = nullptr;
+                        wchar_t name[MAX_PATH] = L"?";
+                        if (frames[i] >= image && frames[i] < image + 0x1000000) swprintf_s(one, L" %llx", frames[i] - image + kGhidraBase);
+                        else
+                        {
+                            if (GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT, reinterpret_cast<LPCWSTR>(frames[i]), &module))
+                                GetModuleFileNameW(module, name, MAX_PATH);
+                            const wchar_t* file = wcsrchr(name, L'\\');
+                            swprintf_s(one, L" %s+%llx", file ? file + 1 : name, frames[i] - reinterpret_cast<uint64_t>(module));
+                        }
+                        stack += one;
+                    }
+                    Log(L"preview: the game has stopped for %llu s (preview state %d, game state %d, menu %d) - main thread at:%s", since / 1000,
+                        *reinterpret_cast<int32_t*>(At(0x140534798)), *reinterpret_cast<int32_t*>(At(0x1404bc950)), CurrentMenu(MenuManager()), stack.c_str());
+                }
+            }).detach();
+        }
+
+        // Select under the preview (found by the tester Nuion, 2026-11-12: "if u press select in any arsenal editing it kills
+        // the instance behind it"). While a town session runs, the pause object [0x1404c0130] (CPauseMenuClass, modes from
+        // the table at 0x1403e7b70: handler, -, flags, next mode; switched by FUN_140167580) is in mode 6, whose handler
+        // FUN_140166a50 switches to mode 14 when the pause button is pressed (FUN_1401669f0(1)). Mode 14 has flags 3: the
+        // game's paused bit (0x140530034 bit 0) and the town's pause menu (menu 49 on a menu manager of its own), out of
+        // sight under the Lab. The town's update then stopped: the preview froze, and leaving the editor hung on it.
+        // While pdnet's session is there, the button handlers (FUN_140166a50, FUN_140166b30) do nothing.
+        using PauseModeFn = void (*)(int64_t);
+        PauseModeFn g_pauseButtons = nullptr, g_pauseButtons2 = nullptr;
+        void HookedPauseButtons(int64_t self) { if (!g_previewTown && !g_previewTownClosing) g_pauseButtons(self); }
+        void HookedPauseButtons2(int64_t self) { if (!g_previewTown && !g_previewTownClosing) g_pauseButtons2(self); }
+
+        void NoPauseUnderPreview()
+        {
+            g_pauseButtons = reinterpret_cast<PauseModeFn>(At(0x140166a50));
+            g_pauseButtons2 = reinterpret_cast<PauseModeFn>(At(0x140166b30));
+            int patched = 0;
+            for (int mode = 0; mode < 17; ++mode)
+            {
+                auto entry = reinterpret_cast<uint64_t*>(At(0x1403e7b70) + mode * 0x18);
+                uint64_t hook = *entry == reinterpret_cast<uint64_t>(g_pauseButtons) ? reinterpret_cast<uint64_t>(&HookedPauseButtons)
+                              : *entry == reinterpret_cast<uint64_t>(g_pauseButtons2) ? reinterpret_cast<uint64_t>(&HookedPauseButtons2) : 0;
+                if (!hook) continue;
+                if (Write(reinterpret_cast<uint8_t*>(entry), std::vector<uint8_t>(reinterpret_cast<uint8_t*>(&hook), reinterpret_cast<uint8_t*>(&hook) + 8))) ++patched;
+            }
+            Log(L"gamepatch: skill preview: the town's pause button is off under the preview (%d pause modes)", patched);
+        }
+
+        // If the game is paused all the same while pdnet's session is there (bit 0 of 0x140530034), the pause object goes
+        // back to the town's mode 6 (flags 0: the paused bit is cleared), so the town runs and leaving doesn't hang.
+        void UnpauseUnderPreview()
+        {
+            if (!(g_previewTown || g_previewTownClosing) || !(*reinterpret_cast<uint32_t*>(At(0x140530034)) & 1)) return;
+            int64_t pause = *reinterpret_cast<int64_t*>(At(0x1404c0130));
+            if (!pause) return;
+            int mode = *reinterpret_cast<int32_t*>(pause + 0x50);
+            Log(L"preview: the game was paused under the preview (pause mode %d) - back to the town's mode 6", mode);
+            reinterpret_cast<void (*)(int64_t, int)>(At(0x140167580))(pause, 6);
+        }
+
         void SkillPreviewScene()
         {
+            NoPauseUnderPreview();
             WrapCommand<MenuCommandFn>(0x1403eede0 + 134 * 8, 0x140208300, &HookedPreview, g_preview, L"skill preview");
             WrapCommand<SessionCommandFn>(0x1403f1d50 + 119 * 8, 0x140217f80, &HookedLabPreviewMode, g_labPreviewMode, L"skill preview in multiplayer");
         }
@@ -4558,7 +4934,7 @@ namespace pdnet::gamepatches
             WrapCommand<MenuCommandFn>(0x1403eefe0 + 42 * 8, 0x140207f00, &HookedDrawWindow, g_drawWindow, L"settings save pop-up");
             WrapCommand<NativeFn>(0x1403fb108, 0x1402168a0, &HookedButtons, g_buttons, L"settings save confirmation");
             InstallBackButton(); // also takes session command 154, which the Settings rows use
-            if (g_optionChanged) Log(L"gamepatch: in-game Settings ready (multiplayer menu > Settings)");
+            if (g_optionChanged) Log(L"gamepatch: in-game Settings ready (multiplayer menu > Online Settings)");
             if (WrapCommand<MenuCommandFn>(0x1403eefe0 + 40 * 8, 0x140207e20, &HookedAddItem, g_addItem, L"menu item names"))
                 Log(L"gamepatch: menu items renamed as they are added (Quick Join, Lobby Browser%s)", GetConfig().scoreboard ? L", Global scoreboards only" : L"");
             SoundOptions(); // Options > Sound: Aura Particle Beeps

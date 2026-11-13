@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=Phantom Dust Rebirth
+Comment=Phantom Dust online again, without Xbox Live
+Exec=pdrebirth
+Icon=applications-games
+Categories=Game;
+Terminal=false

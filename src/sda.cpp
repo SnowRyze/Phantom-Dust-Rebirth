@@ -332,16 +332,17 @@ namespace pdnet
                 body.push_back(static_cast<uint8_t>(name.size()));
                 body.insert(body.end(), name.begin(), name.end());
 
-                // A join waits for the host: up to 12 s over EOS P2P (connections that work answer within a few seconds),
-                // then 3 s of direct UDP (the same LAN only); without EOS, 10 s of direct UDP.
+                // A join waits for the other PC: up to 22 s over EOS P2P, then 3 s of direct UDP (reaches the same LAN
+                // only); without EOS, 10 s of direct UDP. Working connections answer within a few seconds; one that doesn't
+                // answer in 6 s is remade through Epic's relay (p2p::Request), which takes about 5 s more. With 12 s the
+                // answer could miss the wait by a fraction of a second (the tester toaf, 2026-11-10: 0.1 s), and the join
+                // fell back to direct UDP, which can't reach a PC over the internet.
                 net::Message reply;
-                // A join waits for the host: up to 12 s over EOS P2P (working connections answer within a few seconds),
-                // then 3 s of direct UDP (reaches the same LAN only); without EOS, 10 s of direct UDP.
                 bool triedP2P = false;
                 if (!remote.eosUser.empty() && p2p::Enabled())
                 {
                     Log(L"sda: connecting to %s over EOS P2P (template %s)", remote.Describe().c_str(), m_name.c_str());
-                    if (p2p::Request(remote.eosUser, net::MsgType::Connect, body, 12000, reply))
+                    if (p2p::Request(remote.eosUser, net::MsgType::Connect, body, 22000, reply))
                     {
                         bool created;
                         auto pair = GetOrAdd(remote, net::InterfaceIp(), created, remote.eosUser);

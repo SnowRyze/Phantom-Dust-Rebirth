@@ -1,6 +1,6 @@
 # Phantom Dust Rebirth: changes from the original game
 
-As of Experimental 98. *(untested)* = waiting for a test in a real match.
+The current feature list is in the [README](../README.md#features). This page is the older list, as of Experimental 98. *(untested)* = waiting for a test in a real match.
 
 ## Online
 - Epic Online Services instead of Xbox Live: no accounts, no port forwarding
@@ -45,7 +45,7 @@ As of Experimental 98. *(untested)* = waiting for a test in a real match.
 - How to Play button back (opens phantomdust.online)
 - "Xbox Live" reads "Online"
 - Options: Send Log, Updates, Aura Particle Beeps
-- Multiplayer: Settings menu, Online Store removed, Trade reads "Theater"
+- Multiplayer: Online Settings menu, Online Store removed, Trade reads "Theater"
 - Scoreboard: Global boards only
 - Lobby: Arsenal Lab button, Rated / Unrated shown
 - Lab: Buy, Sell and Test Arsenal rows

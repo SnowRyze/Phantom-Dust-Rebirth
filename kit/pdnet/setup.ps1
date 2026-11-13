@@ -149,14 +149,19 @@ if ($hr -ne 0) { Fail ('Windows refused to attach pdlaunch to Phantom Dust (HRES
 Set-ItemProperty 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Run' -Name 'PhantomDust pdnet' -Value "`"$kit\pdlaunch.exe`" -attach" -Type String
 
 # pdnet passes match traffic between the game and itself through sockets on this PC, which Windows blocks for
-# Store-style apps unless they are exempted. This needs administrator rights once.
+# Store-style apps unless they are exempted, and which a firewall rule against the app blocks too. firewall.ps1 sets
+# the exemption, adds Windows Firewall allow rules for the app and switches off rules that block it. This needs
+# administrator rights once.
 Write-Host "`nWindows will now ask for administrator permission, to let Phantom Dust use connections on this PC (needed for matches)."
 try {
-    $p = Start-Process CheckNetIsolation.exe -Verb RunAs -Wait -PassThru -WindowStyle Hidden -ArgumentList "LoopbackExempt -a -n=$($pkg.PackageFamilyName)"
+    $p = Start-Process powershell.exe -Verb RunAs -Wait -PassThru -WindowStyle Hidden -ArgumentList "-NoProfile -ExecutionPolicy Bypass -File `"$kit\firewall.ps1`" -Add -Family $($pkg.PackageFamilyName)"
     if ($p.ExitCode -ne 0) { throw "exit code $($p.ExitCode)" }
-    Write-Host 'Done.'
+    $fwLog = Join-Path $kit 'firewall.log'
+    $blocked = if (Test-Path $fwLog) { @(Select-String -Path $fwLog -Pattern 'block rule switched off' -SimpleMatch).Count } else { 0 }
+    if ($blocked) { Write-Host "Done. The Windows Firewall was blocking Phantom Dust ($blocked rule(s)); that is switched off now." -ForegroundColor Green }
+    else { Write-Host 'Done.' }
 }
-catch { Write-Host "Warning: the local-connection exemption was not set ($_). Lobbies will work, but matches may not connect; run Setup.bat again and allow it." -ForegroundColor Yellow }
+catch { Write-Host "Warning: the network permissions were not set ($_). Lobbies will work, but matches may not connect; run Setup.bat again and allow it." -ForegroundColor Yellow }
 
 # --- microphone (voice chat) ----------------------------------------------------------------------
 # Windows asks each Store-style app once before it may use the microphone (desktop programs, like games from other

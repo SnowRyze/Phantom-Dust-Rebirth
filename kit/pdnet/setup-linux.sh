@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# Sets up pdnet for Phantom Dust on Linux, with wine-uwp (https://github.com/LiveManQuestion/wine-uwp, branch
-# phantom-dust). The Linux counterpart of Setup.bat: run it from the kit's pdnet folder.
+# Sets up pdnet for Phantom Dust on Linux, with wine-uwp (https://github.com/designgears/wine-uwp). The Linux
+# counterpart of Setup.bat: run it from the kit's pdnet folder.
 #
 #   ./setup-linux.sh                  install Phantom Dust if needed, then set up pdnet (asks for your player name)
 #   ./setup-linux.sh --name NAME      same, without asking
@@ -10,10 +10,13 @@
 #   ./setup-linux.sh --logs           copy the logs to your home folder, to send after a test
 #
 # wine-uwp is looked for in $WINE_UWP (the wine-uwp script), on PATH, in ~/.local/opt/wine-uwp and ~/wine-uwp; if
-# none can load pdnet, it offers to download the prebuilt one (github.com/LiveManQuestion/wine-uwp releases).
+# none can load pdnet, it offers to download the prebuilt one (github.com/designgears/wine-uwp releases, or
+# github.com/LiveManQuestion/wine-uwp's while designgears/wine-uwp has none).
 # The game's files are not changed: wine-uwp loads pdnet.dll into the game when it starts (local.env in the game's
 # folder, WINE_UWP_INJECT), as pdlaunch.exe does on Windows. pdnet and its files are copied next to the game.
-# wine-uwp runs before-start.sh from the game's folder at each start: there it calls this script with --auto-update.
+# Like pdlaunch.exe, a launcher (~/.local/bin/phantom-dust-rebirth, menu entry "Phantom Dust Rebirth") calls this
+# script with --auto-update and then starts the game. A wine-uwp that runs the game folder's before-start.sh at
+# each start does that update itself, so the launcher leaves it to wine-uwp.
 set -euo pipefail
 
 kit=$(cd "$(dirname "$0")" && pwd)
@@ -51,9 +54,10 @@ for c in "${WINE_UWP:-}" "$(command -v wine-uwp 2>/dev/null || true)" ~/.local/o
     fi
     old=${old:-$c}
 done
-# None (or only an older one): offer the prebuilt runtime from the wine-uwp fork's releases, into ~/.local/opt.
-release=https://github.com/LiveManQuestion/wine-uwp/releases/latest/download
-asset=wine-uwp-phantom-dust-x86_64.tar.xz
+# None (or only an older one): offer the prebuilt runtime, into ~/.local/opt. From designgears/wine-uwp's latest
+# release; until that repository has published one, from the LiveManQuestion/wine-uwp fork's (same runtime).
+sources="https://github.com/designgears/wine-uwp/releases/latest/download wine-uwp-x86_64.tar.xz
+https://github.com/LiveManQuestion/wine-uwp/releases/latest/download wine-uwp-phantom-dust-x86_64.tar.xz"
 dl_tmp=""
 download_wine_uwp() {
     local dest=$HOME/.local/opt
@@ -72,9 +76,14 @@ download_wine_uwp() {
     fi
     dl_tmp=$(mktemp -d)
     trap 'rm -rf "$dl_tmp"' EXIT
-    local tmp=$dl_tmp
+    local tmp=$dl_tmp release="" asset="" r a
+    # The first source that has a release (its checksum file downloads).
+    while read -r r a; do
+        if curl -fsL -o "$tmp/$a.sha256" "$r/$a.sha256"; then release=$r; asset=$a; break; fi
+    done <<<"$sources"
+    [ -n "$release" ] || fail "download failed (no wine-uwp release could be reached; is the network up?)."
+    say "Downloading ${release%/latest/download}/latest"
     curl -fL --progress-bar -o "$tmp/$asset" "$release/$asset" || fail "download failed ($release/$asset)."
-    curl -fsL -o "$tmp/$asset.sha256" "$release/$asset.sha256" || fail "download failed ($release/$asset.sha256)."
     (cd "$tmp" && sha256sum -c --quiet "$asset.sha256") || fail "the download is damaged (checksum mismatch); run this again."
     mkdir -p "$dest"
     if [ -e "$dest/wine-uwp" ]; then
@@ -90,14 +99,6 @@ download_wine_uwp() {
     say "wine-uwp installed in $dest/wine-uwp."
 }
 [ -n "$wup" ] || [ $action = remove ] || [ $action = logs ] || download_wine_uwp
-# The prebuilt wine-uwp from before updates at game start can load pdnet, so it was kept above: offer the newer one.
-updates_at_start() { grep -q before-start.sh "$(readlink -f "$wup")"; }
-if [ $action = setup ] && [ -n "$wup" ] && [ "$wup" -ef ~/.local/opt/wine-uwp/bin/wine-uwp ] &&
-   ! updates_at_start && ! pgrep -x PDUWP.exe >/dev/null 2>&1; then
-    say "Your wine-uwp can't update pdnet when the game starts. A newer one can be downloaded to ~/.local/opt/wine-uwp"
-    say "(about 50 MB; your game, prefix and sign-in are kept)."
-    case $(ask "Download it now? [Y/n]") in [nN]*) ;; *) download_wine_uwp confirmed ;; esac
-fi
 if [ -z "$wup" ]; then
     [ -n "$old" ] && fail "your wine-uwp ($old) is too old to load pdnet. Run this without --remove/--logs to update it, or set WINE_UWP=/path/to/bin/wine-uwp."
     fail "wine-uwp was not found. Run this without --remove/--logs to download it, or set WINE_UWP=/path/to/bin/wine-uwp."
@@ -105,6 +106,8 @@ fi
 bindir=$(dirname "$(readlink -f "$wup")")
 libdir="$bindir/../lib/wine/x86_64-windows"
 data=${WINE_UWP_DATA:-${XDG_DATA_HOME:-$HOME/.local/share}/wine-uwp}
+launcher=$HOME/.local/bin/phantom-dust-rebirth
+menu_entry=${XDG_DATA_HOME:-$HOME/.local/share}/applications/phantom-dust-rebirth.desktop
 
 # The installed Phantom Dust: the stage folder whose identity.env names the package.
 find_game() {
@@ -140,6 +143,9 @@ if [ $action = remove ]; then
     [ -n "$game" ] || fail "Phantom Dust is not installed in $data."
     running && fail "close Phantom Dust first."
     rm -f "$game"/{pdnet.dll,pdnet.ini,eos.ini,EOSSDK-Win64-Shipping.dll,xaudio2_9redist.dll,kit-version.txt,before-start.sh}
+    # only what this script wrote
+    grep -qs 'written by setup-linux.sh' "$launcher" && rm -f "$launcher"
+    grep -qs 'written by setup-linux.sh' "$menu_entry" && rm -f "$menu_entry"
     if [ -f "$game/local.env" ]; then
         sed -i '/WINE_UWP_INJECT/d; /^# Phantom Dust Rebirth/d' "$game/local.env"
         grep -q '[^[:space:]]' "$game/local.env" || rm -f "$game/local.env"
@@ -168,7 +174,8 @@ if [ $action = update ]; then
     label=$(kv 1p); build=$(kv 's/^Build: //p'); want_md5=$(kv 's/^pdnet\.dll MD5 //p' | tr 'A-F' 'a-f')
     # Conceptual kits are never published: an update would replace the concept with a master build.
     case $label in *Conceptual*) say "Updates are off for this kit (Conceptual build)."; exit 0 ;; esac
-    case $label in *Experimental*) own_channel=experimental ;; *Stable*) own_channel=stable ;; *) own_channel=off ;; esac
+    # Stable is the public version since build 144: a Public kit follows Stable
+    case $label in *Experimental*) own_channel=experimental ;; *Stable*|*Public*) own_channel=stable ;; *) own_channel=off ;; esac
     channel=""
     # update_channel: the kit's pdnet.ini, the game's copy, then the file in-game Options > Updates writes (later wins)
     for f in "$kit/pdnet.ini" "$game/pdnet.ini" "$data/prefix/drive_c/users/$USER/AppData/Local/Packages/$family/LocalState/pdnet/settings.ini"; do
@@ -176,6 +183,7 @@ if [ $action = update ]; then
         if [ -n "$c" ]; then channel=$c; fi
     done
     channel=$(printf '%s' "$channel" | tr 'A-Z' 'a-z')
+    [ "$channel" = public ] && channel=stable
     case $channel in
         stable|experimental|off) ;;
         "") channel=$own_channel ;;
@@ -361,21 +369,82 @@ printf '# Phantom Dust Rebirth: pdnet loaded the way pdlaunch.exe does on Window
 printf '# wine-uwp: end the game when its window is gone, as Windows does (setup-linux.sh)\n%s\n' \
     "export WINE_UWP_EXIT_WITH_WINDOW=1" >> "$game/local.env"
 
-# --- look for updates at each game start (wine-uwp runs this, as Windows runs pdlaunch.exe) --------------------------
+# --- look for updates at each game start, as Windows' pdlaunch.exe does ---------------------------------------------
+app=$(basename "$game")
+uplog="$data/logs/$app-before-start.log"
+# A wine-uwp that runs the game folder's before-start.sh at each start updates through this one.
 {
     printf '# Phantom Dust Rebirth: update pdnet before the game starts (written by setup-linux.sh)\n'
     printf 'export WINE_UWP=%q\n' "$wup"
     printf 'exec bash %q --auto-update\n' "$kit/setup-linux.sh"
 } > "$game/before-start.sh"
+# Any other wine-uwp: the launcher does the update, then starts the game (pdlaunch's job on Windows).
+# Not inside a Flatpak: its paths are the sandbox's, and the Flatpak starts the game its own way.
+write_launcher() {
+    mkdir -p "$(dirname "$launcher")" 2>/dev/null && [ -w "$(dirname "$launcher")" ] || return 1
+    {
+        printf '#!/usr/bin/env bash\n'
+        printf '# Phantom Dust Rebirth: update pdnet, then start the game, as pdlaunch.exe does on Windows\n'
+        printf '# (written by setup-linux.sh; running it again rewrites this file)\n'
+        [ -n "${WINE_UWP_DATA:-}" ] && printf 'export WINE_UWP_DATA=%q\n' "$WINE_UWP_DATA"
+        printf 'wup=%q kit=%q log=%q\n' "$wup" "$kit" "$uplog"
+        cat <<'EOF'
+# a wine-uwp that runs before-start.sh at each start does the update itself
+if ! grep -q before-start.sh "$(readlink -f "$wup")" 2>/dev/null; then
+    if [ -f "$kit/setup-linux.sh" ]; then
+        mkdir -p "$(dirname "$log")"
+        # no terminal when started from the menu: no input, output to the log; a failed update doesn't stop the game
+        WINE_UWP=$wup bash "$kit/setup-linux.sh" --auto-update < /dev/null > "$log" 2>&1 ||
+            echo "pdnet update failed: see $log" >&2
+    else
+        echo "The Rebirth kit isn't in $kit any more, so pdnet isn't updated. Run setup-linux.sh from where it is now." >&2
+    fi
+fi
+EOF
+        printf 'exec "$wup" run %q "$@"\n' "$app"
+    } > "$launcher" && chmod 755 "$launcher"
+}
+# menu entry (Exec quoting from the desktop entry spec)
+dq() { printf '"%s"' "$(printf '%s' "$1" | sed 's/[\\"`$]/\\&/g; s/%/%%/g')"; }
+icon=""
+[ -f "$game/.wine-uwp-icon.png" ] && icon=$game/.wine-uwp-icon.png
+write_menu_entry() {
+    [ ! -e "$menu_entry" ] || grep -qs 'written by setup-linux.sh' "$menu_entry" || return 0
+    mkdir -p "$(dirname "$menu_entry")" 2>/dev/null || return 1
+    {
+        printf '[Desktop Entry]\n# written by setup-linux.sh (Phantom Dust Rebirth)\n'
+        printf 'Type=Application\nName=Phantom Dust Rebirth\nComment=Phantom Dust with Rebirth online play (wine-uwp)\n'
+        printf 'Exec=%s\n' "$(dq "$launcher")"
+        [ -n "$icon" ] && printf 'Icon=%s\n' "$icon"
+        printf 'Terminal=false\nCategories=Game;\nStartupWMClass=pduwp.exe\n'
+    } > "$menu_entry" || return 1
+    command -v update-desktop-database >/dev/null && update-desktop-database -q "$(dirname "$menu_entry")" 2>/dev/null || true
+}
+launched="" flatpak=""
+if [ -f /.flatpak-info ] || [ -n "${FLATPAK_ID:-}" ]; then
+    flatpak=${FLATPAK_ID:-$(sed -n 's/^name=//p' /.flatpak-info 2>/dev/null | head -1)}
+elif write_launcher; then
+    launched=1
+    write_menu_entry || say "(Could not add the menu entry $menu_entry.)"
+else
+    say "(Could not write $launcher.)"
+fi
 
 say ""
-say "Set up as '$name'. Start Phantom Dust with:"
-say "  $wup run $(basename "$game")"
+if [ -n "$launched" ]; then
+    say "Set up as '$name'. Start Phantom Dust from your app menu (\"Phantom Dust Rebirth\") or with:"
+    case ":$PATH:" in *":$(dirname "$launcher"):"*) say "  $(basename "$launcher")" ;; *) say "  $launcher" ;; esac
+    say "Started that way, pdnet updates itself first, as on Windows (in-game Options > Updates; log: $uplog)."
+elif [ -n "$flatpak" ]; then
+    say "Set up as '$name'. Start Phantom Dust from your app menu or with:"
+    say "  flatpak run $flatpak"
+    say "pdnet updates itself when the game starts (in-game Options > Updates; log: $uplog)."
+else
+    say "Set up as '$name'. Start Phantom Dust with:"
+    say "  $wup run $app"
+    say "If your wine-uwp runs before-start.sh, pdnet updates itself at each start (log: $uplog);"
+    say "otherwise run $0 --update now and then."
+fi
+say "Keep this kit folder where it is: the updates go through it."
 say "The first title screen should say \"Rebirth\". Your Xbox profile doesn't show while pdnet is on: make a new one."
 say "After a test: $0 --logs     To stop using pdnet: $0 --remove"
-if updates_at_start; then
-    say "Updates: pdnet updates itself when the game starts (in-game Options > Updates; log: $data/logs/$(basename "$game")-before-start.log)."
-    say "Keep this kit folder where it is: the updates go through it."
-else
-    say "Updates: this wine-uwp is too old to update pdnet at game start, so run $0 --update now and then."
-fi
