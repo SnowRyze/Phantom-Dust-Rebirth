@@ -11,7 +11,7 @@ folder that stays put and double-click `Setup.bat`.
 
 ## Features
 
-Everything here is in the current Stable (Stable 13). *(Not yet confirmed)* means it hasn't been checked in a real match
+Everything here is in the current Stable (Stable 14). *(Not yet confirmed)* means it hasn't been checked in a real match
 yet. Newer work goes into Experimental builds first.
 
 **Playing online**
@@ -57,7 +57,7 @@ yet. Newer work goes into Experimental builds first.
 - "Xbox Live" reads "Online"; the multiplayer menu has Online Settings (name, voice, nametags, Discord posts, partner
   aim), and the Online Store is gone.
 - Options: Send Log (sends your logs to the developers), Updates (Stable, Experimental or Off), and in Sound, Aura
-  Particle Beeps and Skill Preview Sound *(Experimental)*.
+  Particle Beeps and Skill Preview Sound *(not yet confirmed)*.
 - Character select shows each colour's name instead of COLOR 1-4 (Alpha's *not yet confirmed*).
 - Player feedback screen after matches removed.
 

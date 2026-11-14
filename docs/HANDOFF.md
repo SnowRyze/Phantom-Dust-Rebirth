@@ -69,7 +69,7 @@ Other docs: [`EOS_PLAN.md`](EOS_PLAN.md), [`MODDING_PLAN.md`](MODDING_PLAN.md), 
 
 ## Status (2026-11-12)
 
-Newest builds: **Experimental 161** (the game as in 157), **Stable 13** (Experimental 159, the game as in 157).
+Newest builds: **Experimental 170**, **Stable 14** (Experimental 170).
 
 Not yet confirmed in the game (each has its change log note):
 - Options > Sound > Skill Preview Sound (Experimental 170).
@@ -108,6 +108,8 @@ Ideas, not planned (notes in the change log and reference notes):
 # Change log (newest first)
 
 ## November 2026
+
+Stable 14 (2026-11-14): Experimental 170 promoted at the user's request (build.bat promote 170, which pushed tag stable-14 = master ff77d93 with git itself and published without errors). The release has PhantomDust-Rebirth-Stable-14-PC.zip (public links, eos.ini) and pdnet-update-170.zip ("DO NOT DOWNLOAD" label); the Flatpak workflow builds PhantomDust-Rebirth-Linux.flatpak for it (running when this was written). Since Stable 13: joins over direct links (164), the Discord slot list (166), the lobby Arsenal Lab "Player 2" warning (169, confirmed by the user), Options > Sound > Skill Preview Sound (170), the match-end peer-drop logging (163), PD Helper on Linux (pull request 12). The user paused the promote half-way (2026-11-14); it was past the tag push, so the release was let finish and then completed.
 
 Skill Preview Sound option (2026-11-14, Experimental 170, the user's request, not yet tried). Main menu > Options > Sound gets a second pdnet row under Aura Particle Beeps: "Skill Preview Sound: On / Off" (option 7, handled like option 6 in HookedGetOption / HookedSetOption while the SOUND window is open; setting preview_sound, saved to settings.ini). Off: SoundOff refuses positional (3D) sounds while pdnet's town session is there (PreviewSessionOn: g_previewTown or closing) - the skills and the town's ambience emitters; the menus' 2D sounds still play. Not known yet: whether the window's cursor reaches a fourth row, and whether the town's hum comes only through 3D sounds (sound_log=on would show).
 
