@@ -169,7 +169,9 @@ namespace pdnet::film
                 g_buffer.reserve(256 * 1024);
             }
             std::lock_guard file(g_fileLock);
-            if (g_file && !out.empty() && fwrite(out.data(), 1, out.size(), g_file) != out.size())
+            // Flushed to the system each time (not to the disk itself): a game crash then loses at most the last second. A
+            // crash left an empty film before this (2026-11-14).
+            if (g_file && !out.empty() && (fwrite(out.data(), 1, out.size(), g_file) != out.size() || fflush(g_file) != 0))
             {
                 static int told = 0;
                 if (told++ < 3) Log(L"film: writing %s failed", g_name.c_str());
@@ -206,6 +208,7 @@ namespace pdnet::film
             Put<uint16_t>(header, static_cast<uint16_t>(label.size()));
             header.insert(header.end(), label.begin(), label.end());
             fwrite(header.data(), 1, header.size(), g_file);
+            fflush(g_file);
             {
                 std::lock_guard guard(g_lock);
                 g_buffer.clear();

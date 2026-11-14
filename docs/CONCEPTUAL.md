@@ -85,6 +85,13 @@ Anything that changes match behaviour needs every player on the same kit, and re
 
 ## Log
 (Newest first: what was tried, what happened.)
+- 2026-11-14: Theatre step 2, the film reader (toolsilmread.py, py -I toolsilmread.py <film> [--stream NAME]). Packet:
+  7-byte mesh header (u16 sequence, u8 type 0x40 data / 0x01 heartbeat, u32 length), 8-byte message header (u16 length, 0x1200,
+  u16 kind, u16 sender slot); kind 8 = the per-peer block (u64 mask: bit N stream N, bit 26+K ack of the K-th sequenced stream;
+  u32 slot, u32 frame/2, u32 lag, u32 FUN_140184730), then the streams in order (sequenced ones with a u32 number first), a
+  u32 per ack, the rest voice. Kinds 4, 10 and a kind-8 mask with its top bit set: end-of-match messages. All 15 online films
+  decode with nothing left over; the crashed game's film was empty (bad magic, refused cleanly). The recorder now flushes each
+  write, so a crash loses at most a second. Next (the user): the Theatre menu replaces Trade, with a film list before the viewer.
 - 2026-11-14: Conceptual 24 tried (Test Arsenal, F9): followed the AI 37 s, free camera, off at the battle's end, no crash;
   the orbit controls turn the right way (the user).
 - 2026-11-14: crash on Conceptual 23 (installed in the "Conceptual 22" folder) while following the AI (Test Arsenal, F9): PDUWP+0x15145e in the HUD draw, reading
