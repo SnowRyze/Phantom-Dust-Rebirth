@@ -88,7 +88,6 @@ Open problems:
 - Joins over direct links failing between a Windows PC and the Linux Flatpak on one network (2026-11-13): fix in Experimental 164, not yet tried.
 - Players dropped from each other at a match's end, then the lobby lost (Fisher King / Motley, 2026-11-13): Experimental 163 logs which game function drops them; fix planned once a log confirms it (paused by the user, 2026-11-13).
 - Story progress not saved (reported 2026-11-13, paused by the user): no log yet; the developer PC's own save is fine. The log's "GameSave: wrote ..." lines show each save.
-- Skill preview without story progress (toaf): skills may not play in the preview.
 - Risryn can't join anyone: UDP to their own address doesn't arrive (self-test, 141/143); Norton's firewall suspected.
 - Norton blocks Setup.bat: needs the detection name.
 - Links to players from earlier lobbies stay open and get reconnected every minute (seen since Experimental 69).
@@ -104,6 +103,8 @@ Ideas, not planned (notes in the change log and reference notes):
 # Change log (newest first)
 
 ## November 2026
+
+Confirmed by the user (2026-11-14): the skill preview works for toaf (no story progress), the last open preview problem; likely the Select / pause fix (157) and the hang safety net (154).
 
 Confirmed by the user (2026-11-14): Skill Preview Sound (170), the Discord slot list after a rejoin (166), Select under the skill preview (157), the arsenal Limit while editing (147) and the colour names on the character select, Alpha included (150-152).
 
