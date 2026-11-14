@@ -20,9 +20,24 @@ namespace pdnet::film
         std::string when;     // "Nov 13 01:45" (from the file name)
         int gameType = -1;    // 0 Battle Royale, 1 Tag Team, 2 One-on-One (-1: no setup recorded)
         int stage = -1;
+        int layout = 0;
+        uint32_t version = 0;   // its setup snapshot: 1, or 2 with characters and every player's arsenal
+        bool present[4]{};
+        int character[4]{ -1, -1, -1, -1 };
         std::string players;  // "SnowRyze, Motley"
         double minutes = 0;
         uint32_t packets = 0;
     };
     std::vector<Info> List(size_t max);
+
+    // One stream record from a film's match traffic: who it is about (the sender's slot), which of the game's 26 streams,
+    // when (ms since the film started), the sender's game frame / 2, its sequence number (sequenced streams) and data.
+    struct Event
+    {
+        uint32_t ms = 0, half = 0, number = 0;
+        uint8_t slot = 0, stream = 0;
+        std::vector<uint8_t> data;
+    };
+    // Reads and decodes a film (bounds-checked): its stream records in time order, and its details. False if unreadable.
+    bool Load(const std::wstring& file, std::vector<Event>& events, Info& info);
 }

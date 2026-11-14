@@ -1944,6 +1944,7 @@ namespace pdnet::gamepatches
         int g_filmRows = 0, g_filmPage = 0;
         const char* kTheatreBar = "\a8#Select \a2#Watch \a580r\a3#Back";
 
+        void StartFilmBattle(const film::Info& f); // (below)
         int FilmPages() { return g_films.empty() ? 1 : static_cast<int>((g_films.size() + kTheatreRows - 1) / kTheatreRows); }
 
         void FillFilmPage()
@@ -2449,7 +2450,8 @@ namespace pdnet::gamepatches
                     {
                         int64_t sound[2] = { 0, 0 };
                         reinterpret_cast<InputFn>(At(0x140261750))(sound); // the menu's select sound
-                        Log(L"theatre: film %s chosen (%S, %S) - playback isn't built yet", g_films[pick].file.c_str(), g_films[pick].when.c_str(), g_films[pick].players.c_str());
+                        Log(L"theatre: film %s chosen (%S, %S)", g_films[pick].file.c_str(), g_films[pick].when.c_str(), g_films[pick].players.c_str());
+                        StartFilmBattle(g_films[pick]);
                     }
                     else Log(L"theatre: A on row %d (window %d): no film there", row, window);
                 }
@@ -3000,6 +3002,39 @@ namespace pdnet::gamepatches
             *reinterpret_cast<int32_t*>(At(0x140519abc)) = 3; // "downloaded"
             Log(L"gamepatch: Test Arsenal: opponent = a copy of arsenal %d", index);
             return true;
+        }
+
+        // Theatre: a film plays in a Test Arsenal battle started straight away (no picks): the film's stage and layout, its
+        // players' characters when the film recorded them (version 2), this player's current arsenal on both sides for now.
+        // labtests plays the film once the battle starts.
+        void StartFilmBattle(const film::Info& f)
+        {
+            uint8_t* save = *reinterpret_cast<uint8_t**>(At(0x1404bec10));
+            int index = save ? *reinterpret_cast<int32_t*>(save + 0x3b08) : -1;
+            if (!labtests::QueueFilm(f.file) || !CopyArsenalToOpponent(index))
+            {
+                Log(L"theatre: the film's battle couldn't start");
+                return;
+            }
+            int characters[2] = { -1, -1 }, n = 0;
+            for (int s = 0; s < 4 && n < 2; ++s)
+                if (f.present[s]) characters[n++] = f.character[s];
+            *reinterpret_cast<int32_t*>(At(0x1403de844)) = index;
+            g_testBattle = true;
+            g_testStage = f.stage;
+            g_testLayout = f.layout;
+            g_testCharacter = characters[0];
+            g_testOpponentCharacter = characters[1];
+            g_testArsenal = index;
+            g_testPicking = kPickingNone;
+            LoadMultiplayerTextures();
+            ResetLabVariables();
+            MenuParam(kScoreBattleMenu, 0) = 1; // livedbtl: start the battle
+            int64_t manager = MenuManager();
+            *At(0x1404bbc34) = 0;
+            g_pushMenu(manager, kScoreBattleMenu, 0);
+            *reinterpret_cast<char*>(manager + 0x1062c) = 0;
+            Log(L"theatre: battle for the film: stage %d, layout %d, characters %d / %d", f.stage, f.layout, characters[0], characters[1]);
         }
 
         void OpenTestArsenal()

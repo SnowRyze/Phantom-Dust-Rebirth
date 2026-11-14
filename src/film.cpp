@@ -3,6 +3,7 @@
 #include "gamepatches.h"
 #include "log.h"
 #include <algorithm>
+#include <cstddef>
 #include <cstdio>
 #include <map>
 #include <mutex>
@@ -96,11 +97,17 @@ namespace pdnet::film
         };
         struct Snapshot
         {
-            uint32_t version = 1;
+            uint32_t version = 2;
             int32_t gameType, rule, stage, layout, localSlot, mode, test;
             SlotInfo slots[4];
             uint8_t localArsenal[100]; // this PC's arsenal for the match (save list + index at save +0x3b08)
+            // Version 2 (for playback):
+            int32_t character[4];      // the match setup (DAT_1404bc420, 0x48 per player, +8; FUN_140128990)
+            int16_t skills[4][30];     // each player's arsenal: its deck counts (DAT_140585fe8[slot], made by FUN_14014f830)
+                                       // plus the cards in hand (status record +0x378 per slot, in use at +0x350); -1 unused
+            float auraRate[4];         // the Aura refill rate the arsenal gives (DAT_1404bc958)
         };
+        constexpr size_t kSnapshotV1 = offsetof(Snapshot, character);
 #pragma pack(pop)
 
         bool TakeSnapshot(Snapshot& s)
@@ -130,6 +137,23 @@ namespace pdnet::film
                 uint8_t* list = save ? *reinterpret_cast<uint8_t**>(save + 0x10a * 0x38) : nullptr;
                 int index = save ? *reinterpret_cast<int32_t*>(save + 0x3b08) : -1;
                 if (list && index >= 0 && index < 16) memcpy(s.localArsenal, list + index * 100, 100);
+                const int32_t* rates = reinterpret_cast<const int32_t*>(At(0x1404bc958));
+                uint8_t* table = *reinterpret_cast<uint8_t**>(At(0x1404bdc40));
+                int kinds = table ? *reinterpret_cast<int32_t*>(table + 4) - 1 : 0;
+                for (int i = 0; i < 4; ++i)
+                {
+                    s.character[i] = *reinterpret_cast<int32_t*>(At(0x1404bc420) + i * 0x48 + 8);
+                    memcpy(&s.auraRate[i], rates + i, 4);
+                    for (int k = 0; k < 30; ++k) s.skills[i][k] = -1;
+                    int n = 0;
+                    uint8_t* record = reinterpret_cast<uint8_t**>(At(0x1404bc608))[i];
+                    if (record)
+                        for (int h = 0; h < 4 && n < 30; ++h)
+                            if (*reinterpret_cast<int32_t*>(record + 0x350 + h * 0x50) != 0) s.skills[i][n++] = static_cast<int16_t>(*reinterpret_cast<int32_t*>(record + 0x378 + h * 0x50));
+                    const int32_t* counts = reinterpret_cast<int32_t**>(At(0x140585fe8))[i];
+                    for (int id = 1; counts && id < kinds && id < 0x8000 && n < 30; ++id)
+                        for (int c = 0; c < counts[id] && c < 30 && n < 30; ++c) s.skills[i][n++] = static_cast<int16_t>(id);
+                }
                 return true;
             }
             __except (EXCEPTION_EXECUTE_HANDLER)
@@ -319,10 +343,17 @@ namespace pdnet::film
                 uint16_t length = *reinterpret_cast<const uint16_t*>(&d[o + 2]);
                 if (o + 12 + length > d.size()) break;
                 lastMs = *reinterpret_cast<const uint32_t*>(&d[o + 4]);
-                if (type == kSnapshot && length >= sizeof(Snapshot))
+                if (type == kSnapshot && length >= kSnapshotV1)
                 {
-                    Snapshot s;
-                    memcpy(&s, &d[o + 12], sizeof(s));
+                    Snapshot s{};
+                    memcpy(&s, &d[o + 12], (std::min)(static_cast<size_t>(length), sizeof(s)));
+                    info.layout = s.layout;
+                    info.version = s.version;
+                    for (int i = 0; i < 4; ++i)
+                    {
+                        info.present[i] = s.slots[i].present != 0;
+                        info.character[i] = s.version >= 2 ? s.character[i] : -1;
+                    }
                     info.gameType = s.gameType;
                     info.stage = s.stage;
                     for (const SlotInfo& slot : s.slots)
@@ -344,6 +375,61 @@ namespace pdnet::film
             films.push_back(std::move(info));
         }
         return films;
+    }
+
+    bool Load(const std::wstring& file, std::vector<Event>& events, Info& info)
+    {
+        events.clear();
+        FILE* f = nullptr;
+        if (_wfopen_s(&f, (FilmsDir() + L"\\" + file).c_str(), L"rb") != 0 || !f) return false;
+        fseek(f, 0, SEEK_END);
+        long size = ftell(f);
+        fseek(f, 0, SEEK_SET);
+        std::vector<uint8_t> d(size > 0 && size < 256 * 1024 * 1024 ? size : 0);
+        d.resize(fread(d.data(), 1, d.size(), f));
+        fclose(f);
+        if (d.size() < 30 || memcmp(d.data(), "PDFILM\0\0", 8) != 0) return false;
+        std::vector<Info> one = List(1000);
+        for (auto& i : one) if (i.file == file) info = i;
+        // The game's stream table (0x1403fb4d0): data size and whether it carries a sequence number.
+        static const int kSize[26] = { 40, 8, 28, 96, 28, 96, 28, 32, 12, 28, 12, 4, 16, 4, 6, 4, 2, 3, 1, 4, 6, 28, 8, 4, 6, 4 };
+        size_t o = 30 + *reinterpret_cast<const uint16_t*>(&d[28]);
+        while (o + 12 <= d.size())
+        {
+            uint8_t type = d[o];
+            uint16_t length = *reinterpret_cast<const uint16_t*>(&d[o + 2]);
+            uint32_t ms = *reinterpret_cast<const uint32_t*>(&d[o + 4]);
+            if (o + 12 + length > d.size()) break;
+            const uint8_t* p = &d[o + 12];
+            o += 12 + length;
+            if (type != kIn && type != kOut) continue;
+            // 7-byte mesh header (type 0x40 = game data, u32 length), 8-byte message header (kind 8), then the block.
+            if (length < 15 + 24 || p[2] != 0x40 || *reinterpret_cast<const uint32_t*>(p + 3) != length) continue;
+            if (*reinterpret_cast<const uint16_t*>(p + 11) != 8) continue;
+            uint64_t mask = *reinterpret_cast<const uint64_t*>(p + 15);
+            if (mask >> 63) continue; // end-of-match message
+            uint32_t slot = *reinterpret_cast<const uint32_t*>(p + 23);
+            uint32_t half = *reinterpret_cast<const uint32_t*>(p + 27);
+            size_t at = 15 + 24;
+            for (int i = 0; i < 26; ++i)
+            {
+                if (!((mask >> i) & 1)) continue;
+                bool sequenced = i >= 2;
+                size_t need = kSize[i] + (sequenced ? 4 : 0);
+                if (at + need > length) { at = length + 1; break; }
+                Event e;
+                e.ms = ms;
+                e.slot = static_cast<uint8_t>(slot);
+                e.stream = static_cast<uint8_t>(i);
+                e.half = half;
+                e.number = sequenced ? *reinterpret_cast<const uint32_t*>(p + at) : 0;
+                e.data.assign(p + at + (sequenced ? 4 : 0), p + at + need);
+                events.push_back(std::move(e));
+                at += need;
+            }
+        }
+        std::stable_sort(events.begin(), events.end(), [](const Event& a, const Event& b) { return a.ms < b.ms; });
+        return true;
     }
 
     void Start()
@@ -368,7 +454,7 @@ namespace pdnet::film
                     Sleep(50);
                     int state = Var<int32_t>(0x1404bc950);
                     bool match = state != 0 && state != 13;
-                    if (match && !g_recording) { snapshot = false; OpenFilm(); }
+                    if (match && !g_recording && !gamepatches::TestBattle()) { snapshot = false; OpenFilm(); } // not Test Arsenal / playback
                     if (g_recording && state != last)
                     {
                         std::lock_guard guard(g_lock);

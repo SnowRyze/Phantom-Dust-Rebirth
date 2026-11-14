@@ -85,6 +85,15 @@ Anything that changes match behaviour needs every player on the same kit, and re
 
 ## Log
 (Newest first: what was tried, what happened.)
+- 2026-11-14: Theatre playback, first version. A on a film loads it (film::Load decodes it, bounds-checked) and starts a
+  Test Arsenal battle at once (no picks): the film's stage and layout, its characters when recorded, this player's current
+  arsenal on both sides. At the battle's start every player is driven by received data and the film's PlayerPos and
+  CardKind records go to the game's receive code at their recorded times; the 24 other streams (skills, hits, ...) are only
+  counted for now. Watching uses the dead camera (follow anyone, orbit, free camera, their HUD). Film setup snapshot
+  version 2: each player's character (DAT_1404bc420 + slot * 0x48 + 8), arsenal (deck counts DAT_140585fe8[slot] plus the
+  hand) and Aura rate. Test Arsenal battles are no longer recorded. Not yet tried in the game.
+- 2026-11-14: Conceptual 27 tried: A picks the highlighted film on either page (page 2 rows 0-6 the right films, empty
+  rows 7-9 say no film there). The Theatre list is done apart from playback.
 - 2026-11-14: Theatre tried on Conceptual 26: 17 films listed, paging both ways; A logged nothing (it never reaches session
   command 154 here). Now A is read in the button handler: the film on the highlighted row, the window's cursor at +0x12
   (window = manager +0x10402; FUN_14024b000 moves it). Seen there too: +0x16 rows, +0x18 rows shown and +0x1a the top row,

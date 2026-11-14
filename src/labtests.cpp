@@ -3,6 +3,7 @@
 #include "gamepatches.h"
 #include "gamepads.h"
 #include "config.h"
+#include "film.h"
 #include "log.h"
 #include <cmath>
 #include <cstdio>
@@ -110,8 +111,23 @@ namespace pdnet::labtests
 
         int32_t Health(int slot) { uint8_t* record = PlayerRecord(slot); return record ? Field<int32_t>(record, 0xc) : 0; }
 
+        // ---- Theatre playback ----
+        // A queued film (QueueFilm) plays in the next Test Arsenal battle: from its start every player is driven by received
+        // data (object +0x34 = 0, as in the F8 test) and the film's stream records are handed to the game's receive code at
+        // their recorded times. Film slots map onto the battle's in order (the battle has slots 0 and 1). For now only
+        // PlayerPos (movement, pose) and CardKind (hands) are played; the other streams (skills, hits...) are counted.
+        std::vector<film::Event> g_filmEvents;
+        film::Info g_filmInfo;
+        bool g_filmQueued = false, g_filmPlaying = false, g_filmShown = false; // shown: playing or played in this battle
+        size_t g_filmAt = 0;
+        ULONGLONG g_filmStart = 0;
+        uint32_t g_filmBase = 0;
+        int g_filmSlot[256];
+        uint32_t g_filmSkipped[26]{};
+
         bool LocalDown()
         {
+            if (g_filmShown && gamepatches::TestBattle()) return true; // watching a film: the dead camera's controls
             if (g_pretendDown && gamepatches::TestBattle()) return true;
             return Health(LocalSlot()) <= 0;
         }
@@ -121,6 +137,7 @@ namespace pdnet::labtests
         {
             int local = LocalSlot();
             uint8_t* object = PlayerObject(slot);
+            if (g_filmShown) return object && Field<int32_t>(object, 0x20) != 0; // a film: anyone in it, this slot too
             if (slot == local || !object || Field<int32_t>(object, 0x20) == 0 || Health(slot) <= 0) return false;
             if (gamepatches::TestBattle() || Var<int32_t>(0x1405277b4) != 1) return true;
             uint8_t* mine = PlayerObject(local);
@@ -816,8 +833,69 @@ namespace pdnet::labtests
             }
         }
 
+        void StartFilmPlayback()
+        {
+            g_filmQueued = false;
+            for (int& s : g_filmSlot) s = -1;
+            int next = 0;
+            for (int s = 0; s < 4 && next < 2; ++s)
+                if (g_filmInfo.present[s]) g_filmSlot[s] = next++;
+            for (const auto& e : g_filmEvents) // films with no setup snapshot: the slots their data comes from
+                if (g_filmSlot[e.slot] < 0 && next < 2) g_filmSlot[e.slot] = next++;
+            int now = FrameNow();
+            for (int s = 0; s < 4; ++s)
+            {
+                uint8_t* object = PlayerObject(s);
+                if (!object || Field<uint8_t*>(object, kRing + kRingPlayer) != object) continue;
+                Field<int32_t>(object, kRing) = now;
+                Field<int32_t>(object, kDriven) = 0;
+            }
+            g_filmAt = 0;
+            g_filmBase = g_filmEvents.empty() ? 0 : g_filmEvents.front().ms;
+            g_filmStart = GetTickCount64();
+            memset(g_filmSkipped, 0, sizeof(g_filmSkipped));
+            g_filmPlaying = g_filmShown = true;
+            Log(L"theatre: playing %s: %zu stream records over %.1f min, film slots to battle slots %d %d %d %d", g_filmInfo.file.c_str(), g_filmEvents.size(),
+                g_filmEvents.empty() ? 0.0 : (g_filmEvents.back().ms - g_filmBase) / 60000.0, g_filmSlot[0], g_filmSlot[1], g_filmSlot[2], g_filmSlot[3]);
+        }
+
+        void FilmFrame()
+        {
+            if (!g_filmPlaying) return;
+            uint64_t elapsed = GetTickCount64() - g_filmStart;
+            int frame = FrameNow();
+            while (g_filmAt < g_filmEvents.size() && g_filmEvents[g_filmAt].ms - g_filmBase <= elapsed)
+            {
+                film::Event& e = g_filmEvents[g_filmAt++];
+                int slot = g_filmSlot[e.slot];
+                if (slot < 0 || !PlayerObject(slot)) continue;
+                if (e.stream > 1) { ++g_filmSkipped[e.stream]; continue; }
+                alignas(16) uint8_t state[0x48]{};
+                *reinterpret_cast<int32_t*>(state + 0x20) = (frame + 2) / 2;
+                *reinterpret_cast<void**>(state + 0x40) = e.data.data();
+                auto receive = reinterpret_cast<ReceiveFn>(At(e.stream == 0 ? 0x14027c4f0 : 0x14027c610));
+                if (!Deliver(receive, slot, state))
+                {
+                    Log(L"theatre: the game's receive code faulted on stream %d - playback stopped", e.stream);
+                    g_filmPlaying = false;
+                    return;
+                }
+            }
+            if (g_filmAt >= g_filmEvents.size())
+            {
+                g_filmPlaying = false;
+                uint32_t skipped = 0;
+                for (uint32_t n : g_filmSkipped) skipped += n;
+                Log(L"theatre: film finished (%u records of other streams not played yet: skills %u, hits %u)", skipped,
+                    g_filmSkipped[2] + g_filmSkipped[3], g_filmSkipped[24] + g_filmSkipped[25]);
+            }
+        }
+
         void EndOfBattle()
         {
+            if (g_filmShown) Log(L"theatre: battle over");
+            g_filmPlaying = g_filmShown = false;
+            g_filmEvents.clear();
             g_recordingOn = false; // the players are gone: what was recorded is kept only if F7 stopped it first
             g_recording.clear();
             g_playing = false;
@@ -866,6 +944,7 @@ namespace pdnet::labtests
                 g_wasInBattle = true;
                 g_pressCamera = g_pressRecord = g_pressPlay = false; // presses from before this battle
                 LogPlayers(L"battle started");
+                if (g_filmQueued) StartFilmPlayback();
             }
             // Shows this hook keeps running in the battle, and whether the game's frame counter moves.
             static uint32_t calls = 0;
@@ -889,6 +968,7 @@ namespace pdnet::labtests
             }
             if (!g_playing) UpdateCameraOffset(); // playing back, this player's own camera doesn't run
             ReportFollowed();
+            FilmFrame();
             UpdateDeadCamera();
 
             int follow = g_deadOn ? (g_freeCam ? -1 : g_deadTarget) : g_viewSlot >= 0 ? g_viewSlot : g_playing ? LocalSlot() : -1;
@@ -939,6 +1019,19 @@ namespace pdnet::labtests
             gameLook = savedLook;
             gameEye = savedEye;
         }
+    }
+
+    bool QueueFilm(const std::wstring& file)
+    {
+        if (!film::Load(file, g_filmEvents, g_filmInfo))
+        {
+            Log(L"theatre: %s could not be read", file.c_str());
+            return false;
+        }
+        g_filmInfo.file = file;
+        g_filmQueued = true;
+        Log(L"theatre: %s loaded (%zu stream records), starting its battle", file.c_str(), g_filmEvents.size());
+        return true;
     }
 
     void Install()
