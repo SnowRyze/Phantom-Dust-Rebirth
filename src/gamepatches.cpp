@@ -3007,6 +3007,21 @@ namespace pdnet::gamepatches
         // Theatre: a film plays in a Test Arsenal battle started straight away (no picks): the film's stage and layout, its
         // players' characters when the film recorded them (version 2), this player's current arsenal on both sides for now.
         // labtests plays the film once the battle starts.
+        // The scoreboard battle (FUN_140214770) builds each side's deck counts (DAT_140585fe8[slot]) with FUN_14014f830
+        // from 30 skill ids; the battle loads its skills from those. For a film, both decks are the film players' own, so
+        // every skill the film uses is loaded (Conceptual 29 crashed on an effect from a skill this battle hadn't loaded).
+        using DeckFn = void (*)(uint64_t, int, const int16_t*);
+        void HookedDeck(uint64_t a, int slot, const int16_t* skills)
+        {
+            int16_t film[30];
+            if (g_testBattle && labtests::FilmDeck(slot, film))
+            {
+                Log(L"theatre: slot %d plays with the film's deck (%d %d %d %d ...)", slot, film[0], film[1], film[2], film[3]);
+                skills = film;
+            }
+            reinterpret_cast<DeckFn>(At(0x14014f830))(a, slot, skills);
+        }
+
         void StartFilmBattle(const film::Info& f)
         {
             uint8_t* save = *reinterpret_cast<uint8_t**>(At(0x1404bec10));
@@ -5072,6 +5087,11 @@ namespace pdnet::gamepatches
         {
             labtests::Install(); // Conceptual branch only
             film::Start();       // Conceptual branch only: Theatre films
+            {
+                bool player = HookCall(0x1402148da, 0x14014f830, reinterpret_cast<void*>(&HookedDeck));
+                bool opponent = HookCall(0x14021491f, 0x14014f830, reinterpret_cast<void*>(&HookedDeck));
+                Log(L"theatre: film decks %s", player && opponent ? L"hooked" : L"NOT hooked (skills in films may crash)");
+            }
             DynamicCases();
             if (!HookFileOpens()) Log(L"gamepatch: title screen: CreateFile2 import not found");
             g_bodyTags = GetConfig().nametagsOnBodies ? 1 : 0;

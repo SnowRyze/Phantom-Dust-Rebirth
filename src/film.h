@@ -27,6 +27,11 @@ namespace pdnet::film
         std::string players;  // "SnowRyze, Motley"
         double minutes = 0;
         uint32_t packets = 0;
+        // Each film slot's deck (30 skill ids, -1 unused): recorded in version 2; otherwise Load rebuilds it from the skills
+        // seen in that player's hand (CardKind), so the battle loads every skill the film uses.
+        int16_t skills[4][30];
+        bool haveSkills[4]{};
+        Info() { for (auto& deck : skills) for (int16_t& id : deck) id = -1; }
     };
     std::vector<Info> List(size_t max);
 

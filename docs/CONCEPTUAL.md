@@ -85,6 +85,18 @@ Anything that changes match behaviour needs every player on the same kit, and re
 
 ## Log
 (Newest first: what was tried, what happened.)
+- 2026-11-14: Conceptual 29 crashed in film playback: DmgEffect (stream 20) faulted 24 s in (effect 0, type 0), then the
+  game crashed at PDUWP+0x18c383 (FUN_14018c360, an effect instance with no resource data). Two more findings: both
+  sides played with this player's own arsenal, so the film's skills were never loaded; and a sequenced stream's number
+  isn't always new (DmgEffect kept #196915 while its data changed), so the "play only when the number moves on" filter
+  dropped real messages. Fixes (Conceptual 30):
+  - Film decks: film::Load gives each film player a deck: the recorded arsenal (version 2), or else the skills seen in
+    their hand (CardKind, 4 shorts) plus the ones they fired (FireStartReq, u16 at +16; the hand alone missed most), repeated
+    to 30. The scoreboard battle's two FUN_14014f830 calls (0x1402148da player, 0x14021491f opponent) are hooked to build
+    each side's deck counts from that, so the battle loads them. Streams 2+ of a film player with no deck are skipped.
+  - DmgEffect isn't played (the battle draws its own hit reactions). ReadyStart still skipped.
+  - Copies: a film slot's stream is skipped only when it repeats the last played one exactly (number and data).
+  - That film had 3 players (this PC was slot 2); only the first two are shown.
 - 2026-11-14: Theatre playback plays skills. The first test (Conceptual 28) moved the players but showed no skill
   animations or sounds: only PlayerPos and CardKind were fed. Now every stream goes to its own receive function, read from
   the stream table (0x1403fb4d0 + i*0x28 + 0x18) and checked against the known addresses; all take (slot, state) with the

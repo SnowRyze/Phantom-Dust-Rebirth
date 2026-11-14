@@ -125,9 +125,11 @@ namespace pdnet::labtests
         int g_filmSlot[256];
         uint32_t g_filmSkipped[26]{};
         uint32_t g_filmPlayed[26]{};
-        // Sequenced streams are resent until acknowledged (and sent to each peer), so a film holds copies: each film slot's
-        // stream is played only when its sequence number moves on, as the game's own receiver would.
-        int64_t g_filmLastNumber[4][26]{};
+        // Sequenced streams are resent until acknowledged (and sent to each peer), so a film holds copies: a film slot's
+        // stream is skipped when it repeats the last one played exactly (its number isn't always new: DmgEffect keeps one
+        // number while its data changes).
+        struct LastPlayed { bool any = false; uint32_t number = 0; std::vector<uint8_t> data; };
+        LastPlayed g_filmLast[4][26];
 
         bool LocalDown()
         {
@@ -843,15 +845,21 @@ namespace pdnet::labtests
             }
         }
 
-        void StartFilmPlayback()
+        // The film's slots shown in this battle: the first two players in it, in order.
+        void MapFilmSlots()
         {
-            g_filmQueued = false;
             for (int& s : g_filmSlot) s = -1;
             int next = 0;
             for (int s = 0; s < 4 && next < 2; ++s)
                 if (g_filmInfo.present[s]) g_filmSlot[s] = next++;
             for (const auto& e : g_filmEvents) // films with no setup snapshot: the slots their data comes from
                 if (g_filmSlot[e.slot] < 0 && next < 2) g_filmSlot[e.slot] = next++;
+        }
+
+        void StartFilmPlayback()
+        {
+            g_filmQueued = false;
+            MapFilmSlots();
             int now = FrameNow();
             for (int s = 0; s < 4; ++s)
             {
@@ -865,7 +873,7 @@ namespace pdnet::labtests
             g_filmStart = GetTickCount64();
             memset(g_filmSkipped, 0, sizeof(g_filmSkipped));
             memset(g_filmPlayed, 0, sizeof(g_filmPlayed));
-            for (auto& slot : g_filmLastNumber) for (int64_t& n : slot) n = -1;
+            for (auto& slot : g_filmLast) for (LastPlayed& l : slot) l = LastPlayed{};
             g_filmPlaying = g_filmShown = true;
             Log(L"theatre: playing %s: %zu stream records over %.1f min, film slots to battle slots %d %d %d %d", g_filmInfo.file.c_str(), g_filmEvents.size(),
                 g_filmEvents.empty() ? 0.0 : (g_filmEvents.back().ms - g_filmBase) / 60000.0, g_filmSlot[0], g_filmSlot[1], g_filmSlot[2], g_filmSlot[3]);
@@ -882,13 +890,19 @@ namespace pdnet::labtests
                 int slot = g_filmSlot[e.slot];
                 if (slot < 0 || !PlayerObject(slot)) continue;
                 if (e.stream >= 26) continue;
-                // ReadyStart (22) is the pre-battle handshake: this battle has already started.
-                if (e.stream == 22) { ++g_filmSkipped[e.stream]; continue; }
+                // ReadyStart (22) is the pre-battle handshake: this battle has already started. DmgEffect (20), the hit
+                // reaction effect, faulted in the game's effect setup (Conceptual 29: effect 0 with no data, then a crash at
+                // PDUWP+0x18c383); the battle draws its own when the film's skills hit.
+                if (e.stream == 22 || e.stream == 20) { ++g_filmSkipped[e.stream]; continue; }
+                // Skills, hits and effects name skills by id: without that player's deck in this battle they aren't loaded.
+                if (e.stream >= 2 && !g_filmInfo.haveSkills[e.slot & 3]) { ++g_filmSkipped[e.stream]; continue; }
                 if (e.stream >= 2)
                 {
-                    int64_t& last = g_filmLastNumber[e.slot & 3][e.stream];
-                    if (last >= 0 && static_cast<int64_t>(e.number) <= last) continue; // a resent copy
-                    last = e.number;
+                    LastPlayed& last = g_filmLast[e.slot & 3][e.stream];
+                    if (last.any && last.number == e.number && last.data == e.data) continue; // a resent copy
+                    last.any = true;
+                    last.number = e.number;
+                    last.data = e.data;
                 }
                 // The receive function from the game's stream table (0x28 bytes each, receive at +0x18): all take (slot,
                 // state) and read the data at state+0x40; PlayerPos also reads frame/2 at state+0x20.
@@ -1057,9 +1071,22 @@ namespace pdnet::labtests
             return false;
         }
         g_filmInfo.file = file;
+        MapFilmSlots();
         g_filmQueued = true;
         Log(L"theatre: %s loaded (%zu stream records), starting its battle", file.c_str(), g_filmEvents.size());
         return true;
+    }
+
+    bool FilmDeck(int slot, int16_t (&skills)[30])
+    {
+        if (!g_filmQueued) return false;
+        for (int s = 0; s < 4; ++s)
+        {
+            if (g_filmSlot[s] != slot || !g_filmInfo.haveSkills[s]) continue;
+            memcpy(skills, g_filmInfo.skills[s], sizeof(skills));
+            return true;
+        }
+        return false;
     }
 
     void Install()

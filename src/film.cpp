@@ -351,6 +351,11 @@ namespace pdnet::film
                     info.version = s.version;
                     for (int i = 0; i < 4; ++i)
                     {
+                        if (s.version >= 2)
+                        {
+                            memcpy(info.skills[i], s.skills[i], sizeof(info.skills[i]));
+                            for (int16_t id : s.skills[i]) if (id > 0) info.haveSkills[i] = true;
+                        }
                         info.present[i] = s.slots[i].present != 0;
                         info.character[i] = s.version >= 2 ? s.character[i] : -1;
                     }
@@ -429,6 +434,28 @@ namespace pdnet::film
             }
         }
         std::stable_sort(events.begin(), events.end(), [](const Event& a, const Event& b) { return a.ms < b.ms; });
+        // Films without recorded arsenals: each player's deck is the skills seen in their hand (CardKind: 4 shorts, the
+        // card in each hand slot; 0 or -1 = none) and the skills they fired (FireStartReq: the id is the u16 at +16; the
+        // hand alone missed most of them), repeated to 30 cards.
+        std::vector<int16_t> seen[4];
+        auto see = [&](int slot, int16_t id)
+        {
+            if (id > 0 && std::find(seen[slot].begin(), seen[slot].end(), id) == seen[slot].end()) seen[slot].push_back(id);
+        };
+        for (const Event& e : events)
+        {
+            if (e.slot >= 4 || info.haveSkills[e.slot]) continue;
+            if (e.stream == 1 && e.data.size() >= 8)
+                for (int h = 0; h < 4; ++h) see(e.slot, *reinterpret_cast<const int16_t*>(&e.data[h * 2]));
+            else if (e.stream == 2 && e.data.size() >= 18)
+                see(e.slot, *reinterpret_cast<const int16_t*>(&e.data[16]));
+        }
+        for (int s = 0; s < 4; ++s)
+        {
+            if (info.haveSkills[s] || seen[s].empty()) continue;
+            for (int k = 0; k < 30; ++k) info.skills[s][k] = seen[s][k % seen[s].size()];
+            info.haveSkills[s] = true;
+        }
         return true;
     }
 
