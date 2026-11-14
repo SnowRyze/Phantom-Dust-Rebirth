@@ -4441,6 +4441,25 @@ namespace pdnet::gamepatches
             return *reinterpret_cast<int32_t*>(At(0x1404bc950)) == 6 && *reinterpret_cast<uint64_t*>(At(0x1404bc9d8)) != 0;
         }
 
+        // "Player 2, edits made to the copied arsenal data..." in the lobby's Arsenal Lab again (2026-11-14, the
+        // developer PC, Experimental 165, with another player in the lobby). The Laboratory reads menu variable 2 as it
+        // starts and hands it to g5 #112 (0x140217e80), which sets the split-screen "Player 2" flag (bit 16 at
+        // [0x1404bec08] +0xb58). OpenLobbyArsenalEditor sets the variable to 0 before the Lab opens, but the lobby wrote
+        // its own value back (0x200, read live with the warning up) before the Lab's script, loaded a frame later, read
+        // it. So while the Lab is the lobby's, g5 #112 gets 0.
+        SessionCommandFn g_labPlayerFlag = nullptr;
+        int64_t HookedLabPlayerFlag(int32_t* args)
+        {
+            if (args && args[0] != 0 && g_editorFromLobby)
+            {
+                Log(L"menu: the lobby's Arsenal Lab was given menu variable 2 = 0x%X - 0 (not split-screen Player 2)", args[0]);
+                int32_t zero[8] = {};
+                memcpy(zero + 1, args + 1, sizeof(int32_t) * 7);
+                return g_labPlayerFlag(zero);
+            }
+            return g_labPlayerFlag(args);
+        }
+
         int64_t HookedLabPreviewMode(int32_t* args)
         {
             int64_t result = g_labPreviewMode(args);
@@ -4847,6 +4866,7 @@ namespace pdnet::gamepatches
             NoPauseUnderPreview();
             WrapCommand<MenuCommandFn>(0x1403eede0 + 134 * 8, 0x140208300, &HookedPreview, g_preview, L"skill preview");
             WrapCommand<SessionCommandFn>(0x1403f1d50 + 119 * 8, 0x140217f80, &HookedLabPreviewMode, g_labPreviewMode, L"skill preview in multiplayer");
+            WrapCommand<SessionCommandFn>(0x1403f1d50 + 112 * 8, 0x140217e80, &HookedLabPlayerFlag, g_labPlayerFlag, L"lobby Lab player flag");
         }
     }
 

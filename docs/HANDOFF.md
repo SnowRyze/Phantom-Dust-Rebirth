@@ -108,6 +108,8 @@ Ideas, not planned (notes in the change log and reference notes):
 
 ## November 2026
 
+Lobby Arsenal Lab "Player 2" warning again (2026-11-14, Experimental 167, the user on 165, read live). The warning showed on the second Lab visit from the lobby, once another player (000261da) was in the lobby; the first visit (alone) was fine. No "menu variable 2 was ..." line: it was 0 when OpenLobbyArsenalEditor cleared it, but with the warning up it read 0x200 (the lobby's own value, apparently this player's number), so the lobby wrote it back before the Lab's script, loaded a frame later, read it. g5 #112 (0x140217e80, table slot 0x1403f1d50 + 112 * 8) turns that value into the split-screen "Player 2" flag; HookedLabPlayerFlag now passes 0 while the Lab is the lobby's (g_editorFromLobby), logged "menu: the lobby's Arsenal Lab was given menu variable 2 = 0x... - 0". The 132 fix (clearing and restoring the variable) stays.
+
 Discord slot list showed a name twice (2026-11-14, Experimental 166, the user's screenshot: "3/4 ... DixMckenzie left the lobby" with Nui, Motley, AnoMayCry, AnoMayCry and no "< public slot >"). Card lists the host, then `order` (user ids in join order), then the free slots; `order` got a player's id again each time they rejoined, and Card didn't skip repeats, so the second copy took the free slot's line once someone left. Now a rejoin moves the player to the end of `order`, and Card lists each player once. The lobby's owner (who draws the message) needs 166.
 
 Test update (2026-11-14, Experimental 165, the user's request): no changes, the same code as 164; published only to check that kits update themselves.
