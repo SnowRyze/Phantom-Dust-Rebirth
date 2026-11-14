@@ -4465,6 +4465,26 @@ namespace pdnet::gamepatches
             return *reinterpret_cast<int32_t*>(At(0x1404bc950)) == 6 && *reinterpret_cast<uint64_t*>(At(0x1404bc9d8)) != 0;
         }
 
+        // The real cause of "Player 2, edits made to the copied arsenal data..." (and then "no arsenals") in the lobby's
+        // Arsenal Lab after a match, found with menu_debug (2026-11-14, developer PC): as it starts, the Laboratory reads
+        // menu VARIABLE 0 (menu command 14 -> 1) and hands it to g5 #111 (0x140217e30), which stores it as the Lab's
+        // player at [0x1404bec08] +0xb50; g5 #113 reads it back (1 = the second split-screen player: the warning, and
+        // that player's empty arsenal list). The lobby keeps 0 or 1 in variable 0, and after a match it was 1
+        // (OpenLobbyArsenalEditor only clears values above 1, which have no list behind them). While the Lab is the
+        // lobby's, g5 #111 gets 0: always player 1.
+        SessionCommandFn g_labPlayer = nullptr;
+        int64_t HookedLabPlayer(int32_t* args)
+        {
+            if (args && args[0] != 0 && g_editorFromLobby)
+            {
+                Log(L"menu: the lobby's Arsenal Lab was told player %d - player 1 instead (not split-screen Player 2)", args[0] + 1);
+                int32_t first[8] = {};
+                memcpy(first + 1, args + 1, sizeof(int32_t) * 7);
+                return g_labPlayer(first);
+            }
+            return g_labPlayer(args);
+        }
+
         int64_t HookedLabPreviewMode(int32_t* args)
         {
             int64_t result = g_labPreviewMode(args);
@@ -4870,7 +4890,8 @@ namespace pdnet::gamepatches
         {
             NoPauseUnderPreview();
             WrapCommand<MenuCommandFn>(0x1403eede0 + 134 * 8, 0x140208300, &HookedPreview, g_preview, L"skill preview");
-            WrapCommand<SessionCommandFn>(0x1403f1d50 + 119 * 8, 0x140217f80, &HookedLabPreviewMode, g_labPreviewMode, L"skill preview in multiplayer");        }
+            WrapCommand<SessionCommandFn>(0x1403f1d50 + 119 * 8, 0x140217f80, &HookedLabPreviewMode, g_labPreviewMode, L"skill preview in multiplayer");
+            WrapCommand<SessionCommandFn>(0x1403f1d50 + 111 * 8, 0x140217e30, &HookedLabPlayer, g_labPlayer, L"lobby Lab player number");        }
     }
 
     void InstallEarlyHooks() { InstallBackButton(); }
