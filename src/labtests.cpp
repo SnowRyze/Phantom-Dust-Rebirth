@@ -385,10 +385,24 @@ namespace pdnet::labtests
             int32_t owners[4]{};
             if (remote)
                 for (int i = 0; i < 4; ++i) { owners[i] = Field<int32_t>(record, 0x384 + i * 0x50); Field<int32_t>(record, 0x384 + i * 0x50) = -1; }
+            // The HUD also shows the "local" player's lock-on target: when its camera block says a lock is on (object +0x13f1c,
+            // with +0x13f10 != 1 and the block +0x14210 ready), it reads the targetable object DAT_1404bcb50[object +0x13f20] and
+            // its +0xb8 with no check. The game keeps that block only for this PC's own player; on the AI it pointed at an
+            // empty entry and the game crashed (PDUWP+0x15145e, 2026-11-14). For the draw, a lock that doesn't lead to a real
+            // target is turned off.
+            int32_t& lockOn = Field<int32_t>(watched, 0x13f1c);
+            int32_t savedLock = lockOn;
+            if (lockOn != 0)
+            {
+                int32_t index = Field<int32_t>(watched, 0x13f20);
+                uint8_t* targetable = index >= 0 && index < 32 ? reinterpret_cast<uint8_t**>(At(0x1404bcb50))[index] : nullptr;
+                if (!targetable || !*reinterpret_cast<uint8_t**>(targetable + 0xb8)) lockOn = 0;
+            }
             auto& slot = Var<int32_t>(0x1404bbe00);
             slot = g_deadTarget;
             HudWithTags(hud, g_deadTarget, g_deadTarget);
             slot = local;
+            lockOn = savedLock;
             if (remote)
                 for (int i = 0; i < 4; ++i) Field<int32_t>(record, 0x384 + i * 0x50) = owners[i];
         }

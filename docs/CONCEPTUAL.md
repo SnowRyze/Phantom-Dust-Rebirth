@@ -85,6 +85,10 @@ Anything that changes match behaviour needs every player on the same kit, and re
 
 ## Log
 (Newest first: what was tried, what happened.)
+- 2026-11-14: crash on Conceptual 22 while following the AI (Test Arsenal, F9): PDUWP+0x15145e in the HUD draw, reading
+  DAT_1404bcb50[object +0x13f20] +0xb8 when the HUD's player's camera block says a lock is on (+0x13f1c); that block is kept
+  only for this PC's own player, and on the AI the entry was empty. Now, for the swapped HUD draw, a lock that doesn't lead to
+  a real target is off. Dump: CrashDumps\PDUWP.exe.46292.dmp. Not yet tried in the game.
 - 2026-11-14: follow camera controls (the user): the view stays on the watched player, as a player's own camera does, but the
   right stick (or Q E, R F) swings it round them and up / down; right stick click (or C) puts it back behind; a new player
   resets it. Not yet tried in the game.
