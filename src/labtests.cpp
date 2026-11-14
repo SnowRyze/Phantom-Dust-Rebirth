@@ -109,7 +109,8 @@ namespace pdnet::labtests
         // Theatre film controls (the user's Halo 3 film-controls card, 2026-11-14), each with a key:
         //   A / Space          play / pause              RT / Z (hold) C (hold)  slow motion / fast forward
         //   Y / V              flying cam / player cam   B / H                   hide / show HUD
-        //   X / F1             hide / show the controls  D-pad / Q E             switch players (player cam)
+        //   D-pad Down / F2    hide / show the film text D-pad L R / Q E         switch players (player cam)
+        //   (the film text: the film bar and these reminders together, apart from the HUD; the user, 2026-11-14)
         //   left stick / WASD  move (flying cam)         right stick / arrows    look, or orbit (player cam; R3 / T resets)
         //   RB LB / R F        up / down (flying cam)    LT / Shift              thrust (flying cam)
         //   L3 / Ctrl (hold)   pan: the stick's forward / back moves up / down (flying cam)
@@ -503,11 +504,12 @@ namespace pdnet::labtests
             int x = 24, y = 300;
             ScreenText(x, y, line, 0xffffd060);
             static const char* kLines[] = {
-                "A / Space: play / pause      RT / Z C (hold): slow / fast",
-                "Y / V: flying / player cam   B / H: HUD    X / F1: controls",
-                "D-pad / Q E: switch players  Right stick / arrows: look",
-                "Left stick / WASD: move      RB LB / R F: up / down",
-                "LT / Shift: thrust           L3 / Ctrl (hold): pan",
+                "A / Space: play / pause            RT / Z C (hold): slow / fast",
+                "Y / V: flying / player cam         B / H: hide / show HUD",
+                "D-pad L R / Q E: switch players    Right stick / arrows: look",
+                "Left stick / WASD: move            RB LB / R F: up / down",
+                "LT / Shift: thrust                 L3 / Ctrl (hold): pan",
+                "D-pad Down / F2: hide / show this text",
             };
             for (const char* text : kLines) ScreenText(x, y += 14, text, 0xffffffff);
         }
@@ -516,6 +518,13 @@ namespace pdnet::labtests
         {
             if (!g_filmShown) { GameHud(hud); return; }
             if (!g_hudHidden) GameHud(hud);
+            else
+            {
+                // The HUD sets these render states (FUN_140150c30) before its text; with it hidden, the film text
+                // needs them itself.
+                reinterpret_cast<void (*)(int, int, int)>(At(0x140020c40))(0, 3, 2);
+                reinterpret_cast<void (*)(int, int, int)>(At(0x140020c40))(0, 4, 2);
+            }
             __try { DrawFilmControls(); }
             __except (EXCEPTION_EXECUTE_HANDLER) {}
         }
@@ -1053,17 +1062,19 @@ namespace pdnet::labtests
             }
         }
 
-        // The film's presses, once a frame on the game's thread: edges of A / Space (pause), B / H (HUD), X / F1 (controls);
+        // The film's presses, once a frame on the game's thread: edges of A / Space (pause), B / H (HUD), D-pad Down / F2
+        // (the film text);
         // the speed from RT (a light pull: slow motion, a full pull: fast forward) or Z / C held.
         void FilmPresses()
         {
             static bool held[3] = {};
             uint8_t keys[256];
             bool haveKeys = KeysHeld(keys);
+            bool view = AnyPadHolds(0x2); // View + D-pad is the Lab tests'
             bool now[3] = {
                 AnyPadHolds(0x4) || (haveKeys && keys[VK_SPACE]),            // A
                 AnyPadHolds(0x8) || (haveKeys && keys['H']),                 // B
-                AnyPadHolds(0x10) || (haveKeys && keys[VK_F1]),              // X
+                (!view && AnyPadHolds(0x80)) || (haveKeys && keys[VK_F2]),   // D-pad Down
             };
             if (now[0] && !held[0]) { g_filmPaused = !g_filmPaused; Log(L"theatre: %s", g_filmPaused ? L"paused" : L"playing"); }
             if (now[1] && !held[1]) g_hudHidden = !g_hudHidden;
