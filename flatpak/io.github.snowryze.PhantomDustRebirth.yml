@@ -28,8 +28,8 @@ modules:
       - cp -a . /app/opt/wine-uwp
     sources:
       - type: archive
-        url: https://github.com/LiveManQuestion/wine-uwp/releases/download/phantom-dust-dbdfa07/wine-uwp-phantom-dust-x86_64.tar.xz
-        sha256: 63287f02c3785dc240aa9c9372281328d0583d85486f369c27be58145d85d281
+        url: https://github.com/designgears/wine-uwp/releases/download/v2026.11.14/wine-uwp-x86_64.tar.xz
+        sha256: d75b36c77044555c41938fda60d1b6ed96e45a8e1e23cd27561b44ef0a16a1de
 
   # wine-uwp's harvest step unpacks the Windows ISO with 7-Zip, which the runtime doesn't have
   - name: 7zip
