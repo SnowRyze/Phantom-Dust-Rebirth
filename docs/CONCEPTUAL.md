@@ -85,6 +85,16 @@ Anything that changes match behaviour needs every player on the same kit, and re
 
 ## Log
 (Newest first: what was tried, what happened.)
+- 2026-11-14: Conceptual 32 test: players stood still, two shared a spawn, the others were Guard. Causes:
+  - The film reader had a sequenced stream's u32 number BEFORE its data; the game sends it AFTER (Condition's and
+    DmgEffect's trailing u32 counts 0, 1, 2...; read that way, Condition names the sender's own slot and DmgEffect the
+    skill 307 that player fired). Every stream 2-25 was fed 4 bytes off: that was Condition's fault (a "target slot" of
+    5), likely DmgEffect's crash in Conceptual 29 too. Fixed in film::Load and tools/filmread.py; the FireStartReq skill
+    id is the u16 at +20. DmgEffect is played again.
+  - A fault stopped the whole film; now only that stream is left out from then on.
+  - The third player was a copy of the opponent's entry, so its spawn too; the film moves it once it plays.
+  - All 17 films so far are snapshot version 1, with no characters: their players can't be shown as what they played.
+    Films recorded online with this branch's later kits (version 2) have them.
 - 2026-11-14: Theatre film controls, from the user's Halo 3 film-controls card, each with a key (Conceptual 32):
   A / Space play-pause; RT (light pull slow motion x0.25, full pull fast forward x4) or Z / C held; Y / V flying cam or
   player cam; B / H HUD; X / F1 the controls overlay; D-pad / Q E switch players; left stick / WASD move; right stick /

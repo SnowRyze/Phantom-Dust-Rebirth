@@ -85,8 +85,8 @@ def decode_packet(p):
         need = size + (4 if seq else 0)
         if o + need > len(p):
             return {'error': 'stream %s runs past the packet' % name}
-        number = struct.unpack_from('<I', p, o)[0] if seq else None
-        body = p[o + (4 if seq else 0):o + need]
+        number = struct.unpack_from('<I', p, o + size)[0] if seq else None  # the number comes after the data
+        body = p[o:o + size]
         out['streams'].append((i, number, body))
         o += need
     for k, i in enumerate(SEQUENCED):

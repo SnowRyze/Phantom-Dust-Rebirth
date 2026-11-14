@@ -139,6 +139,7 @@ namespace pdnet::labtests
         int g_filmSlot[256];
         uint32_t g_filmSkipped[26]{};
         uint32_t g_filmPlayed[26]{};
+        bool g_filmStreamOff[26]{}; // streams left out after a fault
         // Sequenced streams are resent until acknowledged (and sent to each peer), so a film holds copies: a film slot's
         // stream is skipped when it repeats the last one played exactly (its number isn't always new: DmgEffect keeps one
         // number while its data changes).
@@ -972,6 +973,7 @@ namespace pdnet::labtests
             g_slowAccumulator = 0;
             memset(g_filmSkipped, 0, sizeof(g_filmSkipped));
             memset(g_filmPlayed, 0, sizeof(g_filmPlayed));
+            memset(g_filmStreamOff, 0, sizeof(g_filmStreamOff));
             for (auto& slot : g_filmLast) for (LastPlayed& l : slot) l = LastPlayed{};
             // Nametags: the film's names (DAT_1404bca30, 0x41 per slot).
             char* names = reinterpret_cast<char*>(At(0x1404bca30));
@@ -994,10 +996,9 @@ namespace pdnet::labtests
                 int slot = g_filmSlot[e.slot];
                 if (slot < 0 || !PlayerObject(slot)) continue;
                 if (e.stream >= 26) continue;
-                // ReadyStart (22) is the pre-battle handshake: this battle has already started. DmgEffect (20), the hit
-                // reaction effect, faulted in the game's effect setup (Conceptual 29: effect 0 with no data, then a crash at
-                // PDUWP+0x18c383); the battle draws its own when the film's skills hit.
-                if (e.stream == 22 || e.stream == 20) { ++g_filmSkipped[e.stream]; continue; }
+                // ReadyStart (22) is the pre-battle handshake: this battle has already started. DmgEffect (20) is played
+                // again: its crash in Conceptual 29 came from data read 4 bytes off.
+                if (e.stream == 22 || g_filmStreamOff[e.stream]) { ++g_filmSkipped[e.stream]; continue; }
                 // Skills, hits and effects name skills by id: without that player's deck in this battle they aren't loaded.
                 if (e.stream >= 2 && !g_filmInfo.haveSkills[e.slot & 3]) { ++g_filmSkipped[e.stream]; continue; }
                 if (e.stream >= 2)
@@ -1022,9 +1023,10 @@ namespace pdnet::labtests
                 ++g_filmPlayed[e.stream];
                 if (!Deliver(reinterpret_cast<ReceiveFn>(fn), slot, state))
                 {
-                    Log(L"theatre: the game's receive code faulted on stream %d - playback stopped", e.stream);
-                    g_filmPlaying = false;
-                    return;
+                    // One stream's fault no longer stops the film: that stream is left out from here on.
+                    g_filmStreamOff[e.stream] = true;
+                    Log(L"theatre: the game's receive code faulted on stream %d (film slot %d, %u ms) - that stream is left out from here on",
+                        e.stream, e.slot, e.ms);
                 }
             }
             if (g_filmAt >= g_filmEvents.size())

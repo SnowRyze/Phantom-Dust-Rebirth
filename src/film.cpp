@@ -428,15 +428,17 @@ namespace pdnet::film
                 e.slot = static_cast<uint8_t>(slot);
                 e.stream = static_cast<uint8_t>(i);
                 e.half = half;
-                e.number = sequenced ? *reinterpret_cast<const uint32_t*>(p + at) : 0;
-                e.data.assign(p + at + (sequenced ? 4 : 0), p + at + need);
+                // A sequenced stream's u32 number comes after its data (Condition's and DmgEffect's numbers count 0, 1, 2
+                // there, and their data then names real players and skills; read before, it was 4 bytes off).
+                e.number = sequenced ? *reinterpret_cast<const uint32_t*>(p + at + kSize[i]) : 0;
+                e.data.assign(p + at, p + at + kSize[i]);
                 events.push_back(std::move(e));
                 at += need;
             }
         }
         std::stable_sort(events.begin(), events.end(), [](const Event& a, const Event& b) { return a.ms < b.ms; });
         // Films without recorded arsenals: each player's deck is the skills seen in their hand (CardKind: 4 shorts, the
-        // card in each hand slot; 0 or -1 = none) and the skills they fired (FireStartReq: the id is the u16 at +16; the
+        // card in each hand slot; 0 or -1 = none) and the skills they fired (FireStartReq: the id is the u16 at +20; the
         // hand alone missed most of them), repeated to 30 cards.
         std::vector<int16_t> seen[4];
         auto see = [&](int slot, int16_t id)
@@ -448,8 +450,8 @@ namespace pdnet::film
             if (e.slot >= 4 || info.haveSkills[e.slot]) continue;
             if (e.stream == 1 && e.data.size() >= 8)
                 for (int h = 0; h < 4; ++h) see(e.slot, *reinterpret_cast<const int16_t*>(&e.data[h * 2]));
-            else if (e.stream == 2 && e.data.size() >= 18)
-                see(e.slot, *reinterpret_cast<const int16_t*>(&e.data[16]));
+            else if (e.stream == 2 && e.data.size() >= 22)
+                see(e.slot, *reinterpret_cast<const int16_t*>(&e.data[20]));
         }
         for (int s = 0; s < 4; ++s)
         {
