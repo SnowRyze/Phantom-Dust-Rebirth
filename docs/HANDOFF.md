@@ -72,6 +72,7 @@ Other docs: [`EOS_PLAN.md`](EOS_PLAN.md), [`MODDING_PLAN.md`](MODDING_PLAN.md), 
 Newest builds: **Experimental 161** (the game as in 157), **Stable 13** (Experimental 159, the game as in 157).
 
 Not yet confirmed in the game (each has its change log note):
+- Options > Sound > Skill Preview Sound (Experimental 170).
 - Select under the skill preview no longer freezes it or hangs leaving the editor (Experimental 157).
 - Colour names on the character select for Alpha (drawn as "player"; 152 logs each step, a tester log is needed).
 - The arsenal's Limit following its schools while editing (147).
@@ -107,6 +108,8 @@ Ideas, not planned (notes in the change log and reference notes):
 # Change log (newest first)
 
 ## November 2026
+
+Skill Preview Sound option (2026-11-14, Experimental 170, the user's request, not yet tried). Main menu > Options > Sound gets a second pdnet row under Aura Particle Beeps: "Skill Preview Sound: On / Off" (option 7, handled like option 6 in HookedGetOption / HookedSetOption while the SOUND window is open; setting preview_sound, saved to settings.ini). Off: SoundOff refuses positional (3D) sounds while pdnet's town session is there (PreviewSessionOn: g_previewTown or closing) - the skills and the town's ambience emitters; the menus' 2D sounds still play. Not known yet: whether the window's cursor reaches a fourth row, and whether the town's hum comes only through 3D sounds (sound_log=on would show).
 
 Lobby Arsenal Lab "Player 2", the real cause (2026-11-14, Experimental 169). 168's per-frame reset of variable 2 ran but the warning stayed. menu_debug (now also logging group 5 and the Lab's screens; installed last in Apply, after the developer PC's first debug run showed that installing it first made every later WrapCommand skip: menu renames, Online Settings, Lab rows) showed the Lab's start: menu cmd 14(arg 0) -> 1, g5 #111(1), g5 #113 -> 1, then the warning (menu cmds 33 / 38 / 61 / 43 with 2). g5 #111 (0x140217e30) stores its argument at [0x1404bec08] +0xb50 (the Lab's split-screen player) and g5 #113 (0x140217eb0) returns it; g5 #112 sets +0xb54 and the bit-16 copy flag +0xb58. So the Lab's player comes from menu VARIABLE 0, which the lobby leaves at 1 after a match (OpenLobbyArsenalEditor only clears values above 1). HookedLabPlayer gives g5 #111 0 while the Lab is the lobby's, logged "menu: the lobby's Arsenal Lab was told player 2 - player 1 instead". MojoJoey's 168 log (DESKTOP-SPGBBIA, a non-host) had the same warning. 168's variable 2 reset stays (harmless).
 

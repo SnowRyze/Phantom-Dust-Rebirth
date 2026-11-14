@@ -2416,16 +2416,19 @@ namespace pdnet::gamepatches
         // switches the setting and saves it.
         template <typename Fn> bool WrapCommand(uint64_t tableEntry, uint64_t expected, Fn hook, Fn& original, const wchar_t* name); // (below)
         constexpr int kOptionsMenu = 4;
-        constexpr int kAuraOption = 6;
+        // A second row (2026-11-14, the user's request): Skill Preview Sound, option 7, the same way.
+        constexpr int kAuraOption = 6, kPreviewSoundOption = 7;
         std::atomic<bool> g_soundWindow{ false };
-        char g_soundRowText[96];
+        char g_soundRowText[96], g_previewSoundRowText[96];
         const char* kSoundHint = "Turn the beeping of the aura particles on or off.";
+        const char* kPreviewSoundHint = "Turn the sound of the skill preview (Arsenal Lab, View Stock List) on or off.";
 
         bool InSoundWindow() { return g_soundWindow && CurrentMenu(MenuManager()) == kOptionsMenu; }
 
         void RefreshSoundRows()
         {
             sprintf_s(g_soundRowText, "\a190wAura Particle Beeps\f\a1#\a150c%s\f\a0#", GetConfig().auraBeeps ? "On" : "Off");
+            sprintf_s(g_previewSoundRowText, "\a190wSkill Preview Sound\f\a1#\a150c%s\f\a0#", GetConfig().previewSound ? "On" : "Off");
         }
 
         // Called for every item added: true when it was one of the two pdnet's row and hint follow (added here, then pdnet's).
@@ -2442,10 +2445,12 @@ namespace pdnet::gamepatches
             RefreshSoundRows();
             int64_t item[8] = { reinterpret_cast<int64_t>(rows ? g_soundRowText : kSoundHint) };
             g_addItem(item);
+            int64_t preview[8] = { reinterpret_cast<int64_t>(rows ? g_previewSoundRowText : kPreviewSoundHint) };
+            g_addItem(preview);
             if (rows)
             {
                 g_soundWindow = true;
-                Log(L"gamepatch: Options > Sound: Aura Particle Beeps row added");
+                Log(L"gamepatch: Options > Sound: Aura Particle Beeps and Skill Preview Sound rows added");
             }
             return true;
         }
@@ -2964,18 +2969,19 @@ namespace pdnet::gamepatches
         MenuCommandFn g_getOption = nullptr, g_setOption = nullptr, g_setState = nullptr, g_setState12 = nullptr;
         int64_t HookedGetOption(int64_t* args)
         {
-            if (args && args[0] == kAuraOption && InSoundWindow()) return 50;
+            if (args && (args[0] == kAuraOption || args[0] == kPreviewSoundOption) && InSoundWindow()) return 50;
             return g_getOption(args);
         }
 
         int64_t HookedSetOption(int64_t* args)
         {
-            if (!args || args[0] != kAuraOption || !InSoundWindow()) return g_setOption(args);
-            bool& on = EditableConfig().auraBeeps;
+            if (!args || (args[0] != kAuraOption && args[0] != kPreviewSoundOption) || !InSoundWindow()) return g_setOption(args);
+            bool aura = args[0] == kAuraOption;
+            bool& on = aura ? EditableConfig().auraBeeps : EditableConfig().previewSound;
             on = !on;
-            SaveSetting("aura_beeps", on ? "on" : "off");
+            SaveSetting(aura ? "aura_beeps" : "preview_sound", on ? "on" : "off");
             RefreshSoundRows();
-            Log(L"gamepatch: Options > Sound: aura particle beeps %s", on ? L"on" : L"off");
+            Log(L"gamepatch: Options > Sound: %s %s", aura ? L"aura particle beeps" : L"skill preview sound", on ? L"on" : L"off");
             return 0;
         }
 
@@ -3033,9 +3039,14 @@ namespace pdnet::gamepatches
             for (auto& [k, n] : counts) n = 0;
         }
 
+        bool PreviewSessionOn(); // pdnet's town session under the Lab is there (below)
+
         bool SoundOff(bool positional, int64_t bank, int64_t cue, int64_t sound, uint64_t caller)
         {
             const Config& c = GetConfig();
+            // Skill Preview Sound off: while pdnet's town session runs under the Lab, its positional sounds (the skills,
+            // the town's ambience emitters) don't start; the menus' own sounds are 2D and still play.
+            if (positional && !c.previewSound && PreviewSessionOn()) return true;
             if (c.soundLog) LogSound(positional, static_cast<int32_t>(bank), static_cast<int32_t>(cue), static_cast<int32_t>(sound), caller, !c.auraBeeps);
             return !c.auraBeeps && AuraBeep(positional, static_cast<int32_t>(bank), static_cast<int32_t>(cue), caller);
         }
@@ -4459,6 +4470,8 @@ namespace pdnet::gamepatches
             reinterpret_cast<void (*)()>(At(0x140212720))();
             g_previewTown = true;
         }
+
+        bool PreviewSessionOn() { return g_previewTown || g_previewTownClosing; }
 
         bool PreviewPlayerReady()
         {

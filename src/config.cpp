@@ -145,6 +145,7 @@ namespace pdnet
                 else if (key == "discord_player_messages") c.discordPlayerMessages = _stricmp(value.c_str(), "off") != 0;
                 else if (key == "splash_volume" && !value.empty()) c.splashVolume = (std::clamp)(std::stoi(value), 0, 100);
                 else if (key == "aura_beeps") c.auraBeeps = _stricmp(value.c_str(), "off") != 0;
+                else if (key == "preview_sound") c.previewSound = _stricmp(value.c_str(), "off") != 0;
                 else if (key == "sound_log") c.soundLog = _stricmp(value.c_str(), "on") == 0;
                 else if (key == "more_controllers") c.moreControllers = _stricmp(value.c_str(), "off") != 0;
                 else if (key == "display_name" && !value.empty())

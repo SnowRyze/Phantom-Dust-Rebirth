@@ -58,6 +58,7 @@ namespace pdnet
         std::wstring discordInvite;        // discord_invite=<URL>: the community Discord the main menu's Community button opens (see gamesave.cpp)
         int splashVolume = 40;              // splash_volume=: % of the remembered volume from the start-up logos until the main menu (pdlaunch; the Settings menu shows it)
         bool auraBeeps = true;              // aura_beeps=on|off: the aura particles' beeping (Options > Sound shows it)
+        bool previewSound = true;           // preview_sound=on|off: the skill preview's sounds online (Options > Sound shows it)
         bool moreControllers = true;        // more_controllers=on|off: PlayStation, Nintendo and other controllers, read by pdlaunch with SDL3 (see gamepads.cpp)
         bool soundLog = false;              // sound_log=on: log each game sound (bank, cue, caller) the first time it plays (debug, see gamepatches.cpp)
     };
