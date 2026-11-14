@@ -85,6 +85,10 @@ Anything that changes match behaviour needs every player on the same kit, and re
 
 ## Log
 (Newest first: what was tried, what happened.)
+- 2026-11-14: 100 films kept (was 25, the user). The Theatre lists all of them, 10 rows at a time: LB / RB (Page Up / Page
+  Down, Q / E) turn the page, the hint says page N of M; the rows are buffers the window keeps reading, so a page only rewrites
+  them. The list reads only each film's first 256 KB (setup) and last 28 bytes (end record: length), not whole files.
+  Not yet tried in the game.
 - 2026-11-14: Theatre menu, first part (the user: Theatre replaces Trade, a film list before the viewer). The multiplayer
   menu's Theater item (livetrade 40 from livemain 36) now opens the Settings screen (liveoption 68) as THEATRE: its rows are
   the newest 10 films (film::List: date, game type, length), each row's hint the stage and players; A logs the pick

@@ -24,7 +24,7 @@
 //     5 snapshot of the match setup (Snapshot below), when the match first reaches state 6.
 //     255 end: payload = u32 records, u64 packet bytes, u32 dropped records.
 // Disk: a background thread writes the buffer about once a second (no flush each time); the buffer is capped, and records past
-// the cap are dropped and counted, never waiting on the disk. The newest 25 films are kept.
+// the cap are dropped and counted, never waiting on the disk. The newest 100 films are kept.
 namespace pdnet::film
 {
     namespace
@@ -35,7 +35,7 @@ namespace pdnet::film
 
         constexpr uint32_t kFormat = 1;
         constexpr size_t kBufferCap = 8 * 1024 * 1024;
-        constexpr size_t kKeepFilms = 25;
+        constexpr size_t kKeepFilms = 100; // the user, 2026-11-14 (was 25)
         enum : uint8_t { kIn = 1, kOut = 2, kPeer = 3, kState = 4, kSnapshot = 5, kEnd = 255 };
 
         std::mutex g_lock;              // the buffer and the peer table
@@ -283,17 +283,23 @@ namespace pdnet::film
         std::sort(names.rbegin(), names.rend()); // newest first: the name starts with the date and time
         std::vector<Info> films;
         static const char* kMonths[] = { "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec" };
+        // Up to 100 films of a few MB each: only the start of each (the setup snapshot comes a few seconds in) and its last
+        // record (the end record's time is the length) are read, not the whole file.
+        constexpr size_t kHead = 256 * 1024;
         for (const auto& name : names)
         {
             if (films.size() >= max) break;
             if (g_recording && name == g_name) continue; // still being written
             FILE* f = nullptr;
             if (_wfopen_s(&f, (FilmsDir() + L"\\" + name).c_str(), L"rb") != 0 || !f) continue;
-            std::vector<uint8_t> d;
             fseek(f, 0, SEEK_END);
             long size = ftell(f);
+            std::vector<uint8_t> d((std::min)(static_cast<size_t>(size > 0 ? size : 0), kHead));
             fseek(f, 0, SEEK_SET);
-            if (size > 0 && size < 64 * 1024 * 1024) { d.resize(size); d.resize(fread(d.data(), 1, d.size(), f)); }
+            d.resize(fread(d.data(), 1, d.size(), f));
+            uint8_t tail[28] = {};
+            bool haveTail = false;
+            if (size >= 28 + 30 && fseek(f, size - 28, SEEK_SET) == 0) haveTail = fread(tail, 1, sizeof(tail), f) == sizeof(tail);
             fclose(f);
             if (d.size() < 30 || memcmp(d.data(), "PDFILM\0\0", 8) != 0) continue;
             Info info;
@@ -311,14 +317,12 @@ namespace pdnet::film
             {
                 uint8_t type = d[o];
                 uint16_t length = *reinterpret_cast<const uint16_t*>(&d[o + 2]);
-                uint32_t ms = *reinterpret_cast<const uint32_t*>(&d[o + 4]);
                 if (o + 12 + length > d.size()) break;
-                lastMs = ms;
-                const uint8_t* payload = &d[o + 12];
+                lastMs = *reinterpret_cast<const uint32_t*>(&d[o + 4]);
                 if (type == kSnapshot && length >= sizeof(Snapshot))
                 {
                     Snapshot s;
-                    memcpy(&s, payload, sizeof(s));
+                    memcpy(&s, &d[o + 12], sizeof(s));
                     info.gameType = s.gameType;
                     info.stage = s.stage;
                     for (const SlotInfo& slot : s.slots)
@@ -328,8 +332,13 @@ namespace pdnet::film
                         info.players += std::string(slot.name, strnlen(slot.name, sizeof(slot.name)));
                     }
                 }
-                else if (type == kIn || type == kOut) ++info.packets;
                 o += 12 + length;
+            }
+            // The end record (type 255, 16-byte payload) is the file's last 28 bytes when the film was closed properly.
+            if (haveTail && tail[0] == kEnd && *reinterpret_cast<const uint16_t*>(&tail[2]) == 16)
+            {
+                lastMs = *reinterpret_cast<const uint32_t*>(&tail[4]);
+                info.packets = *reinterpret_cast<const uint32_t*>(&tail[12]);
             }
             info.minutes = lastMs / 60000.0;
             films.push_back(std::move(info));

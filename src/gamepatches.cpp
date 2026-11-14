@@ -1934,34 +1934,62 @@ namespace pdnet::gamepatches
 
         // Theatre (Conceptual branch only): the multiplayer menu's Theater item (was Trade, livetrade 40) opens this same
         // screen with the saved films as its rows (film::List), newest first, and each film's details as the row's hint.
-        // A on a film picks it; playback isn't built yet, so that is only logged for now.
-        constexpr int kTradeMenu = 40, kTheatreRows = 10;
+        // A on a film picks it; playback isn't built yet, so that is only logged for now. The screen fits 10 rows: all the
+        // films (up to 100 kept) are paged through 10 at a time with LB / RB (or Page Up / Page Down, Q / E); the rows'
+        // texts are buffers the window keeps reading, so a page change only rewrites them.
+        constexpr int kTradeMenu = 40, kTheatreRows = 10, kTheatreFilms = 100;
         std::vector<film::Info> g_films;
         char g_filmRow[kTheatreRows][112];
         char g_filmHint[kTheatreRows][160];
-        int g_filmRows = 0;
+        int g_filmRows = 0, g_filmPage = 0;
         const char* kTheatreBar = "\a8#Select \a2#Watch \a580r\a3#Back";
 
-        void RefreshFilmRows()
+        int FilmPages() { return g_films.empty() ? 1 : static_cast<int>((g_films.size() + kTheatreRows - 1) / kTheatreRows); }
+
+        void FillFilmPage()
         {
             static const char* kTypes[] = { "Battle Royale", "Tag Team", "One-on-One" };
-            g_films = film::List(kTheatreRows);
-            g_filmRows = g_films.empty() ? 1 : static_cast<int>(g_films.size());
             if (g_films.empty())
             {
                 sprintf_s(g_filmRow[0], "\a160wNo films yet\f\a1#\a230c\f\a0#");
                 strcpy_s(g_filmHint[0], "Every match is saved as a film. Play one, then come back.");
                 return;
             }
+            char page[48] = "";
+            if (FilmPages() > 1) sprintf_s(page, "  (page %d of %d: LB / RB)", g_filmPage + 1, FilmPages());
             for (int r = 0; r < g_filmRows; ++r)
             {
-                const film::Info& f = g_films[r];
+                size_t i = static_cast<size_t>(g_filmPage) * kTheatreRows + r;
+                if (i >= g_films.size())
+                {
+                    g_filmRow[r][0] = 0;
+                    strcpy_s(g_filmHint[r], page);
+                    continue;
+                }
+                const film::Info& f = g_films[i];
                 const char* type = f.gameType >= 0 && f.gameType < 3 ? kTypes[f.gameType] : "Match";
                 char length[24];
                 sprintf_s(length, "%d:%02d", static_cast<int>(f.minutes), static_cast<int>(f.minutes * 60) % 60);
                 sprintf_s(g_filmRow[r], "\a160w%s\f\a1#\a230c%s %s\f\a0#", f.when.empty() ? "Film" : f.when.c_str(), type, length);
-                sprintf_s(g_filmHint[r], "%s on stage %d: %s.", type, f.stage, f.players.empty() ? "players not recorded" : f.players.c_str());
+                sprintf_s(g_filmHint[r], "%s on stage %d: %s.%s", type, f.stage, f.players.empty() ? "players not recorded" : f.players.c_str(), page);
             }
+        }
+
+        void RefreshFilmRows()
+        {
+            g_films = film::List(kTheatreFilms);
+            g_filmPage = 0;
+            g_filmRows = g_films.empty() ? 1 : (std::min)(kTheatreRows, static_cast<int>(g_films.size()));
+            FillFilmPage();
+        }
+
+        void TurnFilmPage(int step)
+        {
+            int pages = FilmPages();
+            if (pages <= 1) return;
+            g_filmPage = (g_filmPage + step + pages) % pages;
+            FillFilmPage();
+            Log(L"theatre: page %d of %d", g_filmPage + 1, pages);
         }
         struct Colour { const char* name; uint32_t rgb; };
         constexpr Colour kColours[] = { { "Yellow", 0xFFE600 }, { "Red", 0xFF5A5A }, { "Blue", 0x4FB4FF }, { "Green", 0x5AFF6E },
@@ -2171,12 +2199,13 @@ namespace pdnet::gamepatches
             if (g_theatre)
             {
                 static ULONGLONG last = 0;
-                if ((buttons & 0x1010) && row >= 0 && row < static_cast<int>(g_films.size()) && GetTickCount64() - last > 300)
+                size_t pick = static_cast<size_t>(g_filmPage) * kTheatreRows + row;
+                if ((buttons & 0x1010) && row >= 0 && row < kTheatreRows && pick < g_films.size() && GetTickCount64() - last > 300)
                 {
                     last = GetTickCount64();
                     int64_t sound[2] = { 0, 0 };
                     reinterpret_cast<InputFn>(At(0x140261750))(sound); // the menu's select sound
-                    Log(L"theatre: film %s chosen (%S, %S) - playback isn't built yet", g_films[row].file.c_str(), g_films[row].when.c_str(), g_films[row].players.c_str());
+                    Log(L"theatre: film %s chosen (%S, %S) - playback isn't built yet", g_films[pick].file.c_str(), g_films[pick].when.c_str(), g_films[pick].players.c_str());
                 }
                 return 0;
             }
@@ -2390,6 +2419,23 @@ namespace pdnet::gamepatches
         int64_t HookedButtons(int64_t* args)
         {
             int64_t buttons = g_buttons(args);
+            if (InSettings() && g_theatre && (!args || args[0] == 0))
+            {
+                static bool held[2] = {};
+                uint8_t keys[256];
+                bool haveKeys = KeysHeld(keys);
+                bool next = AnyPadHolds(0x800) || (haveKeys && (keys[VK_NEXT] || keys['E'])); // RB, Page Down, E
+                bool previous = AnyPadHolds(0x400) || (haveKeys && (keys[VK_PRIOR] || keys['Q'])); // LB, Page Up, Q
+                if (next && !held[0] || previous && !held[1])
+                {
+                    int64_t sound[2] = { 37, 0 };
+                    reinterpret_cast<InputFn>(At(0x140261750))(sound);
+                    TurnFilmPage(next && !held[0] ? 1 : -1);
+                }
+                held[0] = next;
+                held[1] = previous;
+                return buttons;
+            }
             if (!InSettings() || (args && args[0] != 0) || g_theatre) return buttons;
             static uint64_t last = 0; // the script reads the buttons several times a frame: act once per press
             bool a = (buttons & 0x1010) != 0, b = (buttons & 0x2020) != 0;
