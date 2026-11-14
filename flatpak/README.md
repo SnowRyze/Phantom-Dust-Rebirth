@@ -45,5 +45,5 @@ The **Flatpak** workflow (`.github/workflows/flatpak.yml`) does the same on GitH
 and adds the file to that release; nothing has to be done by hand. For an existing release: Actions > Flatpak > Run
 workflow, with the release's tag.
 
-The wine-uwp build is pinned in `io.github.snowryze.PhantomDustRebirth.yml` (URL and SHA-256 of a release of the
-fork); change both to move to a newer one.
+The wine-uwp build is pinned in `io.github.snowryze.PhantomDustRebirth.yml` (URL and SHA-256 of a designgears/wine-uwp
+release); change both to move to a newer one.

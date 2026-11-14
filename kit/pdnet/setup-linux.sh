@@ -10,8 +10,7 @@
 #   ./setup-linux.sh --logs           copy the logs to your home folder, to send after a test
 #
 # wine-uwp is looked for in $WINE_UWP (the wine-uwp script), on PATH, in ~/.local/opt/wine-uwp and ~/wine-uwp; if
-# none can load pdnet, it offers to download the prebuilt one (github.com/designgears/wine-uwp releases, or
-# github.com/LiveManQuestion/wine-uwp's while designgears/wine-uwp has none).
+# none can load pdnet, it offers to download the prebuilt one (github.com/designgears/wine-uwp releases).
 # The game's files are not changed: wine-uwp loads pdnet.dll into the game when it starts (local.env in the game's
 # folder, WINE_UWP_INJECT), as pdlaunch.exe does on Windows. pdnet and its files are copied next to the game.
 # Like pdlaunch.exe, a launcher (~/.local/bin/phantom-dust-rebirth, menu entry "Phantom Dust Rebirth") calls this
@@ -54,10 +53,9 @@ for c in "${WINE_UWP:-}" "$(command -v wine-uwp 2>/dev/null || true)" ~/.local/o
     fi
     old=${old:-$c}
 done
-# None (or only an older one): offer the prebuilt runtime, into ~/.local/opt. From designgears/wine-uwp's latest
-# release; until that repository has published one, from the LiveManQuestion/wine-uwp fork's (same runtime).
-sources="https://github.com/designgears/wine-uwp/releases/latest/download wine-uwp-x86_64.tar.xz
-https://github.com/LiveManQuestion/wine-uwp/releases/latest/download wine-uwp-phantom-dust-x86_64.tar.xz"
+# None (or only an older one): offer the prebuilt runtime from designgears/wine-uwp's latest release, into ~/.local/opt.
+wup_url=https://github.com/designgears/wine-uwp/releases/latest/download
+wup_asset=wine-uwp-x86_64.tar.xz
 dl_tmp=""
 download_wine_uwp() {
     local dest=$HOME/.local/opt
@@ -68,30 +66,27 @@ download_wine_uwp() {
     if [ -z "${1:-}" ]; then
         if [ -n "$old" ]; then
             say "Your wine-uwp ($old) is too old to load pdnet. A newer one can be downloaded to $dest/wine-uwp"
-            say "(about 50 MB; your game, prefix and sign-in are kept)."
+            say "(about 80 MB; your game, prefix and sign-in are kept)."
         else
-            say "wine-uwp (the Wine build that runs Phantom Dust) was not found. It can be downloaded to $dest/wine-uwp (about 50 MB)."
+            say "wine-uwp (the Wine build that runs Phantom Dust) was not found. It can be downloaded to $dest/wine-uwp (about 80 MB)."
         fi
         case $(ask "Download it now? [Y/n]") in [nN]*) fail "set WINE_UWP=/path/to/bin/wine-uwp to use your own build." ;; esac
     fi
     dl_tmp=$(mktemp -d)
     trap 'rm -rf "$dl_tmp"' EXIT
-    local tmp=$dl_tmp release="" asset="" r a
-    # The first source that has a release (its checksum file downloads).
-    while read -r r a; do
-        if curl -fsL -o "$tmp/$a.sha256" "$r/$a.sha256"; then release=$r; asset=$a; break; fi
-    done <<<"$sources"
-    [ -n "$release" ] || fail "download failed (no wine-uwp release could be reached; is the network up?)."
-    say "Downloading ${release%/latest/download}/latest"
-    curl -fL --progress-bar -o "$tmp/$asset" "$release/$asset" || fail "download failed ($release/$asset)."
-    (cd "$tmp" && sha256sum -c --quiet "$asset.sha256") || fail "the download is damaged (checksum mismatch); run this again."
+    local tmp=$dl_tmp
+    curl -fsL -o "$tmp/$wup_asset.sha256" "$wup_url/$wup_asset.sha256" ||
+        fail "download failed (the wine-uwp release could not be reached; is the network up?)."
+    say "Downloading ${wup_url%/latest/download}/latest"
+    curl -fL --progress-bar -o "$tmp/$wup_asset" "$wup_url/$wup_asset" || fail "download failed ($wup_url/$wup_asset)."
+    (cd "$tmp" && sha256sum -c --quiet "$wup_asset.sha256") || fail "the download is damaged (checksum mismatch); run this again."
     mkdir -p "$dest"
     if [ -e "$dest/wine-uwp" ]; then
         rm -rf "$dest/wine-uwp.old"
         mv "$dest/wine-uwp" "$dest/wine-uwp.old"
         say "(The previous $dest/wine-uwp is kept as $dest/wine-uwp.old.)"
     fi
-    tar -xJf "$tmp/$asset" -C "$dest" || fail "could not unpack $asset."
+    tar -xJf "$tmp/$wup_asset" -C "$dest" || fail "could not unpack $wup_asset."
     wup=$dest/wine-uwp/bin/wine-uwp
     if ! "$dest/wine-uwp/bin/wine" --version >/dev/null 2>&1; then
         fail "the downloaded wine-uwp doesn't start on this system. It needs glibc 2.38 or newer (Ubuntu 24.04, Debian 13, Fedora 39, Mint 22 or newer)."
