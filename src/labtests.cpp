@@ -100,6 +100,10 @@ namespace pdnet::labtests
         int g_deadTarget = -1;
         Vec g_freePos{};
         float g_freeYaw = 0, g_freePitch = 0;
+        // Following: the view stays on the watched player, as a player's own camera does, but can be swung round them and
+        // up / down (right stick, or Q E and R F); a click of the right stick (or C) puts it back behind them.
+        float g_orbitYaw = 0, g_orbitPitch = 0;
+        ULONGLONG g_orbitLast = 0;
         ULONGLONG g_freeLast = 0;
         Vec g_lastEye{}, g_lastLook{};
         bool g_haveLast = false;
@@ -186,6 +190,30 @@ namespace pdnet::labtests
             g_freePos.y += up * kSpeed * dt;
         }
 
+        void OrbitInput()
+        {
+            ULONGLONG now = GetTickCount64();
+            float dt = g_orbitLast ? (std::min)(0.1f, (now - g_orbitLast) / 1000.0f) : 0.0f;
+            g_orbitLast = now;
+            float lx = 0, ly = 0, rx = 0, ry = 0;
+            PadSticks(lx, ly, rx, ry);
+            uint8_t keys[256];
+            bool reset = AnyPadHolds(0x2000); // right stick click
+            if (KeysHeld(keys))
+            {
+                if (keys['E']) rx += 1;
+                if (keys['Q']) rx -= 1;
+                if (keys['R']) ry += 1;
+                if (keys['F']) ry -= 1;
+                reset = reset || keys['C'];
+            }
+            if (reset) { g_orbitYaw = g_orbitPitch = 0; return; }
+            auto dead = [](float v) { return std::fabs(v) < 0.2f ? 0.0f : v; };
+            constexpr float kTurn = 2.0f;
+            g_orbitYaw += dead(rx) * kTurn * dt;
+            g_orbitPitch = (std::max)(-0.6f, (std::min)(0.9f, g_orbitPitch + dead(ry) * kTurn * dt));
+        }
+
         void UpdateDeadCamera()
         {
             // Only while the battle runs (match state 6): at its end the game moves on to its results (states 12, 9, 10, 11), and
@@ -198,6 +226,7 @@ namespace pdnet::labtests
                 g_freeCam = false;
                 g_deadNext = g_deadPrevious = g_deadFree = false;
                 g_deadTarget = down ? NextFollowable(LocalSlot(), 1) : -1;
+                g_orbitYaw = g_orbitPitch = 0;
                 if (down) Log(L"deadcam: on, following slot %d", g_deadTarget);
                 else Log(L"deadcam: off (%s)", fighting ? L"back in the fight" : L"the battle is over");
                 if (down && g_deadTarget < 0) StartFreeCam();
@@ -227,13 +256,14 @@ namespace pdnet::labtests
             if (!g_freeCam)
             {
                 int step = g_deadNext.exchange(false) ? 1 : g_deadPrevious.exchange(false) ? -1 : 0;
-                if (step) { g_deadTarget = NextFollowable(g_deadTarget, step); Log(L"deadcam: following slot %d", g_deadTarget); }
+                if (step) { g_deadTarget = NextFollowable(g_deadTarget, step); g_orbitYaw = g_orbitPitch = 0; Log(L"deadcam: following slot %d", g_deadTarget); }
                 if (g_deadTarget >= 0 && !Followable(g_deadTarget))
                 {
                     g_deadTarget = NextFollowable(g_deadTarget, 1);
                     Log(L"deadcam: that player is down - following slot %d", g_deadTarget);
                 }
                 if (g_deadTarget < 0) StartFreeCam();
+                else OrbitInput();
             }
             else
                 MoveFreeCam();
@@ -546,8 +576,15 @@ namespace pdnet::labtests
             float len = Length(smooth);
             if (len < 0.01f) return false;
             Vec d = Scale(smooth, 1.0f / len);
+            if (g_deadOn && (g_orbitYaw != 0 || g_orbitPitch != 0)) // swung round by the watcher (OrbitInput)
+            {
+                float c = std::cos(g_orbitYaw), sn = std::sin(g_orbitYaw);
+                d = { d.x * c + d.z * sn, 0, -d.x * sn + d.z * c };
+            }
+            float reach = std::sqrt(g_behind * g_behind + g_height * g_height);
+            float rise = std::atan2(g_height, g_behind) + (g_deadOn ? g_orbitPitch : 0.0f);
             Vec position = Field<Vec>(object, kPosition);
-            eye = Add(position, Vec{ -d.x * g_behind, g_height, -d.z * g_behind });
+            eye = Add(position, Vec{ -d.x * reach * std::cos(rise), reach * std::sin(rise), -d.z * reach * std::cos(rise) });
             look = Add(position, Vec{ d.x * g_ahead, g_lookHeight, d.z * g_ahead });
             return Finite(eye) && Finite(look);
         }

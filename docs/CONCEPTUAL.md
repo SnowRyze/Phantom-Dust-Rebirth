@@ -85,6 +85,11 @@ Anything that changes match behaviour needs every player on the same kit, and re
 
 ## Log
 (Newest first: what was tried, what happened.)
+- 2026-11-14: follow camera controls (the user): the view stays on the watched player, as a player's own camera does, but the
+  right stick (or Q E, R F) swings it round them and up / down; right stick click (or C) puts it back behind; a new player
+  resets it. Not yet tried in the game.
+- 2026-11-14: tried on Conceptual 22 (Test Arsenal, F9): facing read as way 0 after 5 s, camera shape 51.2 behind, 39.4 up,
+  looking 5.5 ahead at 8.4 up; followed the AI, free camera, and off when the battle ended ("the battle is over").
 - 2026-11-14: the dead camera now runs only while the battle does (match state 6); it stayed on over the results screens
   (states 12, 9, 10, 11) until the next match. Log: deadcam: off (the battle is over). Not yet tried in the game.
 - 2026-11-14: the follow camera sat too close (the user). Its distance was the eye's offset along the facing only, which shrank
