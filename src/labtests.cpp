@@ -1136,7 +1136,9 @@ namespace pdnet::labtests
         {
             if (g_filmShown) Log(L"theatre: battle over");
             g_filmPlaying = g_filmShown = false;
-            g_filmEvents.clear();
+            // The end of a battle is noticed only when the next one starts, after a film for it may already be queued
+            // (Conceptual 35: a film after another battle played 0 records): a queued film is kept.
+            if (!g_filmQueued) g_filmEvents.clear();
             g_recordingOn = false; // the players are gone: what was recorded is kept only if F7 stopped it first
             g_recording.clear();
             g_playing = false;

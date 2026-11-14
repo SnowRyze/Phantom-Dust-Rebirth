@@ -85,6 +85,9 @@ Anything that changes match behaviour needs every player on the same kit, and re
 
 ## Log
 (Newest first: what was tried, what happened.)
+- 2026-11-14: Conceptual 35 test: "the film no longer runs". Not the text change: a film picked after another battle in
+  the same session played 0 records. The camera hook notices a battle's end only when the next one starts, after the
+  film was queued, and EndOfBattle cleared the film's events. A queued film is now kept (Conceptual 36).
 - 2026-11-14: Film text toggle (Conceptual 35): the film bar and the control reminders are one item, shown or hidden with
   D-pad Down / F2 (was X / F1), with a reminder line for it; the HUD (B / H) is separate. With the HUD hidden, the text
   sets the HUD's render states itself (FUN_140020c40(0, 3, 2) and (0, 4, 2), as FUN_140150c30 does before its text).
