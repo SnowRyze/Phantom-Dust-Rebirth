@@ -72,17 +72,10 @@ Other docs: [`EOS_PLAN.md`](EOS_PLAN.md), [`MODDING_PLAN.md`](MODDING_PLAN.md), 
 Newest builds: **Experimental 170**, **Stable 14** (Experimental 170).
 
 Not yet confirmed in the game (each has its change log note):
-- Lock onto partner (103), Partner Aim Modern / Classic (118) and its keyboard key (Options > Keyboard).
 - B button: skipping start-up logos and cut-scene movies, leaving a hung match load after 30 s (120).
-- Modpack guard (parked: the user couldn't reproduce pewchy's report; log lines "modpack ...").
 
 Test steps for the older items (from the October "waiting for testers" list):
-- **Lock onto partner** (Experimental 103): in a Tag Team match, with or without an enemy targeted, RB (or Tab)
-  locks onto the partner; again unlocks. While on the partner, lock-on or switch-target goes to an enemy.
-  Switch-target never reaches the partner. Log: "target hook running", "lock onto partner on / off ...".
-- **Partner Aim setting** (Experimental 118): Multiplayer > Settings shows the row, left / right switches it, A saves, it stays after a restart. Modern: as lock onto partner above. Classic, in a Tag Team match: RB or Tab turns the original option on and off (log says which); while on, switch target also reaches the partner.
 - **B button** (Experimental 120): start-up logos: B skips each one, and the game still reaches the title normally. Movies (needs a full copy, not the stub dump): B ends a cut-scene movie and the story carries on. Hung match load (needs other players; cut a peer's network during a load): after 30 s, B leaves: from the lobby's LOADING to the multiplayer menu, from a match load to the lobby. A normal load must be unaffected: B does nothing in the first 30 s.
-- **Partner lock on keyboard** (the keyboard itself is confirmed on Experimental 126; still to check: rebinding rows, Lock Onto Partner's row, the key in Modern and Classic, nothing stuck after alt-tabbing. Notes: pdlaunch reads the keys; before that no key worked on the developer's PC. Start the game twice after updating. Keys work in menus and matches, none stuck after alt-tabbing, typing a name still works): Options > Keyboard shows Lock Onto Partner at the end of the list; picking it reads PRESS A KEY, the key is saved and stays after a restart; Esc cancels; Restore Default Settings gives Tab. In a Tag Team match that key works in Modern and Classic. Classic: a 2nd press turns it off and a targeted partner goes back to an enemy (RB too).
 
 Open problems:
 - Joins over direct links failing between a Windows PC and the Linux Flatpak on one network (2026-11-13): fix in Experimental 164, not yet tried.
@@ -102,6 +95,8 @@ Ideas, not planned (notes in the change log and reference notes):
 # Change log (newest first)
 
 ## November 2026
+
+Confirmed by the user (2026-11-14): lock onto partner and Partner Aim (Modern / Classic, its keyboard key; 103 / 118), and PD Helper modpacks staying loaded through matches (the modpack guard).
 
 Confirmed by the user (2026-11-14): links to players from earlier lobbies no longer reconnect every minute (open since Experimental 69; most likely ended by the 139/140 relay remake changes).
 

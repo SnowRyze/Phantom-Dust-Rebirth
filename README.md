@@ -64,13 +64,13 @@ yet. Newer work goes into Experimental builds first.
 **Controls**
 - PlayStation, Nintendo and other controllers work like an Xbox controller, with rumble.
 - Keyboard works through the launcher; keys can be rebound in Options > Keyboard.
-- Lock onto partner in Tag Team: RB or Tab (key configurable), Modern or Classic in Online Settings *(not yet confirmed)*.
+- Lock onto partner in Tag Team: RB or Tab (key configurable), Modern or Classic in Online Settings.
 - B skips the start-up logos and movies, and leaves a match load that has hung for 30 s *(not yet confirmed)*.
 
 **Other**
 - Updates itself at game start from this repository's releases (your settings are kept).
 - Quieter start-up logos, and the game's volume is remembered.
-- PD Helper modpacks stay loaded through matches *(not yet confirmed)*.
+- PD Helper modpacks stay loaded through matches.
 - No pausing when the game is minimized.
 - One-click `Setup.bat`, `Remove.bat`, `Collect-Log.bat` and `Edit-Settings.bat`.
 
