@@ -1,7 +1,7 @@
 # Flatpak
 
 Phantom Dust Rebirth for Linux as one file: wine-uwp
-([LiveManQuestion/wine-uwp](https://github.com/LiveManQuestion/wine-uwp), branch `phantom-dust`), a Stable kit and a
+([designgears/wine-uwp](https://github.com/designgears/wine-uwp), release v2026.11.14), a Stable kit and a
 launcher that runs the kit's `setup-linux.sh`. It works on the Steam Deck, in Game Mode too.
 
 **Nothing of the game or of Windows is in the Flatpak.** The first start gets both on the player's machine:
@@ -45,5 +45,5 @@ The **Flatpak** workflow (`.github/workflows/flatpak.yml`) does the same on GitH
 and adds the file to that release; nothing has to be done by hand. For an existing release: Actions > Flatpak > Run
 workflow, with the release's tag.
 
-The wine-uwp build is pinned in `io.github.snowryze.PhantomDustRebirth.yml` (URL and SHA-256 of a release of the
-fork); change both to move to a newer one.
+The wine-uwp build is pinned in `io.github.snowryze.PhantomDustRebirth.yml` (URL and SHA-256 of a designgears/wine-uwp
+release); change both to move to a newer one.
