@@ -107,12 +107,13 @@ namespace pdnet::labtests
         ULONGLONG g_orbitLast = 0;
 
         // Theatre film controls (the user's Halo 3 film-controls card, 2026-11-14), each with a key:
-        //   A / Space          play / pause              RT / Z (hold) C (hold)  slow motion / fast forward
+        //   A / Space          play / pause              LT / Z (hold)           slow motion
+        //   RT / C (hold)      fast forward
         //   Y / V              flying cam / player cam   B / H                   hide / show HUD
         //   D-pad Down / F2    hide / show the film text D-pad L R / Q E         switch players (player cam)
         //   (the film text: the film bar and these reminders together, apart from the HUD; the user, 2026-11-14)
         //   left stick / WASD  move (flying cam)         right stick / arrows    look, or orbit (player cam; R3 / T resets)
-        //   RB LB / R F        up / down (flying cam)    LT / Shift              thrust (flying cam)
+        //   RB LB / R F        up / down (flying cam)    (no thrust: the user, 2026-11-14)
         //   L3 / Ctrl (hold)   pan: the stick's forward / back moves up / down (flying cam)
         // Time: the game's update step (HookedStep) is skipped while paused, run on some frames only in slow motion and run
         // several times a frame fast forwarding; the film clock (g_filmClock, ms) runs at the same rate.
@@ -134,6 +135,10 @@ namespace pdnet::labtests
         std::vector<film::Event> g_filmEvents;
         film::Info g_filmInfo;
         bool g_filmQueued = false, g_filmPlaying = false, g_filmShown = false; // shown: playing or played in this battle
+
+        // A film's battle is running (match state 6). The film's controls and time control work only then: after it, A on
+        // the results screen kept pausing the game's update and it hung on a black screen (Conceptual 36).
+        bool FilmActive() { return g_filmShown && Var<int32_t>(0x1404bc950) == 6; }
         size_t g_filmAt = 0;
         ULONGLONG g_filmStart = 0;
         uint32_t g_filmBase = 0;
@@ -208,21 +213,16 @@ namespace pdnet::labtests
             if (AnyPadHolds(0x400)) up -= 1;  // LB
             uint8_t keys[256];
             bool haveKeys = KeysHeld(keys);
-            float thrust = 1.0f;
             bool pan = false;
             if (g_filmShown)
             {
-                float lt = 0, rt = 0;
-                PadTriggers(lt, rt);
                 pan = AnyPadHolds(0x1000); // L3
-                if (lt > 0.2f) thrust = 1.0f + 2.0f * lt;
                 if (haveKeys)
                 {
                     if (keys[VK_RIGHT]) rx += 1;
                     if (keys[VK_LEFT]) rx -= 1;
                     if (keys[VK_UP]) ry += 1;
                     if (keys[VK_DOWN]) ry -= 1;
-                    if (keys[VK_SHIFT] || keys[VK_LSHIFT]) thrust = 3.0f;
                     if (keys[VK_CONTROL] || keys[VK_LCONTROL]) pan = true;
                 }
             }
@@ -240,7 +240,7 @@ namespace pdnet::labtests
             auto dead = [](float v) { return std::fabs(v) < 0.2f ? 0.0f : v; };
             lx = dead(lx); ly = dead(ly); rx = dead(rx); ry = dead(ry);
             if (pan) { up += ly; ly = 0; } // pan: forward / back moves up / down
-            float kSpeed = 150.0f * thrust;
+            float kSpeed = 150.0f;
             constexpr float kTurn = 2.0f;
             g_freeYaw += rx * kTurn * dt;
             g_freePitch = (std::max)(-1.4f, (std::min)(1.4f, g_freePitch + ry * kTurn * dt));
@@ -504,11 +504,11 @@ namespace pdnet::labtests
             int x = 24, y = 300;
             ScreenText(x, y, line, 0xffffd060);
             static const char* kLines[] = {
-                "A / Space: play / pause            RT / Z C (hold): slow / fast",
+                "A / Space: play / pause            LT / Z (hold): slow motion",
                 "Y / V: flying / player cam         B / H: hide / show HUD",
                 "D-pad L R / Q E: switch players    Right stick / arrows: look",
                 "Left stick / WASD: move            RB LB / R F: up / down",
-                "LT / Shift: thrust                 L3 / Ctrl (hold): pan",
+                "RT / C (hold): fast forward        L3 / Ctrl (hold): pan",
                 "D-pad Down / F2: hide / show this text",
             };
             for (const char* text : kLines) ScreenText(x, y += 14, text, 0xffffffff);
@@ -516,7 +516,7 @@ namespace pdnet::labtests
 
         void HookedHudDraw(int64_t hud)
         {
-            if (!g_filmShown) { GameHud(hud); return; }
+            if (!FilmActive()) { GameHud(hud); return; }
             if (!g_hudHidden) GameHud(hud);
             else
             {
@@ -1064,7 +1064,7 @@ namespace pdnet::labtests
 
         // The film's presses, once a frame on the game's thread: edges of A / Space (pause), B / H (HUD), D-pad Down / F2
         // (the film text);
-        // the speed from RT (a light pull: slow motion, a full pull: fast forward) or Z / C held.
+        // the speed from LT / Z held (slow motion) or RT / C held (fast forward).
         void FilmPresses()
         {
             static bool held[3] = {};
@@ -1083,8 +1083,8 @@ namespace pdnet::labtests
             float lt = 0, rt = 0;
             PadTriggers(lt, rt);
             float rate = 1.0f;
-            if (rt > 0.9f || (haveKeys && keys['C'])) rate = 4.0f;
-            else if (rt > 0.15f || (haveKeys && keys['Z'])) rate = 0.25f;
+            if (rt > 0.3f || (haveKeys && keys['C'])) rate = 4.0f;
+            else if (lt > 0.3f || (haveKeys && keys['Z'])) rate = 0.25f;
             if (rate != g_filmRate) Log(L"theatre: speed x%.2f", rate);
             g_filmRate = rate;
         }
@@ -1101,7 +1101,13 @@ namespace pdnet::labtests
             QueryPerformanceCounter(&t);
             double ms = last.QuadPart ? (t.QuadPart - last.QuadPart) * 1000.0 / frequency.QuadPart : 0.0;
             last = t;
-            if (!g_filmShown) { step(game); return; }
+            if (!FilmActive())
+            {
+                g_filmPaused = false; // never left paused once the battle is over
+                g_filmRate = 1.0f;
+                step(game);
+                return;
+            }
             ms = (std::min)(ms, 100.0);
             float rate = g_filmPaused ? 0.0f : g_filmRate;
             auto& flags = Var<uint32_t>(0x140530034);
@@ -1211,7 +1217,7 @@ namespace pdnet::labtests
             }
             if (!g_playing) UpdateCameraOffset(); // playing back, this player's own camera doesn't run
             ReportFollowed();
-            if (g_filmShown) FilmPresses();
+            if (FilmActive()) FilmPresses();
             if (!g_stepHooked) FilmFrame();
             UpdateDeadCamera();
 

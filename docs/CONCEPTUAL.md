@@ -85,6 +85,10 @@ Anything that changes match behaviour needs every player on the same kit, and re
 
 ## Log
 (Newest first: what was tried, what happened.)
+- 2026-11-14: Conceptual 36 test: after the film's battle ended, its controls stayed live (g_filmShown is cleared only
+  when the next battle starts), so A on the results screen paused the game's update and it hung on a black screen.
+  Conceptual 37: the film's controls, time control and text work only while the battle runs (match state 6), and the
+  pause is dropped after it. Controls tweak (the user): no thrust; LT / Z held is slow motion, RT / C held fast forward.
 - 2026-11-14: Conceptual 35 test: "the film no longer runs". Not the text change: a film picked after another battle in
   the same session played 0 records. The camera hook notices a battle's end only when the next one starts, after the
   film was queued, and EndOfBattle cleared the film's events. A queued film is now kept (Conceptual 36).
