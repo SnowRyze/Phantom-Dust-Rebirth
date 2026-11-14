@@ -2434,7 +2434,26 @@ namespace pdnet::gamepatches
                 }
                 held[0] = next;
                 held[1] = previous;
-                return buttons;
+                // A: the film on the highlighted row. The window's cursor is its +0x12 (FUN_14024b000 moves it), the screen's
+                // window the manager's +0x10402; pdnet's rows are the window's only rows, so the cursor is the row. A is kept
+                // from the script (it would run the row's old action).
+                static ULONGLONG lastPick = 0;
+                if ((buttons & 0x1010) && GetTickCount64() - lastPick > 300)
+                {
+                    lastPick = GetTickCount64();
+                    int64_t manager = MenuManager();
+                    int window = manager ? *reinterpret_cast<int16_t*>(manager + 0x10402) : -1;
+                    int row = window >= 0 && window < 16 ? WindowAt(manager, window)[0x12 / 2] : -1;
+                    size_t pick = static_cast<size_t>(g_filmPage) * kTheatreRows + row;
+                    if (row >= 0 && row < kTheatreRows && pick < g_films.size())
+                    {
+                        int64_t sound[2] = { 0, 0 };
+                        reinterpret_cast<InputFn>(At(0x140261750))(sound); // the menu's select sound
+                        Log(L"theatre: film %s chosen (%S, %S) - playback isn't built yet", g_films[pick].file.c_str(), g_films[pick].when.c_str(), g_films[pick].players.c_str());
+                    }
+                    else Log(L"theatre: A on row %d (window %d): no film there", row, window);
+                }
+                return buttons & ~0x1010ll;
             }
             if (!InSettings() || (args && args[0] != 0) || g_theatre) return buttons;
             static uint64_t last = 0; // the script reads the buttons several times a frame: act once per press

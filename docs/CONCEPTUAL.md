@@ -85,6 +85,10 @@ Anything that changes match behaviour needs every player on the same kit, and re
 
 ## Log
 (Newest first: what was tried, what happened.)
+- 2026-11-14: Theatre tried on Conceptual 26: 17 films listed, paging both ways; A logged nothing (it never reaches session
+  command 154 here). Now A is read in the button handler: the film on the highlighted row, the window's cursor at +0x12
+  (window = manager +0x10402; FUN_14024b000 moves it). Seen there too: +0x16 rows, +0x18 rows shown and +0x1a the top row,
+  so a window can scroll natively (a way to list all 100 films without pages). Not yet tried in the game.
 - 2026-11-14: 100 films kept (was 25, the user). The Theatre lists all of them, 10 rows at a time: LB / RB (Page Up / Page
   Down, Q / E) turn the page, the hint says page N of M; the rows are buffers the window keeps reading, so a page only rewrites
   them. The list reads only each film's first 256 KB (setup) and last 28 bytes (end record: length), not whole files.
