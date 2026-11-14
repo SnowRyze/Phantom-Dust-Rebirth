@@ -511,15 +511,23 @@ namespace pdnet::labtests
             float angle = FacingAngle(mine);
             for (int w = 0; w < 8; ++w) g_facingScore[w] = g_facingScore[w] * 0.995f + Dot(view, FacingWay(w, angle));
             if (++g_facingSamples == 120) Log(L"deadcam: facing angle read as way %d", BestWay());
-            // The camera's shape along the facing it now reads best.
+            // The camera's shape, measured the way the player's own camera sits: its full distance behind (not only the part
+            // along the facing, which shrank whenever the camera looked at a target off to one side and put the follow view too
+            // close), its height and where it looks. Only frames where the camera is behind the player along its facing count,
+            // averaged so one odd frame doesn't move it.
             Vec f = FacingWay(BestWay(), angle);
             Vec position = Field<Vec>(mine, kPosition);
             Vec toEye = Sub(eye, position), toLook = Sub(look, position);
-            g_behind = -Dot(toEye, f);
-            g_height = toEye.y;
-            g_ahead = Dot(toLook, f);
-            g_lookHeight = toLook.y;
-            g_haveShape = g_behind > 0.01f;
+            Vec flat = { toEye.x, 0, toEye.z };
+            float distance = Length(flat);
+            if (!FacingKnown() || distance < 0.01f || -Dot(flat, f) / distance < 0.9f) return;
+            auto blend = [](float& kept, float now) { kept = g_haveShape ? kept * 0.97f + now * 0.03f : now; };
+            blend(g_behind, distance);
+            blend(g_height, toEye.y);
+            blend(g_ahead, Dot(toLook, f));
+            blend(g_lookHeight, toLook.y);
+            if (!g_haveShape) Log(L"deadcam: follow camera shape: %.1f behind, %.1f up, looking %.1f ahead at %.1f up", g_behind, g_height, g_ahead, g_lookHeight);
+            g_haveShape = true;
         }
 
         // The view from behind `object`, along its facing, smoothed so it doesn't snap.

@@ -85,6 +85,13 @@ Anything that changes match behaviour needs every player on the same kit, and re
 
 ## Log
 (Newest first: what was tried, what happened.)
+- 2026-11-14: the follow camera sat too close (the user). Its distance was the eye's offset along the facing only, which shrank
+  whenever the camera looked at a target off to one side. Now the full horizontal distance, averaged, from frames where the
+  camera is behind the player along its facing (log: follow camera shape). Not yet tried in the game.
+- 2026-11-13: recorder tried online on Conceptual 20 (the user vs Motley, 2 players, 5 matches): a film per match, 1.6 to 5.7
+  min, 142-184 KB a minute (budget 1 MB), nothing dropped, the files read back cleanly. Snapshot: game type 1, rule 0, stage 5,
+  this PC slot 1, both names and teams, the arsenal. The 5.7-min film: 5266 packets out, 5256 in, mostly 87 bytes; the game
+  frame counter moved 4377 in 340 s (about 13 a second online, 30 offline: to understand before playback).
 - 2026-11-13: Theatre, step 1: the film recorder (srcilm.cpp; the user's REPLAY_SYSTEM_SPEC.md, strategy B: no server here,
   so a film is one PC's view). Each match: LocalState\pdnetilmsilm-<date>-<time>.pdfilm with every game datagram sent
   and received over EOS P2P (p2p.cpp), the time and the game frame, match states, and a setup snapshot at state 6 (type, rule,
