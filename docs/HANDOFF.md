@@ -72,10 +72,6 @@ Other docs: [`EOS_PLAN.md`](EOS_PLAN.md), [`MODDING_PLAN.md`](MODDING_PLAN.md), 
 Newest builds: **Experimental 170**, **Stable 14** (Experimental 170).
 
 Not yet confirmed in the game (each has its change log note):
-- Options > Sound > Skill Preview Sound (Experimental 170).
-- Select under the skill preview no longer freezes it or hangs leaving the editor (Experimental 157).
-- Colour names on the character select for Alpha (drawn as "player"; 152 logs each step, a tester log is needed).
-- The arsenal's Limit following its schools while editing (147).
 - Lock onto partner (103), Partner Aim Modern / Classic (118) and its keyboard key (Options > Keyboard).
 - B button: skipping start-up logos and cut-scene movies, leaving a hung match load after 30 s (120).
 - Modpack guard (parked: the user couldn't reproduce pewchy's report; log lines "modpack ...").
@@ -108,6 +104,8 @@ Ideas, not planned (notes in the change log and reference notes):
 # Change log (newest first)
 
 ## November 2026
+
+Confirmed by the user (2026-11-14): Skill Preview Sound (170), the Discord slot list after a rejoin (166), Select under the skill preview (157), the arsenal Limit while editing (147) and the colour names on the character select, Alpha included (150-152).
 
 Stable 14 (2026-11-14): Experimental 170 promoted at the user's request (build.bat promote 170, which pushed tag stable-14 = master ff77d93 with git itself and published without errors). The release has PhantomDust-Rebirth-Stable-14-PC.zip (public links, eos.ini) and pdnet-update-170.zip ("DO NOT DOWNLOAD" label); the Flatpak workflow builds PhantomDust-Rebirth-Linux.flatpak for it (running when this was written). Since Stable 13: joins over direct links (164), the Discord slot list (166), the lobby Arsenal Lab "Player 2" warning (169, confirmed by the user), Options > Sound > Skill Preview Sound (170), the match-end peer-drop logging (163), PD Helper on Linux (pull request 12). The user paused the promote half-way (2026-11-14); it was past the tag push, so the release was let finish and then completed.
 

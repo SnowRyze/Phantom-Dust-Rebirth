@@ -44,11 +44,11 @@ yet. Newer work goes into Experimental builds first.
 
 **Arsenal Lab**
 - Arsenal cases follow the arsenal: 1, 2 or 3 schools, up to 3, so the case type and Aura rate always match the skills
-  in it. The Limit shown follows the schools while you edit *(not yet confirmed)*.
+  in it. The Limit shown follows the schools while you edit.
 - Buy and sell arsenal cases in the Lab, also from the lobby.
 - Test Arsenal: pick your arsenal and character, the AI's arsenal and character, and the map, then fight.
 - The skill preview works online, in the Arsenal editor and View Stock List, also from the lobby. Pressing Select
-  there no longer freezes it *(not yet confirmed)*.
+  there no longer freezes it.
 - Max Credits & Skills in the shop: up to 5,000,000 credits and 80 of every skill, DLC included.
 
 **Menus**
@@ -57,8 +57,8 @@ yet. Newer work goes into Experimental builds first.
 - "Xbox Live" reads "Online"; the multiplayer menu has Online Settings (name, voice, nametags, Discord posts, partner
   aim), and the Online Store is gone.
 - Options: Send Log (sends your logs to the developers), Updates (Stable, Experimental or Off), and in Sound, Aura
-  Particle Beeps and Skill Preview Sound *(not yet confirmed)*.
-- Character select shows each colour's name instead of COLOR 1-4 (Alpha's *not yet confirmed*).
+  Particle Beeps and Skill Preview Sound.
+- Character select shows each colour's name instead of COLOR 1-4.
 - Player feedback screen after matches removed.
 
 **Controls**
