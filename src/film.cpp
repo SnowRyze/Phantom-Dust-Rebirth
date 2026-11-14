@@ -357,6 +357,7 @@ namespace pdnet::film
                             for (int16_t id : s.skills[i]) if (id > 0) info.haveSkills[i] = true;
                         }
                         info.present[i] = s.slots[i].present != 0;
+                        info.name[i] = std::string(s.slots[i].name, strnlen(s.slots[i].name, sizeof(s.slots[i].name)));
                         info.character[i] = s.version >= 2 ? s.character[i] : -1;
                     }
                     info.gameType = s.gameType;

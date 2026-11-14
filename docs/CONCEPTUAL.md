@@ -85,6 +85,14 @@ Anything that changes match behaviour needs every player on the same kit, and re
 
 ## Log
 (Newest first: what was tried, what happened.)
+- 2026-11-14: Conceptual 30 test: the film decks loaded (both sides played with the film's skills), but a 3-player film
+  showed only 2 players, and playback stopped 0.2 s in when Condition (stream 14) faulted. Its data names the target
+  player (byte 2), here film slot 2, which didn't exist in the 2-player battle. Conceptual 31: every film player keeps
+  their own slot. The battle setup (FUN_140128990) copies 4 entries of 0x48 (a player is there when its first int isn't 0),
+  and the scoreboard battle fills 2. HookedTestStart fills entries 2 and 3 as copies of the opponent's entry (the AI's) with
+  the film player's character, Aura rate 1.0 and deck counts built from the film. The film's names go into the name
+  table (DAT_1404bca30) when playback starts. Not tested yet: the game mode stays One-on-One, and the extra players share
+  the opponent's AI data (driven by the film anyway).
 - 2026-11-14: Conceptual 29 crashed in film playback: DmgEffect (stream 20) faulted 24 s in (effect 0, type 0), then the
   game crashed at PDUWP+0x18c383 (FUN_14018c360, an effect instance with no resource data). Two more findings: both
   sides played with this player's own arsenal, so the film's skills were never loaded; and a sequenced stream's number

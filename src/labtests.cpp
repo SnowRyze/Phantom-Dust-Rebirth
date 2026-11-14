@@ -845,15 +845,16 @@ namespace pdnet::labtests
             }
         }
 
-        // The film's slots shown in this battle: the first two players in it, in order.
+        // Each film player keeps their own slot in the battle: the streams name players by slot inside their data
+        // (Condition's target, hits, steals), so any other mapping sent them to the wrong player or to none (Conceptual 30:
+        // a Condition for film slot 2 faulted in a 2-player battle).
         void MapFilmSlots()
         {
             for (int& s : g_filmSlot) s = -1;
-            int next = 0;
-            for (int s = 0; s < 4 && next < 2; ++s)
-                if (g_filmInfo.present[s]) g_filmSlot[s] = next++;
+            for (int s = 0; s < 4; ++s)
+                if (g_filmInfo.present[s]) g_filmSlot[s] = s;
             for (const auto& e : g_filmEvents) // films with no setup snapshot: the slots their data comes from
-                if (g_filmSlot[e.slot] < 0 && next < 2) g_filmSlot[e.slot] = next++;
+                if (e.slot < 4) g_filmSlot[e.slot] = e.slot;
         }
 
         void StartFilmPlayback()
@@ -874,6 +875,11 @@ namespace pdnet::labtests
             memset(g_filmSkipped, 0, sizeof(g_filmSkipped));
             memset(g_filmPlayed, 0, sizeof(g_filmPlayed));
             for (auto& slot : g_filmLast) for (LastPlayed& l : slot) l = LastPlayed{};
+            // Nametags: the film's names (DAT_1404bca30, 0x41 per slot).
+            char* names = reinterpret_cast<char*>(At(0x1404bca30));
+            for (int s = 0; s < 4; ++s)
+                if (g_filmSlot[s] >= 0 && !g_filmInfo.name[s].empty() && PlayerObject(s))
+                    strncpy_s(names + s * 0x41, 0x41, g_filmInfo.name[s].c_str(), _TRUNCATE);
             g_filmPlaying = g_filmShown = true;
             Log(L"theatre: playing %s: %zu stream records over %.1f min, film slots to battle slots %d %d %d %d", g_filmInfo.file.c_str(), g_filmEvents.size(),
                 g_filmEvents.empty() ? 0.0 : (g_filmEvents.back().ms - g_filmBase) / 60000.0, g_filmSlot[0], g_filmSlot[1], g_filmSlot[2], g_filmSlot[3]);
@@ -1075,6 +1081,19 @@ namespace pdnet::labtests
         g_filmQueued = true;
         Log(L"theatre: %s loaded (%zu stream records), starting its battle", file.c_str(), g_filmEvents.size());
         return true;
+    }
+
+    int FilmPlayers()
+    {
+        if (!g_filmQueued) return 0;
+        int n = 2;
+        for (int s = 0; s < 4; ++s) if (g_filmSlot[s] >= 0) n = (std::max)(n, s + 1);
+        return n;
+    }
+
+    int FilmCharacter(int slot)
+    {
+        return g_filmQueued && slot >= 0 && slot < 4 ? g_filmInfo.character[slot] : -1;
     }
 
     bool FilmDeck(int slot, int16_t (&skills)[30])

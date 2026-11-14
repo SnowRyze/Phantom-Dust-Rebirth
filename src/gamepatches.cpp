@@ -3031,9 +3031,7 @@ namespace pdnet::gamepatches
                 Log(L"theatre: the film's battle couldn't start");
                 return;
             }
-            int characters[2] = { -1, -1 }, n = 0;
-            for (int s = 0; s < 4 && n < 2; ++s)
-                if (f.present[s]) characters[n++] = f.character[s];
+            int characters[2] = { f.character[0], f.character[1] }; // each film player keeps their slot
             *reinterpret_cast<int32_t*>(At(0x1403de844)) = index;
             g_testBattle = true;
             g_testStage = f.stage;
@@ -4165,6 +4163,23 @@ namespace pdnet::gamepatches
                 if (g_testCharacter >= 0) *reinterpret_cast<int32_t*>(setup + 8) = g_testCharacter;
                 if (g_testOpponentCharacter >= 0) *reinterpret_cast<int32_t*>(setup + 0x48 + 8) = g_testOpponentCharacter;
                 Log(L"gamepatch: Test Arsenal: battle on map %d, layout %u, character %d, opponent's %d", stage, layout, *reinterpret_cast<int32_t*>(setup + 8), *reinterpret_cast<int32_t*>(setup + 0x48 + 8));
+                // A film with 3 or 4 players: the setup has 4 entries of 0x48 (FUN_140128990 copies them; a player is
+                // there when its first int isn't 0) and this battle fills 2. The others are copies of the opponent's
+                // entry with the film player's character, and their deck counts are built from the film (slots 0 and 1
+                // get theirs through HookedDeck).
+                int players = labtests::FilmPlayers();
+                for (int k = 2; k < players && k < 4; ++k)
+                {
+                    memcpy(setup + k * 0x48, setup + 0x48, 0x48);
+                    int character = labtests::FilmCharacter(k);
+                    if (character >= 0) *reinterpret_cast<int32_t*>(setup + k * 0x48 + 8) = character;
+                    int16_t deck[30];
+                    for (int16_t& id : deck) id = -1;
+                    labtests::FilmDeck(k, deck);
+                    reinterpret_cast<float*>(At(0x1404bc958))[k] = 1.0f; // its Aura rate
+                    if (reinterpret_cast<uint8_t**>(At(0x140585fe8))[k]) reinterpret_cast<DeckFn>(At(0x14014f830))(0, k, deck); // its deck counts, when allocated
+                    Log(L"theatre: battle slot %d added for the film (character %d, deck %d %d %d ...)", k, *reinterpret_cast<int32_t*>(setup + k * 0x48 + 8), deck[0], deck[1], deck[2]);
+                }
             }
             reinterpret_cast<MatchSetupFn>(At(0x140128990))(a, localSlot, mode, setup, e, stage, layout);
         }

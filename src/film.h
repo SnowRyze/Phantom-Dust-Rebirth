@@ -31,6 +31,7 @@ namespace pdnet::film
         // seen in that player's hand (CardKind), so the battle loads every skill the film uses.
         int16_t skills[4][30];
         bool haveSkills[4]{};
+        std::string name[4];  // each slot's player name, when recorded
         Info() { for (auto& deck : skills) for (int16_t& id : deck) id = -1; }
     };
     std::vector<Info> List(size_t max);
