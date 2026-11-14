@@ -1020,6 +1020,20 @@ namespace pdnet::labtests
                 alignas(16) uint8_t state[0x48]{};
                 *reinterpret_cast<int32_t*>(state + 0x20) = (frame + 2) / 2;
                 *reinterpret_cast<void**>(state + 0x40) = e.data.data();
+                // FireStartReq and FireReq carry the frame the skill started on (int at +4; FUN_14018fae0 / FUN_14018fc70 queue
+                // them in the player's ring, which starts them at that frame). PlayerPos is moved to this battle's clock
+                // (state+0x20), so these are too: as far behind this battle's frame as they were behind the sender's
+                // (packet frame/2 * 2). Left on the match's own frames, skills started early or late, and held ones such as
+                // shields were cut short or skipped (Conceptual 33).
+                alignas(16) uint8_t retimed[96];
+                if ((e.stream == 2 || e.stream == 3) && e.data.size() >= 8 && e.data.size() <= sizeof(retimed))
+                {
+                    memcpy(retimed, e.data.data(), e.data.size());
+                    int32_t& stamp = *reinterpret_cast<int32_t*>(retimed + 4);
+                    int behind = (std::max)(0, (std::min)(120, static_cast<int>(e.half * 2) - stamp));
+                    stamp = (frame + 2) / 2 * 2 - behind;
+                    *reinterpret_cast<void**>(state + 0x40) = retimed;
+                }
                 ++g_filmPlayed[e.stream];
                 if (!Deliver(reinterpret_cast<ReceiveFn>(fn), slot, state))
                 {

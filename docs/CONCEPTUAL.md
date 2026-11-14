@@ -85,6 +85,13 @@ Anything that changes match behaviour needs every player on the same kit, and re
 
 ## Log
 (Newest first: what was tried, what happened.)
+- 2026-11-14: Conceptual 33 test: the film plays (no faults), but some animations, shields in particular, don't show.
+  FireStartReq and FireReq hold the frame the skill started on (int at +4, e.g. frame 95 sent at half-frame 48); the
+  receivers queue them in the player's ring, which starts them at that frame. PlayerPos was already moved to the battle's
+  clock (state+0x20), these weren't, so skills ran early or late against the movement. Conceptual 34 re-times them: as
+  far behind this battle's frame as they were behind the sender's (capped at 120 frames). If shields still don't show,
+  next suspects: whether they come through another stream, and the opening FireReqs with no FireStartReq (ids 100,
+  120, 140).
 - 2026-11-14: Conceptual 32 test: players stood still, two shared a spawn, the others were Guard. Causes:
   - The film reader had a sequenced stream's u32 number BEFORE its data; the game sends it AFTER (Condition's and
     DmgEffect's trailing u32 counts 0, 1, 2...; read that way, Condition names the sender's own slot and DmgEffect the
