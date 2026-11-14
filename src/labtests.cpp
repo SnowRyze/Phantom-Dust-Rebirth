@@ -188,7 +188,10 @@ namespace pdnet::labtests
 
         void UpdateDeadCamera()
         {
-            bool down = LocalDown();
+            // Only while the battle runs (match state 6): at its end the game moves on to its results (states 12, 9, 10, 11), and
+            // the dead camera stayed on over them until the next match (2026-11-13).
+            bool fighting = Var<int32_t>(0x1404bc950) == 6;
+            bool down = fighting && LocalDown();
             if (down != g_deadOn)
             {
                 g_deadOn = down;
@@ -196,7 +199,7 @@ namespace pdnet::labtests
                 g_deadNext = g_deadPrevious = g_deadFree = false;
                 g_deadTarget = down ? NextFollowable(LocalSlot(), 1) : -1;
                 if (down) Log(L"deadcam: on, following slot %d", g_deadTarget);
-                else Log(L"deadcam: off (back in the fight)");
+                else Log(L"deadcam: off (%s)", fighting ? L"back in the fight" : L"the battle is over");
                 if (down && g_deadTarget < 0) StartFreeCam();
             }
             if (!g_deadOn) return;

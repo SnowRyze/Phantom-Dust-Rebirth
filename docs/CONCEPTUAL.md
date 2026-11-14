@@ -85,6 +85,8 @@ Anything that changes match behaviour needs every player on the same kit, and re
 
 ## Log
 (Newest first: what was tried, what happened.)
+- 2026-11-14: the dead camera now runs only while the battle does (match state 6); it stayed on over the results screens
+  (states 12, 9, 10, 11) until the next match. Log: deadcam: off (the battle is over). Not yet tried in the game.
 - 2026-11-14: the follow camera sat too close (the user). Its distance was the eye's offset along the facing only, which shrank
   whenever the camera looked at a target off to one side. Now the full horizontal distance, averaged, from frames where the
   camera is behind the player along its facing (log: follow camera shape). Not yet tried in the game.
