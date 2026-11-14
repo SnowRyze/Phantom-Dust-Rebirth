@@ -85,6 +85,17 @@ Anything that changes match behaviour needs every player on the same kit, and re
 
 ## Log
 (Newest first: what was tried, what happened.)
+- 2026-11-14: Theatre film controls, from the user's Halo 3 film-controls card, each with a key (Conceptual 32):
+  A / Space play-pause; RT (light pull slow motion x0.25, full pull fast forward x4) or Z / C held; Y / V flying cam or
+  player cam; B / H HUD; X / F1 the controls overlay; D-pad / Q E switch players; left stick / WASD move; right stick /
+  arrows look (orbit in player cam, R3 / T resets); RB LB / R F up and down; LT / Shift thrust; L3 / Ctrl held pan.
+  Time control: the game's per-frame step FUN_1401c7630 (called at 0x1401c865a, from pdProcessManager's loop) runs every
+  task group's update with FUN_1401cbd40, the world groups (1..0x1f) only when DAT_140530034 & 0x20001 is 0 (bit 0 = the
+  game's own pause). Draws (FUN_1401cbcd0), and so the camera, run either way. HookedStep sets bit 0 for the step while
+  paused, and on some frames for slow motion. For fast forward it runs the step several times a frame. The film is fed
+  per step from a film clock that runs at the same rate (g_filmClock), not wall time. The overlay is drawn in the HUD
+  hook with the nametag text call (FUN_1402477e0) at about x 24, y 300; it shows the time, PAUSED / SLOW MOTION / FAST
+  FORWARD, the camera and the watched player. Not tested yet.
 - 2026-11-14: Conceptual 30 test: the film decks loaded (both sides played with the film's skills), but a 3-player film
   showed only 2 players, and playback stopped 0.2 s in when Condition (stream 14) faulted. Its data names the target
   player (byte 2), here film slot 2, which didn't exist in the 2-player battle. Conceptual 31: every film player keeps

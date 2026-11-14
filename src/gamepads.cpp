@@ -301,6 +301,29 @@ namespace pdnet
         return leftX != 0 || leftY != 0 || rightX != 0 || rightY != 0;
     }
 
+    void PadTriggers(float& left, float& right)
+    {
+        left = right = 0;
+        if (PadFactory::g_osFactory)
+        {
+            try
+            {
+                for (const Gamepad& pad : PadFactory::g_osFactory.as<IGamepadStatics>().Gamepads())
+                {
+                    GamepadReading r = pad.GetCurrentReading();
+                    left = (std::max)(left, static_cast<float>(r.LeftTrigger));
+                    right = (std::max)(right, static_cast<float>(r.RightTrigger));
+                }
+            }
+            catch (...) {}
+        }
+        for (int slot = 0; slot < pads::kMaxPads; ++slot)
+        {
+            pads::Pad p{};
+            if (ReadPad(slot, p)) { left = (std::max)(left, p.leftTrigger); right = (std::max)(right, p.rightTrigger); }
+        }
+    }
+
     bool KeysHeld(uint8_t* keys)
     {
         static pads::Shared* shared = MapShared();

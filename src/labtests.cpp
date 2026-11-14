@@ -105,6 +105,20 @@ namespace pdnet::labtests
         // up / down (right stick, or Q E and R F); a click of the right stick (or C) puts it back behind them.
         float g_orbitYaw = 0, g_orbitPitch = 0;
         ULONGLONG g_orbitLast = 0;
+
+        // Theatre film controls (the user's Halo 3 film-controls card, 2026-11-14), each with a key:
+        //   A / Space          play / pause              RT / Z (hold) C (hold)  slow motion / fast forward
+        //   Y / V              flying cam / player cam   B / H                   hide / show HUD
+        //   X / F1             hide / show the controls  D-pad / Q E             switch players (player cam)
+        //   left stick / WASD  move (flying cam)         right stick / arrows    look, or orbit (player cam; R3 / T resets)
+        //   RB LB / R F        up / down (flying cam)    LT / Shift              thrust (flying cam)
+        //   L3 / Ctrl (hold)   pan: the stick's forward / back moves up / down (flying cam)
+        // Time: the game's update step (HookedStep) is skipped while paused, run on some frames only in slow motion and run
+        // several times a frame fast forwarding; the film clock (g_filmClock, ms) runs at the same rate.
+        bool g_filmPaused = false, g_hudHidden = false, g_controlsShown = true;
+        float g_filmRate = 1.0f, g_slowAccumulator = 0;
+        double g_filmClock = 0;
+        bool g_stepHooked = false;
         ULONGLONG g_freeLast = 0;
         Vec g_lastEye{}, g_lastLook{};
         bool g_haveLast = false;
@@ -191,20 +205,41 @@ namespace pdnet::labtests
             if (AnyPadHolds(0x800)) up += 1;  // RB
             if (AnyPadHolds(0x400)) up -= 1;  // LB
             uint8_t keys[256];
-            if (KeysHeld(keys))
+            bool haveKeys = KeysHeld(keys);
+            float thrust = 1.0f;
+            bool pan = false;
+            if (g_filmShown)
+            {
+                float lt = 0, rt = 0;
+                PadTriggers(lt, rt);
+                pan = AnyPadHolds(0x1000); // L3
+                if (lt > 0.2f) thrust = 1.0f + 2.0f * lt;
+                if (haveKeys)
+                {
+                    if (keys[VK_RIGHT]) rx += 1;
+                    if (keys[VK_LEFT]) rx -= 1;
+                    if (keys[VK_UP]) ry += 1;
+                    if (keys[VK_DOWN]) ry -= 1;
+                    if (keys[VK_SHIFT] || keys[VK_LSHIFT]) thrust = 3.0f;
+                    if (keys[VK_CONTROL] || keys[VK_LCONTROL]) pan = true;
+                }
+            }
+            if (haveKeys)
             {
                 if (keys['W']) ly += 1;
                 if (keys['S']) ly -= 1;
                 if (keys['D']) lx += 1;
                 if (keys['A']) lx -= 1;
-                if (keys['E']) rx += 1;
-                if (keys['Q']) rx -= 1;
+                if (!g_filmShown && keys['E']) rx += 1; // in a film, Q / E switch players and the arrows look
+                if (!g_filmShown && keys['Q']) rx -= 1;
                 if (keys['R']) up += 1;
                 if (keys['F']) up -= 1;
             }
             auto dead = [](float v) { return std::fabs(v) < 0.2f ? 0.0f : v; };
             lx = dead(lx); ly = dead(ly); rx = dead(rx); ry = dead(ry);
-            constexpr float kSpeed = 150.0f, kTurn = 2.0f;
+            if (pan) { up += ly; ly = 0; } // pan: forward / back moves up / down
+            float kSpeed = 150.0f * thrust;
+            constexpr float kTurn = 2.0f;
             g_freeYaw += rx * kTurn * dt;
             g_freePitch = (std::max)(-1.4f, (std::min)(1.4f, g_freePitch + ry * kTurn * dt));
             Vec forward = FreeForward(), right = { std::cos(g_freeYaw), 0, -std::sin(g_freeYaw) };
@@ -224,11 +259,22 @@ namespace pdnet::labtests
             bool reset = AnyPadHolds(0x2000); // right stick click
             if (KeysHeld(keys))
             {
-                if (keys['E']) rx += 1;
-                if (keys['Q']) rx -= 1;
-                if (keys['R']) ry += 1;
-                if (keys['F']) ry -= 1;
-                reset = reset || keys['C'];
+                if (g_filmShown)
+                {
+                    if (keys[VK_RIGHT]) rx += 1;
+                    if (keys[VK_LEFT]) rx -= 1;
+                    if (keys[VK_UP]) ry += 1;
+                    if (keys[VK_DOWN]) ry -= 1;
+                    reset = reset || keys['T'];
+                }
+                else
+                {
+                    if (keys['E']) rx += 1;
+                    if (keys['Q']) rx -= 1;
+                    if (keys['R']) ry += 1;
+                    if (keys['F']) ry -= 1;
+                    reset = reset || keys['C'];
+                }
             }
             if (reset) { g_orbitYaw = g_orbitPitch = 0; return; }
             auto dead = [](float v) { return std::fabs(v) < 0.2f ? 0.0f : v; };
@@ -386,7 +432,7 @@ namespace pdnet::labtests
             }
         }
 
-        void HookedHudDraw(int64_t hud)
+        void GameHud(int64_t hud)
         {
             int local = LocalSlot();
             bool following = g_deadOn && !g_freeCam && g_deadTarget >= 0 && PlayerObject(g_deadTarget);
@@ -430,6 +476,49 @@ namespace pdnet::labtests
                 for (int i = 0; i < 4; ++i) Field<int32_t>(record, 0x384 + i * 0x50) = owners[i];
         }
 
+        // Text on the battle screen, as the nametags draw it (about 640 x 460, from the top left).
+        void ScreenText(int x, int y, const char* text, uint32_t colour)
+        {
+            auto colours = reinterpret_cast<uint32_t*>(At(0x14054c9b0));
+            for (int i = 0; i < 4; ++i) colours[i] = colour;
+            reinterpret_cast<void (*)(int, int, const char*, int)>(At(0x1402477e0))(x, y, text, 0);
+            reinterpret_cast<void (*)()>(At(0x14028caa0))();
+            for (int i = 0; i < 4; ++i) colours[i] = 0xffffffff;
+        }
+
+        void DrawFilmControls()
+        {
+            if (!g_controlsShown) return;
+            auto clock = [](double ms, char* out, size_t n) { int s = static_cast<int>(ms / 1000); sprintf_s(out, n, "%d:%02d", s / 60, s % 60); };
+            char now[16], length[16], line[200];
+            clock(g_filmClock, now, sizeof(now));
+            clock(g_filmEvents.empty() ? 0.0 : static_cast<double>(g_filmEvents.back().ms - g_filmBase), length, sizeof(length));
+            const char* speed = g_filmPaused ? "PAUSED" : g_filmRate < 0.99f ? "SLOW MOTION" : g_filmRate > 1.01f ? "FAST FORWARD" : "PLAYING";
+            const char* camera = !g_deadOn ? "" : g_freeCam ? "Flying cam" : "Player cam";
+            char who[80] = "";
+            if (g_deadOn && !g_freeCam && g_deadTarget >= 0)
+                sprintf_s(who, ": %.64s", reinterpret_cast<const char*>(At(0x1404bca30) + g_deadTarget * 0x41));
+            sprintf_s(line, "FILM %s / %s   %s   %s%s", now, length, speed, camera, who);
+            int x = 24, y = 300;
+            ScreenText(x, y, line, 0xffffd060);
+            static const char* kLines[] = {
+                "A / Space: play / pause      RT / Z C (hold): slow / fast",
+                "Y / V: flying / player cam   B / H: HUD    X / F1: controls",
+                "D-pad / Q E: switch players  Right stick / arrows: look",
+                "Left stick / WASD: move      RB LB / R F: up / down",
+                "LT / Shift: thrust           L3 / Ctrl (hold): pan",
+            };
+            for (const char* text : kLines) ScreenText(x, y += 14, text, 0xffffffff);
+        }
+
+        void HookedHudDraw(int64_t hud)
+        {
+            if (!g_filmShown) { GameHud(hud); return; }
+            if (!g_hudHidden) GameHud(hud);
+            __try { DrawFilmControls(); }
+            __except (EXCEPTION_EXECUTE_HANDLER) {}
+        }
+
         bool HookHud()
         {
             auto entry = reinterpret_cast<HudDrawFn*>(At(0x14047b8f0));
@@ -463,9 +552,13 @@ namespace pdnet::labtests
                     bool deadActive = g_deadOn;
                     bool haveDeadKeys = deadActive && KeysHeld(keys);
                     bool viewHeld = AnyPadHolds(0x2);
+                    bool film = g_filmShown;
                     for (auto& d : dead)
                     {
-                        bool now = deadActive && ((!viewHeld && AnyPadHolds(d.button)) || (haveDeadKeys && keys[d.key]));
+                        // In a film the arrows look around: Q / E switch players, V (or Y) switches cameras.
+                        int key = !film ? d.key : d.press == &g_deadNext ? 'E' : d.press == &g_deadPrevious ? 'Q' : 'V';
+                        bool pad = AnyPadHolds(d.button) || (film && d.press == &g_deadFree && AnyPadHolds(0x20)); // Y
+                        bool now = deadActive && ((!viewHeld && pad) || (haveDeadKeys && keys[key]));
                         if (now && !d.held) *d.press = true;
                         d.held = now;
                     }
@@ -872,6 +965,11 @@ namespace pdnet::labtests
             g_filmAt = 0;
             g_filmBase = g_filmEvents.empty() ? 0 : g_filmEvents.front().ms;
             g_filmStart = GetTickCount64();
+            g_filmClock = 0;
+            g_filmPaused = g_hudHidden = false;
+            g_controlsShown = true;
+            g_filmRate = 1.0f;
+            g_slowAccumulator = 0;
             memset(g_filmSkipped, 0, sizeof(g_filmSkipped));
             memset(g_filmPlayed, 0, sizeof(g_filmPlayed));
             for (auto& slot : g_filmLast) for (LastPlayed& l : slot) l = LastPlayed{};
@@ -888,7 +986,7 @@ namespace pdnet::labtests
         void FilmFrame()
         {
             if (!g_filmPlaying) return;
-            uint64_t elapsed = GetTickCount64() - g_filmStart;
+            uint64_t elapsed = g_stepHooked ? static_cast<uint64_t>(g_filmClock) : GetTickCount64() - g_filmStart;
             int frame = FrameNow();
             while (g_filmAt < g_filmEvents.size() && g_filmEvents[g_filmAt].ms - g_filmBase <= elapsed)
             {
@@ -937,6 +1035,74 @@ namespace pdnet::labtests
                 Log(L"theatre: film finished: skills started %u, fired %u, actions %u, hits %u, damage effects %u; %u records skipped",
                     g_filmPlayed[2], g_filmPlayed[3], g_filmPlayed[4], g_filmPlayed[24] + g_filmPlayed[25], g_filmPlayed[20], skipped);
             }
+        }
+
+        // The film's presses, once a frame on the game's thread: edges of A / Space (pause), B / H (HUD), X / F1 (controls);
+        // the speed from RT (a light pull: slow motion, a full pull: fast forward) or Z / C held.
+        void FilmPresses()
+        {
+            static bool held[3] = {};
+            uint8_t keys[256];
+            bool haveKeys = KeysHeld(keys);
+            bool now[3] = {
+                AnyPadHolds(0x4) || (haveKeys && keys[VK_SPACE]),            // A
+                AnyPadHolds(0x8) || (haveKeys && keys['H']),                 // B
+                AnyPadHolds(0x10) || (haveKeys && keys[VK_F1]),              // X
+            };
+            if (now[0] && !held[0]) { g_filmPaused = !g_filmPaused; Log(L"theatre: %s", g_filmPaused ? L"paused" : L"playing"); }
+            if (now[1] && !held[1]) g_hudHidden = !g_hudHidden;
+            if (now[2] && !held[2]) g_controlsShown = !g_controlsShown;
+            for (int i = 0; i < 3; ++i) held[i] = now[i];
+            float lt = 0, rt = 0;
+            PadTriggers(lt, rt);
+            float rate = 1.0f;
+            if (rt > 0.9f || (haveKeys && keys['C'])) rate = 4.0f;
+            else if (rt > 0.15f || (haveKeys && keys['Z'])) rate = 0.25f;
+            if (rate != g_filmRate) Log(L"theatre: speed x%.2f", rate);
+            g_filmRate = rate;
+        }
+
+        // The game's per-frame update step (FUN_1401c7630, called at 0x1401c865a): the task groups' updates run only when
+        // DAT_140530034 & 0x20001 is 0 (bit 0: the game's own pause); the draws, and with them the camera, run either way.
+        using StepFn = void (*)(int64_t);
+        void HookedStep(int64_t game)
+        {
+            auto step = reinterpret_cast<StepFn>(At(0x1401c7630));
+            static LARGE_INTEGER frequency{}, last{};
+            if (!frequency.QuadPart) QueryPerformanceFrequency(&frequency);
+            LARGE_INTEGER t;
+            QueryPerformanceCounter(&t);
+            double ms = last.QuadPart ? (t.QuadPart - last.QuadPart) * 1000.0 / frequency.QuadPart : 0.0;
+            last = t;
+            if (!g_filmShown) { step(game); return; }
+            ms = (std::min)(ms, 100.0);
+            float rate = g_filmPaused ? 0.0f : g_filmRate;
+            auto& flags = Var<uint32_t>(0x140530034);
+            if (rate > 1.5f)
+            {
+                int times = static_cast<int>(rate + 0.5f);
+                for (int i = 0; i < times; ++i)
+                {
+                    g_filmClock += ms * rate / times;
+                    FilmFrame();
+                    step(game);
+                }
+                return;
+            }
+            g_filmClock += ms * rate;
+            FilmFrame();
+            bool run = true;
+            if (rate < 0.99f)
+            {
+                g_slowAccumulator += rate;
+                run = g_slowAccumulator >= 1.0f;
+                if (run) g_slowAccumulator -= 1.0f;
+            }
+            if (run) { step(game); return; }
+            bool had = (flags & 1) != 0;
+            flags |= 1; // this frame: no world update
+            step(game);
+            if (!had) flags &= ~1u;
         }
 
         void EndOfBattle()
@@ -1016,7 +1182,8 @@ namespace pdnet::labtests
             }
             if (!g_playing) UpdateCameraOffset(); // playing back, this player's own camera doesn't run
             ReportFollowed();
-            FilmFrame();
+            if (g_filmShown) FilmPresses();
+            if (!g_stepHooked) FilmFrame();
             UpdateDeadCamera();
 
             int follow = g_deadOn ? (g_freeCam ? -1 : g_deadTarget) : g_viewSlot >= 0 ? g_viewSlot : g_playing ? LocalSlot() : -1;
@@ -1115,6 +1282,8 @@ namespace pdnet::labtests
             WatchInput();
             Log(L"labtest: ready: in a Test Arsenal battle, F6 or View + D-pad Left: camera, F7 or View + D-pad Up: record, F8 or View + D-pad Right: play back");
             Log(L"deadcam: ready (HUD %s); in Test Arsenal, F9 or View + D-pad Down pretends to be down", HookHud() ? L"follows the watched player" : L"NOT hooked");
+            g_stepHooked = gamepatches::HookCall(0x1401c865a, 0x1401c7630, reinterpret_cast<void*>(&HookedStep));
+            Log(L"theatre: film controls %s", g_stepHooked ? L"ready (pause, slow motion, fast forward)" : L"without time control (update step NOT hooked)");
         }
         else
             Log(L"labtest: not installed - the game code is not what this pdnet expects");
