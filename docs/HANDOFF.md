@@ -90,7 +90,6 @@ Open problems:
 - Story progress not saved (reported 2026-11-13, paused by the user): no log yet; the developer PC's own save is fine. The log's "GameSave: wrote ..." lines show each save.
 - Risryn can't join anyone: UDP to their own address doesn't arrive (self-test, 141/143); Norton's firewall suspected.
 - Norton blocks Setup.bat: needs the detection name.
-- Links to players from earlier lobbies stay open and get reconnected every minute (seen since Experimental 69).
 
 Ideas, not planned (notes in the change log and reference notes):
 - Xbox save import on Rebirth's first start (paused by the user, 2026-11-13). The import code is still in gamesave.cpp (ImportCloudSave: Xbox service for the Store version, the local wgs cache for unpacked copies) but nothing calls it since the Community button replaced IMPORT XBOX SAVE. Suggested: whole save on the first start with no pdnet saves, plus an Options item; arsenals-only would need new merging code. Never tested against a real Xbox save. kit\pdnet\README.txt still mentions the old button.
@@ -103,6 +102,8 @@ Ideas, not planned (notes in the change log and reference notes):
 # Change log (newest first)
 
 ## November 2026
+
+Confirmed by the user (2026-11-14): links to players from earlier lobbies no longer reconnect every minute (open since Experimental 69; most likely ended by the 139/140 relay remake changes).
 
 Confirmed by the user (2026-11-14): the skill preview works for toaf (no story progress), the last open preview problem; likely the Select / pause fix (157) and the hang safety net (154).
 
