@@ -3559,7 +3559,7 @@ namespace pdnet::gamepatches
             g_pushMenu = push;
             Log(L"gamepatch: lobby Arsenal editor ready (the lobby's invite button opens it)");
             RenameStrings(); // again whenever a menu opens, in case the strings were loaded later
-            if (GetConfig().menuDebug) MenuDebug();
+            // (menu_debug: MenuDebug runs at the end of Apply, after every other command wrap.)
         }
     }
 
@@ -5017,6 +5017,10 @@ namespace pdnet::gamepatches
             SignalPastTitle(); // pdlaunch's start-up volume lasts until then
             bool arsenal = GetConfig().lobbyArsenalEditor; // the Arsenal Lab button for clients too
             if (GetConfig().lobbyGamertagOption || micLabel || arsenal) LobbyScriptPatches(GetConfig().lobbyGamertagOption, micLabel, arsenal);
+            // Last: its logging stubs replace the command tables' entries, and every WrapCommand above checks an entry
+            // is still the game's own function (run earlier, menu_debug=on switched off the menu renames, Online
+            // Settings, the Lab rows and more; 2026-11-14).
+            if (GetConfig().menuDebug) MenuDebug();
         });
     }
 
