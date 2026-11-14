@@ -1118,7 +1118,9 @@ namespace pdnet::gamepatches
         {
             static std::atomic<int> logged{ 0 };
             uint32_t table = id >> 16, index = id & 0xffff;
-            if (table > 1 || index > 255 || CurrentMenu(MenuManager()) != kLobbyMenu || logged > 5000) return;
+            // The lobby, and (2026-11-14) the Lab's screens: what decides the split-screen "Player 2" warning there.
+            int menu = CurrentMenu(MenuManager());
+            if (table > 2 || index > 255 || (menu != kLobbyMenu && menu != kLabMenu && menu != kStockMenu && menu != kEditorMenu) || logged > 5000) return;
             int32_t arg = 0;
             if (args && !IsBadReadPtr(args, 4)) arg = args[0];
             // Each command + argument + result once: some are called every frame with alternating arguments.
@@ -1129,13 +1131,14 @@ namespace pdnet::gamepatches
                 if (!seen.emplace(id, arg, result).second) return;
             }
             ++logged;
-            Log(L"menu-debug: %s cmd %u(arg %d) -> %lld", table ? L"session" : L"menu", index, arg, result);
+            Log(L"menu-debug: menu %d: %s cmd %u(arg %d) -> %lld", menu, table == 2 ? L"g5" : table ? L"session" : L"menu", index, arg, result);
         }
 
         void MenuDebug()
         {
-            const struct { uint64_t address; int count; } tables[2] = { { 0x1403eefe0, 136 }, { 0x1403f1150, 196 } };
-            for (uint32_t t = 0; t < 2; ++t)
+            // Group 5 (0x1403f1d50, 146 entries; g5 #112 / #119 are the Lab's) added 2026-11-14.
+            const struct { uint64_t address; int count; } tables[3] = { { 0x1403eefe0, 136 }, { 0x1403f1150, 196 }, { 0x1403f1d50, 146 } };
+            for (uint32_t t = 0; t < 3; ++t)
             {
                 int count = tables[t].count;
                 auto stubs = static_cast<uint8_t*>(VirtualAlloc(nullptr, count * 64, MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE));
@@ -1166,7 +1169,7 @@ namespace pdnet::gamepatches
                 VirtualProtect(table, count * 8, old, &old);
                 FlushInstructionCache(GetCurrentProcess(), stubs, count * 64);
             }
-            Log(L"gamepatch: menu_debug - logging the lobby script's commands");
+            Log(L"gamepatch: menu_debug - logging the script commands of the lobby and the Lab's screens");
         }
 
         // Lobby Gamertag option. livelobby.ssb greys out Options > Gamertag (and Kick Player) unless its
