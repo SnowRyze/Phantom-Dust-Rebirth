@@ -124,6 +124,10 @@ namespace pdnet::labtests
         uint32_t g_filmBase = 0;
         int g_filmSlot[256];
         uint32_t g_filmSkipped[26]{};
+        uint32_t g_filmPlayed[26]{};
+        // Sequenced streams are resent until acknowledged (and sent to each peer), so a film holds copies: each film slot's
+        // stream is played only when its sequence number moves on, as the game's own receiver would.
+        int64_t g_filmLastNumber[4][26]{};
 
         bool LocalDown()
         {
@@ -417,7 +421,7 @@ namespace pdnet::labtests
             }
             auto& slot = Var<int32_t>(0x1404bbe00);
             slot = g_deadTarget;
-            HudWithTags(hud, g_deadTarget, g_deadTarget);
+            HudWithTags(hud, g_deadTarget, g_filmShown ? -1 : g_deadTarget); // a film's review tags the watched player too
             slot = local;
             lockOn = savedLock;
             if (remote)
@@ -800,6 +804,12 @@ namespace pdnet::labtests
 
         using ReceiveFn = uint64_t (*)(uint32_t slot, void* state);
 
+        // The 26 streams' receive functions, as the stream table at 0x1403fb4d0 holds them for this exe (checked before use).
+        constexpr uint64_t kFilmReceivers[26] = { 0x14027c4f0, 0x14027c610, 0x14027c660, 0x14027c6a0, 0x14027c6e0, 0x14027c760,
+            0x14027c7e0, 0x14027c810, 0x14027c8b0, 0x14027c8d0, 0x14027c930, 0x14027c950, 0x14027c9f0, 0x14027ca30, 0x14027cb00,
+            0x14027cbf0, 0x14027cc10, 0x14027cca0, 0x14027cdc0, 0x14027ce50, 0x14027ce90, 0x14027cee0, 0x14027cf80, 0x14027cf90,
+            0x14027cfd0, 0x14027d040 };
+
         // SEH only around the game's own receive functions: a fault ends the test with a log line.
         bool Deliver(ReceiveFn receive, int slot, void* state)
         {
@@ -854,6 +864,8 @@ namespace pdnet::labtests
             g_filmBase = g_filmEvents.empty() ? 0 : g_filmEvents.front().ms;
             g_filmStart = GetTickCount64();
             memset(g_filmSkipped, 0, sizeof(g_filmSkipped));
+            memset(g_filmPlayed, 0, sizeof(g_filmPlayed));
+            for (auto& slot : g_filmLastNumber) for (int64_t& n : slot) n = -1;
             g_filmPlaying = g_filmShown = true;
             Log(L"theatre: playing %s: %zu stream records over %.1f min, film slots to battle slots %d %d %d %d", g_filmInfo.file.c_str(), g_filmEvents.size(),
                 g_filmEvents.empty() ? 0.0 : (g_filmEvents.back().ms - g_filmBase) / 60000.0, g_filmSlot[0], g_filmSlot[1], g_filmSlot[2], g_filmSlot[3]);
@@ -869,12 +881,28 @@ namespace pdnet::labtests
                 film::Event& e = g_filmEvents[g_filmAt++];
                 int slot = g_filmSlot[e.slot];
                 if (slot < 0 || !PlayerObject(slot)) continue;
-                if (e.stream > 1) { ++g_filmSkipped[e.stream]; continue; }
+                if (e.stream >= 26) continue;
+                // ReadyStart (22) is the pre-battle handshake: this battle has already started.
+                if (e.stream == 22) { ++g_filmSkipped[e.stream]; continue; }
+                if (e.stream >= 2)
+                {
+                    int64_t& last = g_filmLastNumber[e.slot & 3][e.stream];
+                    if (last >= 0 && static_cast<int64_t>(e.number) <= last) continue; // a resent copy
+                    last = e.number;
+                }
+                // The receive function from the game's stream table (0x28 bytes each, receive at +0x18): all take (slot,
+                // state) and read the data at state+0x40; PlayerPos also reads frame/2 at state+0x20.
+                uint64_t fn = *reinterpret_cast<const uint64_t*>(At(0x1403fb4d0 + e.stream * 0x28 + 0x18));
+                if (fn != reinterpret_cast<uint64_t>(At(kFilmReceivers[e.stream])))
+                {
+                    ++g_filmSkipped[e.stream];
+                    continue;
+                }
                 alignas(16) uint8_t state[0x48]{};
                 *reinterpret_cast<int32_t*>(state + 0x20) = (frame + 2) / 2;
                 *reinterpret_cast<void**>(state + 0x40) = e.data.data();
-                auto receive = reinterpret_cast<ReceiveFn>(At(e.stream == 0 ? 0x14027c4f0 : 0x14027c610));
-                if (!Deliver(receive, slot, state))
+                ++g_filmPlayed[e.stream];
+                if (!Deliver(reinterpret_cast<ReceiveFn>(fn), slot, state))
                 {
                     Log(L"theatre: the game's receive code faulted on stream %d - playback stopped", e.stream);
                     g_filmPlaying = false;
@@ -886,8 +914,8 @@ namespace pdnet::labtests
                 g_filmPlaying = false;
                 uint32_t skipped = 0;
                 for (uint32_t n : g_filmSkipped) skipped += n;
-                Log(L"theatre: film finished (%u records of other streams not played yet: skills %u, hits %u)", skipped,
-                    g_filmSkipped[2] + g_filmSkipped[3], g_filmSkipped[24] + g_filmSkipped[25]);
+                Log(L"theatre: film finished: skills started %u, fired %u, actions %u, hits %u, damage effects %u; %u records skipped",
+                    g_filmPlayed[2], g_filmPlayed[3], g_filmPlayed[4], g_filmPlayed[24] + g_filmPlayed[25], g_filmPlayed[20], skipped);
             }
         }
 

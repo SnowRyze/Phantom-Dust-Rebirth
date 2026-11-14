@@ -85,6 +85,13 @@ Anything that changes match behaviour needs every player on the same kit, and re
 
 ## Log
 (Newest first: what was tried, what happened.)
+- 2026-11-14: Theatre playback plays skills. The first test (Conceptual 28) moved the players but showed no skill
+  animations or sounds: only PlayerPos and CardKind were fed. Now every stream goes to its own receive function, read from
+  the stream table (0x1403fb4d0 + i*0x28 + 0x18) and checked against the known addresses; all take (slot, state) with the
+  data at state+0x40. Sequenced streams are resent until acknowledged, so each film slot's stream plays only when its
+  number moves on. ReadyStart (22) is skipped: the battle has already started. The end log line counts skills started,
+  fired, actions, hits and damage effects. Also: in film review the watched player gets a nametag too.
+  Known limits: slot numbers inside the data (hit targets, steals) assume the film's slots match the battle's.
 - 2026-11-14: Theatre playback, first version. A on a film loads it (film::Load decodes it, bounds-checked) and starts a
   Test Arsenal battle at once (no picks): the film's stage and layout, its characters when recorded, this player's current
   arsenal on both sides. At the battle's start every player is driven by received data and the film's PlayerPos and
