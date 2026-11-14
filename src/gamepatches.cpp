@@ -2045,7 +2045,7 @@ namespace pdnet::gamepatches
                             {
                                 std::lock_guard guard(g_typedLock);
                                 if (ch == 8) { if (!g_typedName.empty()) g_typedName.pop_back(); }
-                                else if (ch >= 32 && ch < 0xFFFF && g_typedName.size() < 32) g_typedName += static_cast<wchar_t>(ch);
+                                else if (ch >= 32 && ch < 0xFFFF && g_typedName.size() < 16) g_typedName += static_cast<wchar_t>(ch);
                             }
                             RefreshSettingRows();
                         });

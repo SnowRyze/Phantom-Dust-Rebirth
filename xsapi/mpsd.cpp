@@ -111,7 +111,12 @@ namespace pdnet::mpsd
             for (auto const& p : o.GetNamedObject(L"numbers", json::JsonObject{}))
                 if (p.Value().ValueType() == json::JsonValueType::Number) h.numbers[std::wstring{ p.Key() }] = p.Value().GetNumber();
             for (auto const& p : o.GetNamedObject(L"strings", json::JsonObject{}))
-                if (p.Value().ValueType() == json::JsonValueType::String) h.strings[std::wstring{ p.Key() }] = p.Value().GetString();
+                if (p.Value().ValueType() == json::JsonValueType::String)
+                {
+                    std::wstring value{ p.Value().GetString() };
+                    if (p.Key() == L"gamename") value = value.substr(0, 16); // the host's name in the Lobby Browser (16 at most, as above)
+                    h.strings[std::wstring{ p.Key() }] = value;
+                }
             h.created = FromTicks(_wtoi64(o.GetNamedString(L"created", L"0").c_str()));
             return h;
         }
@@ -245,7 +250,9 @@ namespace pdnet::mpsd
                 m.xuid = U16(Attr(ma, "PD_XUID"));
                 if (m.xuid.empty()) continue; // joined, attributes not set yet
                 if (Attr(ma, "PD_TOOL") == "1") continue; // lobbytool (a test client, no game): never a session member, or joining players wait on it
-                m.gamertag = U16(Attr(ma, "PD_NAME"));
+                // Other players' names: at most 16 characters (longer ones can crash the game; a player on an older
+                // kit can still send one, 2026-11-14).
+                m.gamertag = U16(Attr(ma, "PD_NAME")).substr(0, 16);
                 m.deviceAddressBase64 = U16(Attr(ma, "PD_ADDR"));
                 m.customConstantsJson = U16(lobbies::Joined(ma, "PD_MCONST"));
                 m.customProperties = ParseStringMap(lobbies::Joined(ma, "PD_MPROPS"));

@@ -337,13 +337,13 @@ fi
 previous=$previous_name
 tries=0
 while [ -z "$name" ] && [ $tries -lt 3 ]; do
-    prompt="Your player name (what the other players will see, max 32 characters)"
+    prompt="Your player name (what the other players will see, max 16 characters)"
     [ -n "$previous" ] && prompt="$prompt [$previous - press Enter to keep it]"
     name=$(ask "$prompt:")
     [ -z "$name" ] && name=$previous
     tries=$((tries + 1))
 done
-name=$(printf '%s' "${name:-Player}" | tr -d '\r\n=$' | sed 's/^ *//; s/ *$//' | cut -c1-32)
+name=$(printf '%s' "${name:-Player}" | tr -d '\r\n=$' | sed 's/^ *//; s/ *$//' | cut -c1-16)
 
 # --- copy pdnet in --------------------------------------------------------------------------------------------------
 cp -f "$kit/pdnet.dll" "$kit/EOSSDK-Win64-Shipping.dll" "$game/"

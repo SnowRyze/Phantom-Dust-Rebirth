@@ -47,7 +47,7 @@ namespace pdnet
         bool eosTest = false;               // eos_test=on: one-shot Epic Online Services feasibility check (see eostest.h)
         bool eos = true;                    // stay signed in to Epic Online Services (see eos.h)
         bool xboxOff = true;                // pdnet answers every Xbox Live (XSAPI) class itself (see xsapi/)
-        std::wstring displayName = L"Player"; // display_name=: name shown to other players (max 32 characters)
+        std::wstring displayName = L"Player"; // display_name=: name shown to other players (max 16 characters; longer can crash the game)
         std::wstring discordWebhook;        // discord_webhook=<URL>: announce lobbies this PC hosts in a Discord channel (see discord.h)
         bool discordLobbyMessages = true;   // discord_lobby_messages=on|off: "opened" / "closed" messages
         bool discordPlayerMessages = true;  // discord_player_messages=on|off: "<name> joined / left" (and "full") messages

@@ -96,6 +96,8 @@ Ideas, not planned (notes in the change log and reference notes):
 
 ## November 2026
 
+Player names at most 16 characters (2026-11-14, Experimental 171, the user: longer names can crash the game). Was 32. Now 16 in: display_name from pdnet.ini / settings.ini (config.cpp), typing the name in Online Settings, Setup.bat (setup.ps1) and setup-linux.sh (prompts say so too), and on arrival from other players: their lobby name (mpsd.cpp, PD_NAME -> gamertag) and the host's name in the Lobby Browser (the search handle's "gamename" string), so a long name sent by an older kit is cut too. A name already saved longer is cut when it is read.
+
 Confirmed by the user (2026-11-14): lock onto partner and Partner Aim (Modern / Classic, its keyboard key; 103 / 118), and PD Helper modpacks staying loaded through matches (the modpack guard).
 
 Confirmed by the user (2026-11-14): links to players from earlier lobbies no longer reconnect every minute (open since Experimental 69; most likely ended by the 139/140 relay remake changes).
