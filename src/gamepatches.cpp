@@ -3174,10 +3174,31 @@ namespace pdnet::gamepatches
         std::atomic<ULONGLONG> g_menuFrameAt{ 0 };
         std::atomic<DWORD> g_menuFrameThread{ 0 };
 
+        // "Player 2, edits made to the copied arsenal data..." and then "no arsenals" in the lobby's Arsenal Lab
+        // (2026-11-14, the developer PC, after a match, with others in the lobby). Read live: menu variable 2 was 0x200
+        // again with the Lab open, though OpenLobbyArsenalEditor sets it to 0 - something wrote it back before the
+        // Lab's script read it (writers: FUN_140167580, the pause object's mode switch; FUN_1401aefe0, entering a town /
+        // stage area; FUN_140216560; the menu scripts). Experimental 167's guess, g5 #112, was never called with it.
+        // So on every menu frame of the lobby's Lab, before the scripts run, variable 2 is 0; back in the lobby
+        // RestoreLobbyVariable2 gives the lobby its own value as before.
+        void KeepLobbyLabVariable2(int64_t manager)
+        {
+            static bool told = false;
+            // The Lab, View Stock and the editor only: the case screens (30 / 31) read variable 2 for the shop's mode.
+            int menu = CurrentMenu(manager);
+            if (!g_editorFromLobby || (menu != kLabMenu && menu != kStockMenu && menu != kEditorMenu)) { told = false; return; }
+            int32_t& v = MenuVariables()[2];
+            if (v == 0) return;
+            if (!told) Log(L"menu: menu variable 2 became 0x%X in the lobby's Arsenal Lab (menu %d) - 0 again (not split-screen Player 2)", v, CurrentMenu(manager));
+            told = true;
+            v = 0;
+        }
+
         void HookedMenuFrame(int64_t manager)
         {
             g_menuFrameAt = GetTickCount64();
             if (!g_menuFrameThread) { g_menuFrameThread = GetCurrentThreadId(); PreviewWatchdog(); }
+            KeepLobbyLabVariable2(manager);
             g_menuFrame(manager);
             BackButtonTick(manager);
             PreviewTick();
@@ -4441,25 +4462,6 @@ namespace pdnet::gamepatches
             return *reinterpret_cast<int32_t*>(At(0x1404bc950)) == 6 && *reinterpret_cast<uint64_t*>(At(0x1404bc9d8)) != 0;
         }
 
-        // "Player 2, edits made to the copied arsenal data..." in the lobby's Arsenal Lab again (2026-11-14, the
-        // developer PC, Experimental 165, with another player in the lobby). The Laboratory reads menu variable 2 as it
-        // starts and hands it to g5 #112 (0x140217e80), which sets the split-screen "Player 2" flag (bit 16 at
-        // [0x1404bec08] +0xb58). OpenLobbyArsenalEditor sets the variable to 0 before the Lab opens, but the lobby wrote
-        // its own value back (0x200, read live with the warning up) before the Lab's script, loaded a frame later, read
-        // it. So while the Lab is the lobby's, g5 #112 gets 0.
-        SessionCommandFn g_labPlayerFlag = nullptr;
-        int64_t HookedLabPlayerFlag(int32_t* args)
-        {
-            if (args && args[0] != 0 && g_editorFromLobby)
-            {
-                Log(L"menu: the lobby's Arsenal Lab was given menu variable 2 = 0x%X - 0 (not split-screen Player 2)", args[0]);
-                int32_t zero[8] = {};
-                memcpy(zero + 1, args + 1, sizeof(int32_t) * 7);
-                return g_labPlayerFlag(zero);
-            }
-            return g_labPlayerFlag(args);
-        }
-
         int64_t HookedLabPreviewMode(int32_t* args)
         {
             int64_t result = g_labPreviewMode(args);
@@ -4865,9 +4867,7 @@ namespace pdnet::gamepatches
         {
             NoPauseUnderPreview();
             WrapCommand<MenuCommandFn>(0x1403eede0 + 134 * 8, 0x140208300, &HookedPreview, g_preview, L"skill preview");
-            WrapCommand<SessionCommandFn>(0x1403f1d50 + 119 * 8, 0x140217f80, &HookedLabPreviewMode, g_labPreviewMode, L"skill preview in multiplayer");
-            WrapCommand<SessionCommandFn>(0x1403f1d50 + 112 * 8, 0x140217e80, &HookedLabPlayerFlag, g_labPlayerFlag, L"lobby Lab player flag");
-        }
+            WrapCommand<SessionCommandFn>(0x1403f1d50 + 119 * 8, 0x140217f80, &HookedLabPreviewMode, g_labPreviewMode, L"skill preview in multiplayer");        }
     }
 
     void InstallEarlyHooks() { InstallBackButton(); }
