@@ -24,6 +24,7 @@ namespace pdnet::gamepatches
     {
         constexpr uint64_t kGhidraBase = 0x140000000;
 
+        std::atomic<bool> g_theatre{ false }; // the Settings screen (menu 68) is showing the Theatre's film list (Conceptual)
         std::atomic<uint8_t> g_bodyTags{ 0 }; // nametags on dead bodies wanted (the lobby host's setting)
         // What the game's nametag code reads (routines below), kept current by NametagColours: dead bodies keep their
         // tag only in Tag Team, and each other player's tag colour by match slot (ally / enemy, both ARGB twice).
@@ -919,7 +920,18 @@ namespace pdnet::gamepatches
         int HookedPushMenu(int64_t manager, int menu, char force)
         {
             int current = CurrentMenu(manager);
-            if (menu == 68) g_settingsOpenedAt = GetTickCount64();
+            bool theatre = false;
+            if (menu == 40 && current == 36) // Theater (livetrade 40 from livemain 36): the film list, not Trade (Conceptual branch)
+            {
+                menu = 68; // the Settings screen, as the Theatre
+                theatre = true;
+                Log(L"theatre: opened (in place of Trade)");
+            }
+            if (menu == 68)
+            {
+                g_theatre = theatre;
+                g_settingsOpenedAt = GetTickCount64();
+            }
             RenameStrings(); // cheap; covers string tables loaded after start-up
             if (menu != current) Log(L"menu: open %d (from %d)", menu, current);
             if (GetConfig().debugMenu && menu == 5 && current == 8)
@@ -1919,6 +1931,38 @@ namespace pdnet::gamepatches
         // tells which row the panel is for). Changes go to pdnet.ini (SaveSetting) and apply at once where they can.
         constexpr int kSettingsMenu = 68;
         bool InSettings() { return CurrentMenu(MenuManager()) == kSettingsMenu; }
+
+        // Theatre (Conceptual branch only): the multiplayer menu's Theater item (was Trade, livetrade 40) opens this same
+        // screen with the saved films as its rows (film::List), newest first, and each film's details as the row's hint.
+        // A on a film picks it; playback isn't built yet, so that is only logged for now.
+        constexpr int kTradeMenu = 40, kTheatreRows = 10;
+        std::vector<film::Info> g_films;
+        char g_filmRow[kTheatreRows][112];
+        char g_filmHint[kTheatreRows][160];
+        int g_filmRows = 0;
+        const char* kTheatreBar = "\a8#Select \a2#Watch \a580r\a3#Back";
+
+        void RefreshFilmRows()
+        {
+            static const char* kTypes[] = { "Battle Royale", "Tag Team", "One-on-One" };
+            g_films = film::List(kTheatreRows);
+            g_filmRows = g_films.empty() ? 1 : static_cast<int>(g_films.size());
+            if (g_films.empty())
+            {
+                sprintf_s(g_filmRow[0], "\a160wNo films yet\f\a1#\a230c\f\a0#");
+                strcpy_s(g_filmHint[0], "Every match is saved as a film. Play one, then come back.");
+                return;
+            }
+            for (int r = 0; r < g_filmRows; ++r)
+            {
+                const film::Info& f = g_films[r];
+                const char* type = f.gameType >= 0 && f.gameType < 3 ? kTypes[f.gameType] : "Match";
+                char length[24];
+                sprintf_s(length, "%d:%02d", static_cast<int>(f.minutes), static_cast<int>(f.minutes * 60) % 60);
+                sprintf_s(g_filmRow[r], "\a160w%s\f\a1#\a230c%s %s\f\a0#", f.when.empty() ? "Film" : f.when.c_str(), type, length);
+                sprintf_s(g_filmHint[r], "%s on stage %d: %s.", type, f.stage, f.players.empty() ? "players not recorded" : f.players.c_str());
+            }
+        }
         struct Colour { const char* name; uint32_t rgb; };
         constexpr Colour kColours[] = { { "Yellow", 0xFFE600 }, { "Red", 0xFF5A5A }, { "Blue", 0x4FB4FF }, { "Green", 0x5AFF6E },
                                         { "Purple", 0xB46EFF }, { "Orange", 0xFFA03C }, { "Cyan", 0x3CF0FF }, { "Pink", 0xFF78C8 },
@@ -2124,6 +2168,18 @@ namespace pdnet::gamepatches
             int64_t input[2] = { 0, 0 };
             int64_t buttons = reinterpret_cast<InputFn>(At(0x1402168a0))(input); // g1 #37 (0): the buttons, as the script reads them
             int row = args[0] - kFirstOptionRow;
+            if (g_theatre)
+            {
+                static ULONGLONG last = 0;
+                if ((buttons & 0x1010) && row >= 0 && row < static_cast<int>(g_films.size()) && GetTickCount64() - last > 300)
+                {
+                    last = GetTickCount64();
+                    int64_t sound[2] = { 0, 0 };
+                    reinterpret_cast<InputFn>(At(0x140261750))(sound); // the menu's select sound
+                    Log(L"theatre: film %s chosen (%S, %S) - playback isn't built yet", g_films[row].file.c_str(), g_films[row].when.c_str(), g_films[row].players.c_str());
+                }
+                return 0;
+            }
             if (row >= 0 && row < kSettingRows)
             {
                 int64_t sound[2] = { 37, 0 };
@@ -2334,7 +2390,7 @@ namespace pdnet::gamepatches
         int64_t HookedButtons(int64_t* args)
         {
             int64_t buttons = g_buttons(args);
-            if (!InSettings() || (args && args[0] != 0)) return buttons;
+            if (!InSettings() || (args && args[0] != 0) || g_theatre) return buttons;
             static uint64_t last = 0; // the script reads the buttons several times a frame: act once per press
             bool a = (buttons & 0x1010) != 0, b = (buttons & 0x2020) != 0;
             bool fresh = GetTickCount64() - last > 150;
@@ -2363,7 +2419,7 @@ namespace pdnet::gamepatches
         // The button bar (menu command 88 with 2, text): the Options screen's "Change / Back" gets "A Save".
         int64_t HookedButtonBar(int64_t* args)
         {
-            const char* kSave = g_confirmingSave ? kConfirmBar : kNormalBar;
+            const char* kSave = g_theatre ? kTheatreBar : g_confirmingSave ? kConfirmBar : kNormalBar;
             char text[64];
             if (args && args[0] == 1 && CopyString(reinterpret_cast<const char*>(args[1]), text, sizeof(text)) && strcmp(text, "LOADING") == 0 &&
                 CurrentMenu(MenuManager()) == kLobbyMenu && !g_matchLoadingSince)
@@ -2383,6 +2439,17 @@ namespace pdnet::gamepatches
         {
             bool rows = strcmp(added, "\a160wVoice Chat\f\a1#\a230c%s\f\a0#") == 0, hints = strcmp(added, "Set your voice chat status.") == 0;
             if (!rows && !hints) return false;
+            if (g_theatre)
+            {
+                if (rows) RefreshFilmRows();
+                for (int r = 0; r < g_filmRows; ++r)
+                {
+                    int64_t item[8] = { reinterpret_cast<int64_t>(rows ? g_filmRow[r] : g_filmHint[r]) };
+                    g_addItem(item);
+                }
+                if (rows) Log(L"theatre: %d film(s) listed", static_cast<int>(g_films.size()));
+                return true;
+            }
             if (rows)
             {
                 g_settingsSaved = EditableConfig(); // what leaving unsaved goes back to
@@ -2403,6 +2470,9 @@ namespace pdnet::gamepatches
         {
             if (menu != kSettingsMenu) return;
             int texts = RelabelScript(script, kSettingsTexts, std::size(kSettingsTexts)), patched = PatchSettingsScript(script);
+            static constexpr Relabel kToTheatre[] = { { "ONLINE SETTINGS", "THEATRE" } }, kToSettings[] = { { "THEATRE", "ONLINE SETTINGS" } };
+            if (g_theatre) RelabelScript(script, kToTheatre, 1);
+            else RelabelScript(script, kToSettings, 1);
             if (fresh) Log(L"gamepatch: Settings menu (was Xbox Live Options): %d text(s), A button %s", texts, patched ? L"changes settings" : L"left as it is (script not as expected)");
         }
 

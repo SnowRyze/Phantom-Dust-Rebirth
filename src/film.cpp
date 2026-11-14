@@ -270,6 +270,73 @@ namespace pdnet::film
         g_packetBytes += bytes;
     }
 
+    std::vector<Info> List(size_t max)
+    {
+        std::vector<std::wstring> names;
+        WIN32_FIND_DATAW fd;
+        HANDLE find = FindFirstFileW((FilmsDir() + L"\\film-*.pdfilm").c_str(), &fd);
+        if (find != INVALID_HANDLE_VALUE)
+        {
+            do if (fd.nFileSizeLow > 64 || fd.nFileSizeHigh) names.push_back(fd.cFileName); while (FindNextFileW(find, &fd));
+            FindClose(find);
+        }
+        std::sort(names.rbegin(), names.rend()); // newest first: the name starts with the date and time
+        std::vector<Info> films;
+        static const char* kMonths[] = { "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec" };
+        for (const auto& name : names)
+        {
+            if (films.size() >= max) break;
+            if (g_recording && name == g_name) continue; // still being written
+            FILE* f = nullptr;
+            if (_wfopen_s(&f, (FilmsDir() + L"\\" + name).c_str(), L"rb") != 0 || !f) continue;
+            std::vector<uint8_t> d;
+            fseek(f, 0, SEEK_END);
+            long size = ftell(f);
+            fseek(f, 0, SEEK_SET);
+            if (size > 0 && size < 64 * 1024 * 1024) { d.resize(size); d.resize(fread(d.data(), 1, d.size(), f)); }
+            fclose(f);
+            if (d.size() < 30 || memcmp(d.data(), "PDFILM\0\0", 8) != 0) continue;
+            Info info;
+            info.file = name;
+            int mo = 0, day = 0, hh = 0, mm = 0;
+            if (swscanf_s(name.c_str(), L"film-%*4d%2d%2d-%2d%2d", &mo, &day, &hh, &mm) == 4 && mo >= 1 && mo <= 12)
+            {
+                char when[32];
+                sprintf_s(when, "%s %d %02d:%02d", kMonths[mo - 1], day, hh, mm);
+                info.when = when;
+            }
+            size_t o = 30 + *reinterpret_cast<const uint16_t*>(&d[28]);
+            uint32_t lastMs = 0;
+            while (o + 12 <= d.size())
+            {
+                uint8_t type = d[o];
+                uint16_t length = *reinterpret_cast<const uint16_t*>(&d[o + 2]);
+                uint32_t ms = *reinterpret_cast<const uint32_t*>(&d[o + 4]);
+                if (o + 12 + length > d.size()) break;
+                lastMs = ms;
+                const uint8_t* payload = &d[o + 12];
+                if (type == kSnapshot && length >= sizeof(Snapshot))
+                {
+                    Snapshot s;
+                    memcpy(&s, payload, sizeof(s));
+                    info.gameType = s.gameType;
+                    info.stage = s.stage;
+                    for (const SlotInfo& slot : s.slots)
+                    {
+                        if (!slot.present || !slot.name[0]) continue;
+                        if (!info.players.empty()) info.players += ", ";
+                        info.players += std::string(slot.name, strnlen(slot.name, sizeof(slot.name)));
+                    }
+                }
+                else if (type == kIn || type == kOut) ++info.packets;
+                o += 12 + length;
+            }
+            info.minutes = lastMs / 60000.0;
+            films.push_back(std::move(info));
+        }
+        return films;
+    }
+
     void Start()
     {
         static std::once_flag once;

@@ -85,6 +85,10 @@ Anything that changes match behaviour needs every player on the same kit, and re
 
 ## Log
 (Newest first: what was tried, what happened.)
+- 2026-11-14: Theatre menu, first part (the user: Theatre replaces Trade, a film list before the viewer). The multiplayer
+  menu's Theater item (livetrade 40 from livemain 36) now opens the Settings screen (liveoption 68) as THEATRE: its rows are
+  the newest 10 films (film::List: date, game type, length), each row's hint the stage and players; A logs the pick
+  (playback not built). Title, button bar (Select / Watch / Back) and the Save question switch with it. Not yet tried.
 - 2026-11-14: Theatre step 2, the film reader (toolsilmread.py, py -I toolsilmread.py <film> [--stream NAME]). Packet:
   7-byte mesh header (u16 sequence, u8 type 0x40 data / 0x01 heartbeat, u32 length), 8-byte message header (u16 length, 0x1200,
   u16 kind, u16 sender slot); kind 8 = the per-peer block (u64 mask: bit N stream N, bit 26+K ack of the K-th sequenced stream;
