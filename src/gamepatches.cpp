@@ -1536,7 +1536,7 @@ namespace pdnet::gamepatches
             { "Split Screen", "$STORE", nullptr },
             { "Battle another player using split screen.", "$STORE_HINT", nullptr },
             { "Create Match", "Trade", "Theater" },
-            { "Create a new game session.", "Trade a skill.", "Coming soon." },
+            { "Create a new game session.", "Trade a skill.", "Watch films of your recent online matches." }, // the Theatre
         };
         char g_lastItem[80]; // the text of the item added before (the menu's own text, before any renaming)
 
@@ -1589,7 +1589,7 @@ namespace pdnet::gamepatches
             {
                 int64_t theater[8];
                 memcpy(theater, args, sizeof(theater));
-                theater[0] = reinterpret_cast<int64_t>("Coming soon.");
+                theater[0] = reinterpret_cast<int64_t>("Watch films of your recent online matches.");
                 result = g_addItem(theater);
                 g_heldQuickHint[0] = reinterpret_cast<int64_t>(kImporterHint);
                 g_addItem(g_heldQuickHint);
