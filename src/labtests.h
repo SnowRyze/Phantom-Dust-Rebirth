@@ -15,4 +15,6 @@ namespace pdnet::labtests
     // least 2; each film player keeps their own slot), and a slot's character (-1: not recorded). 0 when no film.
     int FilmPlayers();
     int FilmCharacter(int slot);
+    // A film is playing and paused (its battle running): the game itself gets no keyboard input then (gamepatches).
+    bool FilmPaused();
 }

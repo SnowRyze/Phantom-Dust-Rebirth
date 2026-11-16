@@ -2151,7 +2151,7 @@ namespace pdnet::gamepatches
             g_typingName = false;
             if (keep && !name.empty())
             {
-                EditableConfig().displayName = name.substr(0, 32);
+                EditableConfig().displayName = name.substr(0, 16);
                 g_settingsDirty = true;
                 Log(L"gamepatch: settings: name typed: '%s' (A saves)", EditableConfig().displayName.c_str());
             }
@@ -4394,6 +4394,9 @@ namespace pdnet::gamepatches
         int64_t HookedGameKey(void* self, void* sender, void** args)
         {
             if (args != g_fakeKeyArgs.self()) g_windowKeys = true;
+            // Keys the game must not see (the user, 2026-11-16): while a name is typed in Online Settings (its letters
+            // went to the menu as well) and while a Theatre film is paused (its own controls are pdnet's).
+            if ((g_typingName && InSettings()) || labtests::FilmPaused()) return 0;
             int64_t result = g_gameKey(self, sender, args);
             if (!args) return result;
             void** vtable = reinterpret_cast<void**>(*args);
@@ -4421,7 +4424,7 @@ namespace pdnet::gamepatches
                     }
                     void* app = *reinterpret_cast<void**>(At(0x1405ae170));
                     if (!app || !g_gameKey) continue;
-                    if (!KeysHeld(now) || g_typingName) memset(now, 0, sizeof(now)); // typing a name: its characters are enough
+                    if (!KeysHeld(now) || g_typingName || labtests::FilmPaused()) memset(now, 0, sizeof(now)); // typing a name: its characters are enough; a paused film: its own controls
                     for (int key = 0; key < 256; ++key)
                     {
                         if (now[key] == held[key]) continue;

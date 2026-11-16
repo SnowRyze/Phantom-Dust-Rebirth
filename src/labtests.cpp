@@ -293,7 +293,15 @@ namespace pdnet::labtests
             // Only while the battle runs (match state 6): at its end the game moves on to its results (states 12, 9, 10, 11), and
             // the dead camera stayed on over them until the next match (2026-11-13).
             bool fighting = Var<int32_t>(0x1404bc950) == 6;
-            bool down = fighting && LocalDown();
+            // A start delay (the user, 2026-11-16): the camera switches only once the player has been down for
+            // kDeadCamDelayMs, so the defeat plays out first; a film or Test Arsenal's "pretend down" starts at once.
+            constexpr ULONGLONG kDeadCamDelayMs = 3000;
+            static ULONGLONG downSince = 0;
+            bool rawDown = fighting && LocalDown();
+            if (!rawDown) downSince = 0;
+            else if (!downSince) downSince = GetTickCount64();
+            bool instant = gamepatches::TestBattle() && (g_filmShown || g_pretendDown);
+            bool down = rawDown && (instant || g_deadOn || GetTickCount64() - downSince >= kDeadCamDelayMs);
             if (down != g_deadOn)
             {
                 g_deadOn = down;
@@ -1307,6 +1315,8 @@ namespace pdnet::labtests
             gameEye = savedEye;
         }
     }
+
+    bool FilmPaused() { return FilmActive() && g_filmPaused; }
 
     bool QueueFilm(const std::wstring& file)
     {
