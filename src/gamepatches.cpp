@@ -1526,6 +1526,65 @@ namespace pdnet::gamepatches
         };
         char g_lastItem[80]; // the text of the item added before (the menu's own text, before any renaming)
 
+        // Multiplayer menu order (2026-11-16, the user's list): Lobby Browser, Create Match, Theater, Importer, Shop, Lab,
+        // Scoreboard, Online Settings. The script (livemain) adds Quick Match, OptiMatch, Create Match, Trade, Shop, Lab,
+        // Scoreboard, Xbox Live Options, then their hints in the same order; picks are reported by position (event
+        // 100 + row, label <state>_S<row>). Quick Match (renamed Importer, still Quick Join's search) and its hint are held
+        // back and added after Trade (Theater) and its hint; CheckSendLogPick turns a pick on rows 0-3 back into the
+        // script's own row (kMultiplayerRows).
+        int64_t g_heldQuick[8] = {}, g_heldQuickHint[8] = {};
+        bool g_quickHeld = false, g_quickHintHeld = false;
+        std::atomic<bool> g_multiplayerReordered{ false };
+        constexpr int kMultiplayerRows[4] = { 1, 2, 3, 0 }; // shown row -> the script's row
+        const char* kImporter = "Importer";
+        const char* kImporterHint = "Join the first open game session you can play in.";
+
+        bool MultiplayerOrder(const char* text, const char* previous, int64_t* args, int64_t& result)
+        {
+            if (strcmp(text, "Quick Match") == 0 || strcmp(text, "Quick Join") == 0)
+            {
+                memcpy(g_heldQuick, args, sizeof(g_heldQuick));
+                g_quickHeld = true;
+                g_multiplayerReordered = false;
+                result = 0;
+                return true;
+            }
+            if (strcmp(text, "Search for a game session with the Quick game rule.") == 0 || strcmp(text, kImporterHint) == 0)
+            {
+                memcpy(g_heldQuickHint, args, sizeof(g_heldQuickHint));
+                g_quickHintHeld = true;
+                result = 0;
+                return true;
+            }
+            bool trade = strcmp(text, "Trade") == 0 && strcmp(previous, "Create Match") == 0;
+            bool tradeHint = strcmp(text, "Trade a skill.") == 0 && strcmp(previous, "Create a new game session.") == 0;
+            if (trade && g_quickHeld)
+            {
+                int64_t theater[8];
+                memcpy(theater, args, sizeof(theater));
+                theater[0] = reinterpret_cast<int64_t>("Theater");
+                result = g_addItem(theater);
+                g_heldQuick[0] = reinterpret_cast<int64_t>(kImporter);
+                g_addItem(g_heldQuick);
+                g_quickHeld = false;
+                g_multiplayerReordered = true;
+                Log(L"gamepatch: multiplayer menu: Quick Join moved after Theater as Importer");
+                return true;
+            }
+            if (tradeHint && g_quickHintHeld)
+            {
+                int64_t theater[8];
+                memcpy(theater, args, sizeof(theater));
+                theater[0] = reinterpret_cast<int64_t>("Coming soon.");
+                result = g_addItem(theater);
+                g_heldQuickHint[0] = reinterpret_cast<int64_t>(kImporterHint);
+                g_addItem(g_heldQuickHint);
+                g_quickHintHeld = false;
+                return true;
+            }
+            return false;
+        }
+
         bool SettingsItems(const char* added); // the in-game Settings rows (below)
         bool SoundItems(const char* added, int64_t* args, int64_t& result); // the Options > Sound rows (below)
         bool LogItems(const char* added, int64_t* args, int64_t& result);   // Options > Send Log (below)
@@ -1559,6 +1618,7 @@ namespace pdnet::gamepatches
                     char previous[80];
                     memcpy(previous, g_lastItem, sizeof(previous));
                     memcpy(g_lastItem, text, sizeof(g_lastItem));
+                    if (int64_t result = 0; MultiplayerOrder(text, previous, args, result)) return result;
                     for (auto& item : kItemsAfter)
                         if (strcmp(text, item.find) == 0 && strcmp(previous, item.previous) == 0)
                         {
@@ -2934,6 +2994,21 @@ namespace pdnet::gamepatches
         void CheckSendLogPick(int32_t event)
         {
             int64_t manager = MenuManager();
+            if (g_multiplayerReordered && event >= 100 && event < 104 && manager && CurrentMenu(manager) == kMultiplayerMenu)
+            {
+                // The multiplayer menu's new order (MultiplayerOrder): the label for the shown row -> the script's row.
+                char label[24];
+                int position = event - 100;
+                if (!CopyString(reinterpret_cast<const char*>(manager + 0x1062c), label, sizeof(label))) return;
+                char* s = strstr(label, "_S");
+                if (!s || atoi(s + 2) != position) return;
+                int own = kMultiplayerRows[position];
+                sprintf_s(s + 2, sizeof(label) - (s + 2 - label), "%d", own);
+                if (strlen(label) < 12) strcpy_s(reinterpret_cast<char*>(manager + 0x1062c), 12, label);
+                static int told = 0;
+                if (told++ < 8) Log(L"menu: multiplayer menu row %d picked - the script's row %d (%S)", position, own, label);
+                return;
+            }
             if (event >= 100 && event < 100 + kRows && manager && CurrentMenu(manager) == kLabMenu && g_pushMenu)
             {
                 // The Laboratory's main list (state MAIN): see g_rowAction.

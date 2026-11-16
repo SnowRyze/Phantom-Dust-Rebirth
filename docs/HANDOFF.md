@@ -72,6 +72,7 @@ Other docs: [`EOS_PLAN.md`](EOS_PLAN.md), [`MODDING_PLAN.md`](MODDING_PLAN.md), 
 Newest builds: **Experimental 170**, **Stable 14** (Experimental 170).
 
 Not yet confirmed in the game (each has its change log note):
+- The multiplayer menu's new order with Importer (Experimental 174).
 - B button: skipping start-up logos and cut-scene movies, leaving a hung match load after 30 s (120).
 
 Test steps for the older items (from the October "waiting for testers" list):
@@ -96,6 +97,8 @@ Ideas, not planned (notes in the change log and reference notes):
 # Change log (newest first)
 
 ## November 2026
+
+Multiplayer menu order (2026-11-16, Experimental 174, the user's list, not yet tried): Lobby Browser, Create Match, Theater, Importer, Shop, Lab, Scoreboard, Online Settings. livemain adds Quick Match, OptiMatch, Create Match, Trade, Shop, Lab, Scoreboard, Xbox Live Options (then the hints in the same order) with menu command 40; picks come by position (event 100 + row). MultiplayerOrder (in HookedAddItem) holds back Quick Match / Quick Join and its hint and adds them right after Trade (shown as Theater) and its hint, named "Importer" (still Quick Join's search; hint "Join the first open game session you can play in."). CheckSendLogPick rewrites a pick on shown rows 0-3 to the script's row (1, 2, 3, 0) in the label at manager +0x1062c, logged "menu: multiplayer menu row N picked - the script's row M". Unknown until tried: the label format there, and whether the script greys out or decorates rows by position.
 
 Lobby: invisible during the editor, freeze on leaving (2026-11-16, Experimental 173, partly diagnostics). Snow (SNOW-MSI-PC, a non-host) used the lobby's Arsenal Lab with the skill preview (19:09-19:12, then 19:13:08); the other players "couldn't see him in the lobby" while he was in the editor, and leaving the lobby (19:13:22: pdnet left the EOS lobby, the game dropped every peer from FUN_140187d10) froze the game; it was restarted at 19:13:48. The game's lobby keepalive (FUN_140126bd0, called from FUN_140190bb0 right after the town frame in FUN_14017cd00) keeps running during the session, so the invisibility is more likely the preview's game state 6 ("match") as the others' games see it: needs a log from another player in that lobby.
 - 173: when pdnet's session has closed, the pause object (set to the town's mode 6 at the session's start, FUN_14012ab20) goes back to mode 0 if it isn't (logged "preview: town session closed - pause mode N, flags 530034 ..." / "pause mode N -> 0"), so the town's pause handling can't act in the lobby; and a lobby leave within 2 minutes of a preview logs the pause mode, 0x140530034, mode and bc41c ("peers: N s after a skill preview: ...").
