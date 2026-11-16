@@ -6,3 +6,8 @@ Exec=pdrebirth
 Icon=applications-games
 Categories=Game;
 Terminal=false
+Actions=pdhelper;
+
+[Desktop Action pdhelper]
+Name=PD Helper
+Exec=pdrebirth pdhelper

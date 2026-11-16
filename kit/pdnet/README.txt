@@ -83,10 +83,11 @@ Updates in the game turns it off. If it can't update, the game starts as it is
 To stop using pdnet: bash setup-linux.sh --remove. Setting up a newer kit: run its setup-linux.sh.
 (On Linux the game reads pdnet.ini from its own folder, ~/.local/share/wine-uwp/stage/msesper.)
 PD Helper (https://github.com/eradication0/PDHelper, arsenal editor and ModLoader) on Linux: start the game, then run
-bash pdhelper-linux.sh  from this pdnet folder (Flatpak: ~/.var/app/io.github.snowryze.PhantomDustRebirth/data/wine-uwp/
-rebirth-kit). The first time it offers to download PD Helper 4.1 into ~/PDHelper; if you already have it, give its
-folder instead: bash pdhelper-linux.sh /path/to/PD-Helper-folder. The folder is remembered. bash pdhelper-linux.sh
-modloader starts the Skill Editor. It sets up .NET 6 for PD Helper by itself (about 70 MB, once).
+bash pdhelper-linux.sh  from this pdnet folder. The first time it offers to download PD Helper 4.1 into ~/PDHelper; if
+you already have it, give its folder instead: bash pdhelper-linux.sh /path/to/PD-Helper-folder. The folder is
+remembered. bash pdhelper-linux.sh modloader starts the Skill Editor. It sets up .NET 6 for PD Helper by itself
+(about 70 MB, once). Flatpak: right-click Phantom Dust Rebirth in the app menu > PD Helper, or
+flatpak run io.github.snowryze.PhantomDustRebirth pdhelper  (PD Helper is downloaded onto the game's C: drive).
 
 Settings (pdnet.ini in the pdnet folder)
 -----------------------------------

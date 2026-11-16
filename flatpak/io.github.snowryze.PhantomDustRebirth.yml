@@ -60,8 +60,12 @@ modules:
     build-commands:
       - install -Dm755 pdrebirth.sh /app/bin/pdrebirth
       - install -Dm644 io.github.snowryze.PhantomDustRebirth.desktop -t /app/share/applications
+      # PD Helper on Linux ("pdrebirth pdhelper"): from this repository, so it's there before a kit ships it
+      - install -Dm755 pdhelper-linux.sh /app/share/pdrebirth/pdhelper-linux.sh
     sources:
       - type: file
         path: pdrebirth.sh
+      - type: file
+        path: ../kit/pdnet/pdhelper-linux.sh
       - type: file
         path: io.github.snowryze.PhantomDustRebirth.desktop

@@ -9,6 +9,9 @@
 #   bash pdhelper-linux.sh modloader       the mod loader's Skill Editor instead
 #   bash pdhelper-linux.sh --prepare       only download/copy what's needed, start nothing
 #   --flatpak / --host                     which install to use when both are set up (otherwise the normal one)
+#   flatpak run io.github.snowryze.PhantomDustRebirth pdhelper [modloader]
+#                                          Flatpak only, no script needed: downloads PD Helper onto the game's C: drive
+#                                          the first time (C:\PDHelper below), then starts it
 #
 # Start the game and open a profile first, then click Load Profile in PD Helper.
 # Works with both kinds of install:
@@ -59,11 +62,11 @@ remember() {
     echo "Using PD Helper in $1 (remembered for next time)." || true
 }
 
-# Downloads PD Helper 4.1 (checksummed) into $1, which must not hold anything else yet
+# Downloads PD Helper 4.1 (checksummed) into $1, which must not hold anything else yet (unless $2 = merge)
 get_pdhelper() {
   local to=$1 tmp
-  if [ -n "$(helper_in "$to")" ]; then echo "PD Helper is already in $to."; return; fi
-  [ ! -e "$to" ] || [ -d "$to" -a -z "$(ls -A "$to" 2>/dev/null)" ] || fail "$to already exists and isn't empty; give another folder: bash $0 --download /path/to/new-folder"
+  if [ -n "$(helper_in "$to")" ]; then [ -n "${2:-}" ] || echo "PD Helper is already in $to."; return; fi
+  [ ! -e "$to" ] || [ -n "${2:-}" ] || [ -d "$to" -a -z "$(ls -A "$to" 2>/dev/null)" ] || fail "$to already exists and isn't empty; give another folder: bash $0 --download /path/to/new-folder"
   need curl; need python3; need sha256sum
   echo "Downloading PD Helper 4.1 from github.com/eradication0/PDHelper (about 1.4 MB)..."
   mkdir -p "$to"
@@ -74,94 +77,112 @@ get_pdhelper() {
   rm -rf "$tmp"
 }
 
-# PD Helper's folder: the one given, else the remembered one, else this script's own (where older instructions put it),
-# else download it (asked first, unless --download)
-here=$(cd "$(dirname "$(readlink -f "$0")")" && pwd)
-if [ -n "$download" ]; then
-  to=${folder:-$pdh_default}
-  get_pdhelper "$to"
-  pdh_src=$(cd "$to" && pwd)
-  remember "$pdh_src"
-elif [ -n "$folder" ]; then
-  case $folder in *.zip|*.7z|*.rar) fail "$folder is an archive: unzip it first, then give the folder it makes." ;; esac
-  [ -d "$folder" ] || fail "no folder $folder"
-  [ -n "$(helper_in "$folder")" ] ||
-    fail "no PD Helper exe in $folder; give the folder that has \"PD Helper 4.1.exe\" (look one level deeper if you unzipped it)."
-  pdh_src=$(cd "$folder" && pwd)
-  remember "$pdh_src"
-elif [ -n "$(helper_in "$here")" ]; then
-  pdh_src=$here
-elif [ -s "$remembered" ]; then
-  pdh_src=$(head -1 "$remembered")
-  [ -n "$(helper_in "$pdh_src")" ] ||
-    fail "PD Helper is no longer in $pdh_src. Give its new folder:  bash $0 /path/to/PD-Helper-folder
-  or download it again:  bash $0 --download"
-elif [ -t 0 ] && [ -t 1 ]; then
-  echo "PD Helper isn't set up yet (it doesn't come with Phantom Dust or the Rebirth kit)."
-  read -r -p "Download PD Helper 4.1 from github.com/eradication0/PDHelper into $pdh_default? [Y/n] " answer || answer=n
-  case $answer in [nN]*) fail "not downloaded. If you already have PD Helper: bash $0 /path/to/PD-Helper-folder" ;; esac
-  get_pdhelper "$pdh_default"
-  pdh_src=$(cd "$pdh_default" && pwd)
-  remember "$pdh_src"
+# Inside the Flatpak ("flatpak run io.github.snowryze.PhantomDustRebirth pdhelper"): the sandbox sees only the game's
+# data, so PD Helper lives on the game's C: drive (the same C:\PDHelper the script run outside the Flatpak copies to)
+# and is downloaded there when it's missing; that command is the request, so nothing is asked.
+if [ -f /.flatpak-info ]; then
+  [ -z "$folder$want" ] || fail "inside the Flatpak PD Helper always runs from the game's C:\\PDHelper. To use a PD Helper
+  folder of your own, run this script from a terminal outside the Flatpak:
+  bash ~/.var/app/$app/data/wine-uwp/rebirth-kit/pdhelper-linux.sh /path/to/PD-Helper-folder"
+  mode=inside
+  data=${WINE_UWP_DATA:-${XDG_DATA_HOME:-$HOME/.local/share}/wine-uwp}
+  [ -f "$data/prefix/.wine-uwp-ready" ] || fail "Phantom Dust isn't set up yet: start it once first."
+  host_bin=$(dirname "$(readlink -f "${WINE_UWP:-$app_bin/wine-uwp}")")
+  dotnet=$data/prefix/drive_c/dotnet
+  pdh=$data/prefix/drive_c/PDHelper
+  get_pdhelper "$pdh" merge
+  pdh_src=$pdh
+  helper=$(helper_in "$pdh")
 else
-  fail "PD Helper isn't set up yet (it doesn't come with Phantom Dust or the Rebirth kit). Either:
+  # PD Helper's folder: the one given, else the remembered one, else this script's own (where older instructions put it),
+  # else download it (asked first, unless --download)
+  here=$(cd "$(dirname "$(readlink -f "$0")")" && pwd)
+  if [ -n "$download" ]; then
+    to=${folder:-$pdh_default}
+    get_pdhelper "$to"
+    pdh_src=$(cd "$to" && pwd)
+    remember "$pdh_src"
+  elif [ -n "$folder" ]; then
+    case $folder in *.zip|*.7z|*.rar) fail "$folder is an archive: unzip it first, then give the folder it makes." ;; esac
+    [ -d "$folder" ] || fail "no folder $folder"
+    [ -n "$(helper_in "$folder")" ] ||
+      fail "no PD Helper exe in $folder; give the folder that has \"PD Helper 4.1.exe\" (look one level deeper if you unzipped it)."
+    pdh_src=$(cd "$folder" && pwd)
+    remember "$pdh_src"
+  elif [ -n "$(helper_in "$here")" ]; then
+    pdh_src=$here
+  elif [ -s "$remembered" ]; then
+    pdh_src=$(head -1 "$remembered")
+    [ -n "$(helper_in "$pdh_src")" ] ||
+      fail "PD Helper is no longer in $pdh_src. Give its new folder:  bash $0 /path/to/PD-Helper-folder
+  or download it again:  bash $0 --download"
+  elif [ -t 0 ] && [ -t 1 ]; then
+    echo "PD Helper isn't set up yet (it doesn't come with Phantom Dust or the Rebirth kit)."
+    read -r -p "Download PD Helper 4.1 from github.com/eradication0/PDHelper into $pdh_default? [Y/n] " answer || answer=n
+    case $answer in [nN]*) fail "not downloaded. If you already have PD Helper: bash $0 /path/to/PD-Helper-folder" ;; esac
+    get_pdhelper "$pdh_default"
+    pdh_src=$(cd "$pdh_default" && pwd)
+    remember "$pdh_src"
+  else
+    fail "PD Helper isn't set up yet (it doesn't come with Phantom Dust or the Rebirth kit). Either:
   bash $0 --download                      downloads PD Helper 4.1 (github.com/eradication0/PDHelper) into $pdh_default
   bash $0 /path/to/PD-Helper-folder       uses a PD Helper you unzipped yourself (the folder with \"PD Helper 4.1.exe\")
   This only has to be done once; later runs remember the folder."
-fi
-helper=$(helper_in "$pdh_src")
+  fi
+  helper=$(helper_in "$pdh_src")
 
-# Normal install: prefer a wine-uwp that can load Rebirth's pdnet, as setup-linux.sh does, so both pick the same build
-host_bin= host_data= host_why=
-for c in "${WINE_UWP:-}" "$(command -v wine-uwp 2>/dev/null || true)" ~/.local/opt/wine-uwp/bin/wine-uwp ~/wine-uwp/bin/wine-uwp; do
-  [ -n "$c" ] && [ -x "$c" ] || continue
-  d=$(dirname "$(readlink -f "$c")")
-  [ -x "$d/wine" ] || continue
-  if grep -qa WINE_UWP_INJECT "$d/../lib/wine/x86_64-windows/wineuwp-launch.exe" 2>/dev/null; then host_bin=$d; break; fi
-  [ -n "$host_bin" ] || host_bin=$d
-done
-if [ -z "$host_bin" ]; then
-  host_why="wine-uwp was not found (set WINE_UWP=/path/to/bin/wine-uwp if it's somewhere else)"
-else
-  host_data=${WINE_UWP_DATA:-${XDG_DATA_HOME:-$HOME/.local/share}/wine-uwp}
-  [ -f "$host_data/prefix/.wine-uwp-ready" ] || host_why="no wine-uwp prefix in $host_data; set up Phantom Dust first"
-fi
+  # Normal install: prefer a wine-uwp that can load Rebirth's pdnet, as setup-linux.sh does, so both pick the same build
+  host_bin= host_data= host_why=
+  for c in "${WINE_UWP:-}" "$(command -v wine-uwp 2>/dev/null || true)" ~/.local/opt/wine-uwp/bin/wine-uwp ~/wine-uwp/bin/wine-uwp; do
+    [ -n "$c" ] && [ -x "$c" ] || continue
+    d=$(dirname "$(readlink -f "$c")")
+    [ -x "$d/wine" ] || continue
+    if grep -qa WINE_UWP_INJECT "$d/../lib/wine/x86_64-windows/wineuwp-launch.exe" 2>/dev/null; then host_bin=$d; break; fi
+    [ -n "$host_bin" ] || host_bin=$d
+  done
+  if [ -z "$host_bin" ]; then
+    host_why="wine-uwp was not found (set WINE_UWP=/path/to/bin/wine-uwp if it's somewhere else)"
+  else
+    host_data=${WINE_UWP_DATA:-${XDG_DATA_HOME:-$HOME/.local/share}/wine-uwp}
+    [ -f "$host_data/prefix/.wine-uwp-ready" ] || host_why="no wine-uwp prefix in $host_data; set up Phantom Dust first"
+  fi
 
-# Flatpak install
-flat_data= flat_why=
-if ! command -v flatpak >/dev/null; then
-  flat_why="flatpak is not installed"
-elif ! flatpak info "$app" >/dev/null 2>&1; then
-  flat_why="the $app Flatpak is not installed"
-else
-  flat_data=${WINE_UWP_DATA:-$HOME/.var/app/$app/data/wine-uwp}
-  [ -f "$flat_data/prefix/.wine-uwp-ready" ] || flat_why="no wine-uwp prefix in $flat_data; start Phantom Dust once first"
-fi
+  # Flatpak install
+  flat_data= flat_why=
+  if ! command -v flatpak >/dev/null; then
+    flat_why="flatpak is not installed"
+  elif ! flatpak info "$app" >/dev/null 2>&1; then
+    flat_why="the $app Flatpak is not installed"
+  else
+    flat_data=${WINE_UWP_DATA:-$HOME/.var/app/$app/data/wine-uwp}
+    [ -f "$flat_data/prefix/.wine-uwp-ready" ] || flat_why="no wine-uwp prefix in $flat_data; start Phantom Dust once first"
+  fi
 
-case $want in
-  host)    [ -z "$host_why" ] || fail "normal install: $host_why."; mode=host ;;
-  flatpak) [ -z "$flat_why" ] || fail "Flatpak: $flat_why."; mode=flatpak ;;
-  *)
-    if [ -z "$host_why" ]; then
-      mode=host
-      [ -n "$flat_why" ] || echo "Both a normal install and the Flatpak are set up; using the normal one (add --flatpak for the other)."
-    elif [ -z "$flat_why" ]; then
-      mode=flatpak
-    else
-      fail "no Phantom Dust install found.
+  case $want in
+    host)    [ -z "$host_why" ] || fail "normal install: $host_why."; mode=host ;;
+    flatpak) [ -z "$flat_why" ] || fail "Flatpak: $flat_why."; mode=flatpak ;;
+    *)
+      if [ -z "$host_why" ]; then
+        mode=host
+        [ -n "$flat_why" ] || echo "Both a normal install and the Flatpak are set up; using the normal one (add --flatpak for the other)."
+      elif [ -z "$flat_why" ]; then
+        mode=flatpak
+      else
+        fail "no Phantom Dust install found.
   normal install: $host_why.
   Flatpak: $flat_why."
-    fi ;;
-esac
+      fi ;;
+  esac
 
-if [ "$mode" = host ]; then
-  data=$host_data
-  dotnet=$data/tools/dotnet-$dotnet_version
-  pdh=$pdh_src
-else
-  data=$flat_data
-  dotnet=$data/prefix/drive_c/dotnet    # seen by wine as C:\dotnet
-  pdh=$data/prefix/drive_c/PDHelper     # seen by wine as C:\PDHelper
+  if [ "$mode" = host ]; then
+    data=$host_data
+    dotnet=$data/tools/dotnet-$dotnet_version
+    pdh=$pdh_src
+  else
+    data=$flat_data
+    dotnet=$data/prefix/drive_c/dotnet    # seen by wine as C:\dotnet
+    pdh=$data/prefix/drive_c/PDHelper     # seen by wine as C:\PDHelper
+  fi
 fi
 
 if [ ! -f "$dotnet/dotnet.exe" ] || [ ! -d "$dotnet/shared/Microsoft.WindowsDesktop.App" ]; then
@@ -199,7 +220,7 @@ get_labels() {
 # Runs wine with the game's prefix, from PD Helper's folder (PD Helper opens SkillDB.json, Arsenals\ and Mods\ relative
 # to the working folder)
 run_wine() {
-  if [ "$mode" = host ]; then
+  if [ "$mode" != flatpak ]; then   # normal install, or already inside the Flatpak
     cd "$pdh"
     WINEPREFIX=$data/prefix WINEDEBUG=${WINEDEBUG:--all,err+all} DOTNET_ROOT="Z:${dotnet//\//\\}" exec "$host_bin/wine" "$@"
   fi

@@ -4,6 +4,7 @@
 #   pdrebirth                      play; the first time, set up first (windows when there is no terminal)
 #   pdrebirth setup [--name NAME]  set up (again) in the terminal: Windows components, the game, pdnet
 #   pdrebirth kit ARGS             the kit's setup-linux.sh with ARGS (--update, --remove, --help ...)
+#   pdrebirth pdhelper [modloader] PD Helper (arsenal editor) or its Skill Editor; downloads PD Helper the first time
 #   pdrebirth ARGS                 wine-uwp with ARGS (list, stop, ...)
 #
 # Everything is kept in $XDG_DATA_HOME/wine-uwp (~/.var/app/io.github.snowryze.PhantomDustRebirth/data/wine-uwp):
@@ -189,6 +190,33 @@ The code is valid for 15 minutes." &
         --text="Set up as '$name'. The game starts now; its first title screen should say \"Rebirth\"." || true
 }
 
+# PD Helper (github.com/eradication0/PDHelper) through the kit's pdhelper-linux.sh, shipped in the Flatpak: inside the
+# sandbox it keeps PD Helper and .NET on the game's C: drive and downloads them the first time.
+run_pdhelper() {
+    local script=/app/share/pdrebirth/pdhelper-linux.sh plog=$data/logs/pdhelper.log pid
+    if [ -z "$(find_game)" ]; then
+        if [ -t 1 ]; then echo "Set up Phantom Dust first: flatpak run io.github.snowryze.PhantomDustRebirth" >&2; else
+            "${zenity[@]}" --error --title="PD Helper" --width=420 --text="Set up Phantom Dust first: start Phantom Dust Rebirth once." || true; fi
+        exit 1
+    fi
+    # the kit gets a copy too, for running it outside the Flatpak with a PD Helper folder of your own (kits before
+    # this script didn't have it; a kit update brings its own)
+    if [ -d "$kit" ] && [ ! -f "$kit/pdhelper-linux.sh" ]; then cp "$script" "$kit/" || true; fi
+    if [ -t 1 ]; then exec bash "$script" "$@"; fi
+    # From the menu: the first-time downloads behind a progress window, errors in a window
+    : > "$plog"
+    bash "$script" --prepare >> "$plog" 2>&1 &
+    pid=$!
+    ( sleep 2; kill -0 "$pid" 2>/dev/null || exit 0
+      "${zenity[@]}" --progress --pulsate --auto-close --no-cancel --title="PD Helper" --width=420 \
+          --text="Downloading PD Helper and .NET 6 (once, about 70 MB)..." < <(while kill -0 "$pid" 2>/dev/null; do sleep 0.2; done; echo 100) ) &
+    if ! wait "$pid"; then
+        "${zenity[@]}" --text-info --title="PD Helper could not start" --width=760 --height=360 --filename="$plog" || true
+        exit 1
+    fi
+    exec bash "$script" "$@" >> "$plog" 2>&1
+}
+
 case ${1:-} in
 "")
     if ! is_set_up; then
@@ -210,5 +238,6 @@ case ${1:-} in
 setup)       shift; setup_terminal "$@" ;;
 setup-steps) setup_steps "${2:-Player}" ;;   # internal: setup_windows runs it in its own session
 kit)         shift; refresh_kit || true; exec bash "$kit/setup-linux.sh" "$@" ;;
+pdhelper)    shift; run_pdhelper "$@" ;;
 *)           exec "$WINE_UWP" "$@" ;;
 esac
