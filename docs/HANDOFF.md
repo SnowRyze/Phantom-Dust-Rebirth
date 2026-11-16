@@ -96,6 +96,8 @@ Ideas, not planned (notes in the change log and reference notes):
 
 ## November 2026
 
+Skill Preview Sound, still sounds and choppy menu sounds (2026-11-16, Experimental 172, diagnostics). DESKTOP-SUFDHSP on 170 with the option Off: preview sound "plays sometimes, also makes the menu noise choppy". Guess: some menu sounds are 3D (caught by the block) and some preview sounds 2D (not caught). 172 logs every distinct sound started while pdnet's town session runs, once each (up to 200): "sound: during the skill preview: 2D/3D bank, cue, sound, from <caller>, menu N - blocked ...". The same log showed the town's music (track 35) starting as each session ends, switched back to the Lab's 29 by KeepPreviewTrack a moment later.
+
 Player names at most 16 characters (2026-11-14, Experimental 171, the user: longer names can crash the game). Was 32. Now 16 in: display_name from pdnet.ini / settings.ini (config.cpp), typing the name in Online Settings, Setup.bat (setup.ps1) and setup-linux.sh (prompts say so too), and on arrival from other players: their lobby name (mpsd.cpp, PD_NAME -> gamertag) and the host's name in the Lobby Browser (the search handle's "gamename" string), so a long name sent by an older kit is cut too. A name already saved longer is cut when it is read.
 
 Confirmed by the user (2026-11-14): lock onto partner and Partner Aim (Modern / Classic, its keyboard key; 103 / 118), and PD Helper modpacks staying loaded through matches (the modpack guard).

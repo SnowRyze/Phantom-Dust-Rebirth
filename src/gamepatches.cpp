@@ -3046,7 +3046,25 @@ namespace pdnet::gamepatches
             const Config& c = GetConfig();
             // Skill Preview Sound off: while pdnet's town session runs under the Lab, its positional sounds (the skills,
             // the town's ambience emitters) don't start; the menus' own sounds are 2D and still play.
-            if (positional && !c.previewSound && PreviewSessionOn()) return true;
+            if (PreviewSessionOn())
+            {
+                bool blocked = positional && !c.previewSound;
+                // Diagnostics (2026-11-16, DESKTOP-SUFDHSP on 170 with the option Off: "sound plays sometimes, also makes
+                // the menu noise choppy"): every distinct sound started while the session runs, once, with its caller
+                // and whether it was blocked - to tell the preview's sounds from the menu's.
+                static std::mutex lock;
+                static std::set<std::tuple<bool, int64_t, int64_t, uint64_t>> seen;
+                bool fresh = false;
+                {
+                    std::lock_guard guard(lock);
+                    if (seen.size() < 200) fresh = seen.emplace(positional, static_cast<int32_t>(bank), static_cast<int32_t>(cue), caller).second;
+                }
+                if (fresh)
+                    Log(L"sound: during the skill preview: %s bank %lld cue %lld sound %lld from 0x%llX (menu %d)%s", positional ? L"3D" : L"2D",
+                        static_cast<int64_t>(static_cast<int32_t>(bank)), static_cast<int64_t>(static_cast<int32_t>(cue)), static_cast<int64_t>(static_cast<int32_t>(sound)),
+                        caller, CurrentMenu(MenuManager()), blocked ? L" - blocked (Skill Preview Sound off)" : L"");
+                if (blocked) return true;
+            }
             if (c.soundLog) LogSound(positional, static_cast<int32_t>(bank), static_cast<int32_t>(cue), static_cast<int32_t>(sound), caller, !c.auraBeeps);
             return !c.auraBeeps && AuraBeep(positional, static_cast<int32_t>(bank), static_cast<int32_t>(cue), caller);
         }
