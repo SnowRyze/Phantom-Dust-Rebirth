@@ -37,7 +37,23 @@ namespace pdnet::film
         constexpr uint32_t kFormat = 1;
         constexpr size_t kBufferCap = 8 * 1024 * 1024;
         constexpr size_t kKeepFilms = 100; // the user, 2026-11-14 (was 25)
-        enum : uint8_t { kIn = 1, kOut = 2, kPeer = 3, kState = 4, kSnapshot = 5, kEnd = 255 };
+        enum : uint8_t { kIn = 1, kOut = 2, kPeer = 3, kState = 4, kSnapshot = 5, kOrder = 6, kEnd = 255 };
+
+        // Record 6 (at the start of each film since Conceptual 38): its place in the recording order and its lobby. This
+        // PC's clock jumped about an hour back and forth on 2026-11-16, so names and times alone put films out of order.
+#pragma pack(push, 1)
+        struct Order
+        {
+            uint32_t version = 1;
+            uint32_t sequence = 0, lobbySession = 0, matchInLobby = 0;
+            char lobby[96] = {};
+        };
+#pragma pack(pop)
+        std::mutex g_lobbyLock;
+        std::string g_lobby; // the current game lobby (SetLobby)
+
+        // films\order.txt: the last film number, the last lobby session number, the match number in it, that lobby's id.
+        struct Counters { uint32_t sequence = 0, lobbySession = 0, matchInLobby = 0; std::string lobby; };
 
         std::mutex g_lock;              // the buffer and the peer table
         std::vector<uint8_t> g_buffer;  // records not yet written
@@ -163,6 +179,52 @@ namespace pdnet::film
         }
 
         // Keeps the newest kKeepFilms films (by name, which starts with the date and time).
+        // A film's number from its name (film-00042-20261116-172420.pdfilm), 0 for older names (film-20261116-172420).
+        uint32_t SequenceOf(const std::wstring& name)
+        {
+            unsigned n = 0;
+            wchar_t dash = 0;
+            if (name.size() > 11 && name[10] == L'-' && swscanf_s(name.c_str(), L"film-%5u%c", &n, &dash, 1) == 2 && dash == L'-') return n;
+            return 0;
+        }
+
+        // Oldest first: numbered films by number, after the older ones (by name).
+        bool OlderFilm(const std::wstring& a, const std::wstring& b)
+        {
+            uint32_t x = SequenceOf(a), y = SequenceOf(b);
+            return x != y ? x < y : a < b;
+        }
+
+        Counters ReadCounters()
+        {
+            Counters c;
+            FILE* f = nullptr;
+            if (_wfopen_s(&f, (FilmsDir() + L"\\order.txt").c_str(), L"rb") == 0 && f)
+            {
+                char lobby[128] = {};
+                if (fscanf_s(f, "%u %u %u %127s", &c.sequence, &c.lobbySession, &c.matchInLobby, lobby, static_cast<unsigned>(sizeof(lobby))) >= 3) c.lobby = lobby;
+                fclose(f);
+            }
+            if (c.lobby == "-") c.lobby.clear();
+            // Never below a film already there (order.txt lost or older).
+            WIN32_FIND_DATAW fd;
+            HANDLE find = FindFirstFileW((FilmsDir() + L"\\film-*.pdfilm").c_str(), &fd);
+            if (find != INVALID_HANDLE_VALUE)
+            {
+                do c.sequence = (std::max)(c.sequence, SequenceOf(fd.cFileName)); while (FindNextFileW(find, &fd));
+                FindClose(find);
+            }
+            return c;
+        }
+
+        void WriteCounters(const Counters& c)
+        {
+            FILE* f = nullptr;
+            if (_wfopen_s(&f, (FilmsDir() + L"\\order.txt").c_str(), L"wb") != 0 || !f) return;
+            fprintf(f, "%u %u %u %s\n", c.sequence, c.lobbySession, c.matchInLobby, c.lobby.empty() ? "-" : c.lobby.c_str());
+            fclose(f);
+        }
+
         void Prune()
         {
             std::vector<std::wstring> films;
@@ -171,7 +233,7 @@ namespace pdnet::film
             if (find == INVALID_HANDLE_VALUE) return;
             do films.push_back(fd.cFileName); while (FindNextFileW(find, &fd));
             FindClose(find);
-            std::sort(films.begin(), films.end());
+            std::sort(films.begin(), films.end(), OlderFilm);
             for (size_t i = 0; i + kKeepFilms < films.size(); ++i)
             {
                 DeleteFileW((FilmsDir() + L"\\" + films[i]).c_str());
@@ -206,10 +268,26 @@ namespace pdnet::film
         {
             CreateDirectoryW((LocalStatePath() + L"\\pdnet").c_str(), nullptr);
             CreateDirectoryW(FilmsDir().c_str(), nullptr);
+            // Its number and lobby session: a new lobby id starts the next lobby session.
+            Counters c = ReadCounters();
+            std::string lobby;
+            {
+                std::lock_guard guard(g_lobbyLock);
+                lobby = g_lobby;
+            }
+            ++c.sequence;
+            if (lobby.empty() || lobby != c.lobby || c.lobbySession == 0) { ++c.lobbySession; c.matchInLobby = 1; c.lobby = lobby; }
+            else ++c.matchInLobby;
+            WriteCounters(c);
+            Order order;
+            order.sequence = c.sequence;
+            order.lobbySession = c.lobbySession;
+            order.matchInLobby = c.matchInLobby;
+            strncpy_s(order.lobby, lobby.c_str(), _TRUNCATE);
             SYSTEMTIME t;
             GetLocalTime(&t);
             wchar_t name[64];
-            swprintf_s(name, L"film-%04u%02u%02u-%02u%02u%02u.pdfilm", t.wYear, t.wMonth, t.wDay, t.wHour, t.wMinute, t.wSecond);
+            swprintf_s(name, L"film-%05u-%04u%02u%02u-%02u%02u%02u.pdfilm", c.sequence, t.wYear, t.wMonth, t.wDay, t.wHour, t.wMinute, t.wSecond);
             g_name = name;
             if (_wfopen_s(&g_file, (FilmsDir() + L"\\" + g_name).c_str(), L"wb") != 0 || !g_file)
             {
@@ -240,9 +318,10 @@ namespace pdnet::film
                 g_records = g_dropped = 0;
                 g_packetBytes = 0;
                 g_start = GetTickCount64();
+                AddRecord(kOrder, 0, &order, sizeof(order));
             }
             g_recording = true;
-            Log(L"film: recording %s", g_name.c_str());
+            Log(L"film: recording %s (lobby session %u, match %u, lobby %S)", g_name.c_str(), c.lobbySession, c.matchInLobby, lobby.empty() ? "none" : lobby.c_str());
             return true;
         }
 
@@ -276,6 +355,28 @@ namespace pdnet::film
         }
     }
 
+    void SetLobby(const std::string& lobbyId)
+    {
+        std::lock_guard guard(g_lobbyLock);
+        g_lobby = lobbyId;
+    }
+
+    const char* MatchType(const Info& info)
+    {
+        int players = 0, teams[4], distinct = 0;
+        for (int s = 0; s < 4; ++s)
+        {
+            if (!info.present[s]) continue;
+            ++players;
+            bool seen = false;
+            for (int k = 0; k < distinct; ++k) seen = seen || teams[k] == info.team[s];
+            if (!seen) teams[distinct++] = info.team[s];
+        }
+        if (players == 0) return "Match";
+        if (players == 2) return "One-on-One";
+        return distinct == 2 ? "Tag Team" : "Battle Royale";
+    }
+
     void Packet(bool out, const std::string& peer, const uint8_t* data, size_t bytes)
     {
         if (!g_recording) return;
@@ -304,7 +405,7 @@ namespace pdnet::film
             do if (fd.nFileSizeLow > 64 || fd.nFileSizeHigh) names.push_back(fd.cFileName); while (FindNextFileW(find, &fd));
             FindClose(find);
         }
-        std::sort(names.rbegin(), names.rend()); // newest first: the name starts with the date and time
+        std::sort(names.begin(), names.end(), [](const std::wstring& a, const std::wstring& b) { return OlderFilm(b, a); }); // newest first
         std::vector<Info> films;
         static const char* kMonths[] = { "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec" };
         // Up to 100 films of a few MB each: only the start of each (the setup snapshot comes a few seconds in) and its last
@@ -329,7 +430,9 @@ namespace pdnet::film
             Info info;
             info.file = name;
             int mo = 0, day = 0, hh = 0, mm = 0;
-            if (swscanf_s(name.c_str(), L"film-%*4d%2d%2d-%2d%2d", &mo, &day, &hh, &mm) == 4 && mo >= 1 && mo <= 12)
+            info.sequence = SequenceOf(name);
+            const wchar_t* date = name.c_str() + (info.sequence ? 11 : 5); // past "film-00042-" (numbered) or "film-"
+            if (swscanf_s(date, L"%*4d%2d%2d-%2d%2d", &mo, &day, &hh, &mm) == 4 && mo >= 1 && mo <= 12)
             {
                 char when[32];
                 sprintf_s(when, "%s %d %02d:%02d", kMonths[mo - 1], day, hh, mm);
@@ -343,6 +446,16 @@ namespace pdnet::film
                 uint16_t length = *reinterpret_cast<const uint16_t*>(&d[o + 2]);
                 if (o + 12 + length > d.size()) break;
                 lastMs = *reinterpret_cast<const uint32_t*>(&d[o + 4]);
+                if (type == kOrder && length >= sizeof(Order) - sizeof(Order::lobby))
+                {
+                    Order order;
+                    memcpy(&order, &d[o + 12], (std::min)(static_cast<size_t>(length), sizeof(order)));
+                    order.lobby[sizeof(order.lobby) - 1] = 0;
+                    info.sequence = order.sequence;
+                    info.lobbySession = order.lobbySession;
+                    info.matchInLobby = order.matchInLobby;
+                    info.lobby = order.lobby;
+                }
                 if (type == kSnapshot && length >= kSnapshotV1)
                 {
                     Snapshot s{};
@@ -358,6 +471,7 @@ namespace pdnet::film
                         }
                         info.present[i] = s.slots[i].present != 0;
                         info.name[i] = std::string(s.slots[i].name, strnlen(s.slots[i].name, sizeof(s.slots[i].name)));
+                        info.team[i] = s.slots[i].team;
                         info.character[i] = s.version >= 2 ? s.character[i] : -1;
                     }
                     info.gameType = s.gameType;

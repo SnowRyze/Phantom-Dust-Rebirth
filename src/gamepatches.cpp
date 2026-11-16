@@ -1949,7 +1949,6 @@ namespace pdnet::gamepatches
 
         void FillFilmPage()
         {
-            static const char* kTypes[] = { "Battle Royale", "Tag Team", "One-on-One" };
             if (g_films.empty())
             {
                 sprintf_s(g_filmRow[0], "\a160wNo films yet\f\a1#\a230c\f\a0#");
@@ -1968,11 +1967,15 @@ namespace pdnet::gamepatches
                     continue;
                 }
                 const film::Info& f = g_films[i];
-                const char* type = f.gameType >= 0 && f.gameType < 3 ? kTypes[f.gameType] : "Match";
-                char length[24];
+                const char* type = film::MatchType(f);
+                char length[24], label[48], lobby[64] = "";
                 sprintf_s(length, "%d:%02d", static_cast<int>(f.minutes), static_cast<int>(f.minutes * 60) % 60);
-                sprintf_s(g_filmRow[r], "\a160w%s\f\a1#\a230c%s %s\f\a0#", f.when.empty() ? "Film" : f.when.c_str(), type, length);
-                sprintf_s(g_filmHint[r], "%s on stage %d: %s.%s", type, f.stage, f.players.empty() ? "players not recorded" : f.players.c_str(), page);
+                // Numbered films (Conceptual 38 on): "Lobby 3  Match 2"; older ones: their date.
+                if (f.lobbySession) sprintf_s(label, "Lobby %u  Match %u", f.lobbySession, f.matchInLobby);
+                else strcpy_s(label, f.when.empty() ? "Film" : f.when.c_str());
+                if (f.lobbySession) sprintf_s(lobby, " %s, lobby %.8s.", f.when.c_str(), f.lobby.empty() ? "offline" : f.lobby.c_str() + (f.lobby.size() > 10 ? 2 : 0));
+                _snprintf_s(g_filmRow[r], _TRUNCATE, "\a160w%s\f\a1#\a230c%s %s\f\a0#", label, type, length);
+                _snprintf_s(g_filmHint[r], _TRUNCATE, "%s on stage %d: %s.%s%s", type, f.stage, f.players.empty() ? "players not recorded" : f.players.c_str(), lobby, page);
             }
         }
 

@@ -6,6 +6,7 @@
 #include "../src/gamepatches.h"
 #include "../src/scores.h"
 #include "../src/p2p.h"
+#include "../src/film.h" // Conceptual branch: films record their lobby
 #include "nametrace.h"
 #include <winrt/Windows.Data.Json.h>
 #include <bcrypt.h>
@@ -795,6 +796,7 @@ namespace pdnet::mpsd
                 }
                 if (lobby && lobby->joined)
                 {
+                    if (doc.templateName == L"SearchableGame") pdnet::film::SetLobby(lobbyId); // Conceptual branch: the films' lobby
                     OwnerDuties(lobbyId);
                     if (auto fresh = lobbies::Read(lobbyId); fresh && fresh->joined) lobby = fresh;
                     if (created && lobby->ownerId == lobbies::LocalUserId()) discord::LobbyOpened(*lobby);

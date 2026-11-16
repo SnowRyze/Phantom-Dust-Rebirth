@@ -13,12 +13,21 @@ namespace pdnet::film
     // `peer` sent this PC's game. Cheap when no film is being recorded; never waits on the disk.
     void Packet(bool out, const std::string& peer, const uint8_t* data, size_t bytes);
 
+    // The game lobby (EOS lobby id of the multiplayer session) this PC is in, from xsapi\mpsd.cpp when it joins or
+    // creates one. Each film records it, with its lobby session number and its match number in that lobby.
+    void SetLobby(const std::string& lobbyId);
+
     // The saved films, newest first (at most `max`), as the Theatre list shows them. Unreadable files are left out.
     struct Info
     {
         std::wstring file;    // name in LocalState\pdnet\films
         std::string when;     // "Nov 13 01:45" (from the file name)
-        int gameType = -1;    // 0 Battle Royale, 1 Tag Team, 2 One-on-One (-1: no setup recorded)
+        int gameType = -1;    // the game's DAT_1405277b4: not the match type (1v1s and 2v2s both record 1); see MatchType
+        int team[4]{ -1, -1, -1, -1 };
+        uint32_t sequence = 0;     // films are numbered in the order they're recorded (0: older films, before numbering)
+        uint32_t lobbySession = 0; // which lobby session (1, 2, ... each new lobby joined), 0: not recorded
+        uint32_t matchInLobby = 0; // its match number in that lobby
+        std::string lobby;         // the lobby's id
         int stage = -1;
         int layout = 0;
         uint32_t version = 0;   // its setup snapshot: 1, or 2 with characters and every player's arsenal
@@ -35,6 +44,8 @@ namespace pdnet::film
         Info() { for (auto& deck : skills) for (int16_t& id : deck) id = -1; }
     };
     std::vector<Info> List(size_t max);
+    // "One-on-One" (2 players), "Tag Team" (more, in 2 teams) or "Battle Royale" (each on their own), from its players.
+    const char* MatchType(const Info& info);
 
     // One stream record from a film's match traffic: who it is about (the sender's slot), which of the game's 26 streams,
     // when (ms since the film started), the sender's game frame / 2, its sequence number (sequenced streams) and data.

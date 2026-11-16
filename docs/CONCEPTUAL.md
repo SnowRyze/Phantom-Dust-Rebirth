@@ -85,6 +85,18 @@ Anything that changes match behaviour needs every player on the same kit, and re
 
 ## Log
 (Newest first: what was tried, what happened.)
+- 2026-11-16: Film order and labels (Conceptual 38). The user saw 1v1s labelled Tag Team and no order in the list.
+  - Labels: the snapshot's gameType (DAT_1405277b4) isn't the match type: the Nov 13 1v1s and the Nov 16 2v2s both
+    record 1, the 3-player free-for-all 0. film::MatchType now reads the players and teams: 2 players One-on-One, more in
+    2 teams Tag Team, else Battle Royale.
+  - Order: this PC's clock jumped about an hour back and forth during the Nov 16 session (the log runs 18:20:05 then
+    17:24:56 on one thread; a film named 18:20 was last written "17:24"), so films named and sorted by time came out of
+    order. Films are now numbered as recorded: film-NNNNN-date-time.pdfilm, the last number in films\order.txt, never
+    below the highest on disk. The list and the 100-film pruning sort by number (older unnumbered films after, by name).
+  - Lobby: xsapi\mpsd.cpp tells the recorder the SearchableGame lobby id when it joins or creates it (film::SetLobby).
+    Record 6 (Order) at a film's start holds its number, lobby session (+1 for each new lobby id) and match in that
+    lobby, and the id. The Theatre row reads "Lobby 3  Match 2" (older films: their date); the hint adds the date and
+    the lobby id's first 8 characters.
 - 2026-11-14: Conceptual 36 test: after the film's battle ended, its controls stayed live (g_filmShown is cleared only
   when the next battle starts), so A on the results screen paused the game's update and it hung on a black screen.
   Conceptual 37: the film's controls, time control and text work only while the battle runs (match state 6), and the
