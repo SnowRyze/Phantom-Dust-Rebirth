@@ -434,6 +434,30 @@ namespace pdnet::labtests
             }
         }
 
+        // A remote player's hand on the HUD showed no cost badges (the user, 2026-11-16): the badge is drawn only when the
+        // slot's bit is set in the HUD's per-player mask (HUD DAT_1404bec00 + player * 0x2c + 0x2e4; +0x2dc per slot: the
+        // draw-in state, 0 = plain), and its number is the slot's cost (status record +0x360); the card logic that sets
+        // both (FUN_140261a00, FUN_1402623b0) runs only on the PC that owns the player. Here they're set the same way for
+        // every hand slot in use (record +0x350; the slot struct is record +0x348 + slot * 0x50, its record at +0x28).
+        void RemoteHandBadges(int slot, uint8_t* record)
+        {
+            uint8_t* hud = *reinterpret_cast<uint8_t**>(At(0x1404bec00));
+            if (!hud || slot < 0 || slot > 3) return;
+            uint32_t& mask = *reinterpret_cast<uint32_t*>(hud + slot * 0x2c + 0x2e4);
+            for (int i = 0; i < 4; ++i)
+            {
+                uint8_t* card = record + 0x348 + i * 0x50;
+                if (*reinterpret_cast<int32_t*>(card + 8) == 0) { mask &= ~(1u << i); continue; }
+                if (*reinterpret_cast<uint8_t**>(card + 0x28) == record)
+                {
+                    __try { reinterpret_cast<void (*)(uint8_t*)>(At(0x1402623b0))(card); } // its cost
+                    __except (EXCEPTION_EXECUTE_HANDLER) {}
+                }
+                hud[slot * 0x2c + 0x2dc + i] = 0;
+                mask |= 1u << i;
+            }
+        }
+
         void GameHud(int64_t hud)
         {
             int local = LocalSlot();
@@ -456,6 +480,7 @@ namespace pdnet::labtests
             int32_t owners[4]{};
             if (remote)
                 for (int i = 0; i < 4; ++i) { owners[i] = Field<int32_t>(record, 0x384 + i * 0x50); Field<int32_t>(record, 0x384 + i * 0x50) = -1; }
+            if (remote) RemoteHandBadges(g_deadTarget, record);
             // The HUD also shows the "local" player's lock-on target: when its camera block says a lock is on (object +0x13f1c,
             // with +0x13f10 != 1 and the block +0x14210 ready), it reads the targetable object DAT_1404bcb50[object +0x13f20] and
             // its +0xb8 with no check. The game keeps that block only for this PC's own player; on the AI it pointed at an

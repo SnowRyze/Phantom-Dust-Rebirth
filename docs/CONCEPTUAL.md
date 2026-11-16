@@ -85,6 +85,14 @@ Anything that changes match behaviour needs every player on the same kit, and re
 
 ## Log
 (Newest first: what was tried, what happened.)
+- 2026-11-16: Remote hands on the HUD (Conceptual 39): watching a player other than this PC's, the hand showed plain
+  knobs, no coloured cost badges. FUN_140151f90 draws a slot's badge only when its bit is set in the HUD's per-player
+  mask (HUD object DAT_1404bec00 + player * 0x2c + 0x2e4; +0x2dc per slot is the draw-in state, 2-4 animate), and its
+  number is the slot's cost (status record +0x360 = card struct +0x18; the card struct is record +0x348 + slot * 0x50:
+  +8 in use, +0xc level, +0x28 its record, +0x30 skill). The card logic that sets them (FUN_140261a00, FUN_140262000,
+  FUN_1402623b0: base +0x28 plus +0x2c per level from the skill table DAT_1404bdc50, 0x90 a skill, halved or doubled by
+  condition 0x1e, at most 99) runs only on the owning PC. RemoteHandBadges sets them the same way before the HUD draw
+  for a remote watched player.
 - 2026-11-16: Film order and labels (Conceptual 38). The user saw 1v1s labelled Tag Team and no order in the list.
   - Labels: the snapshot's gameType (DAT_1405277b4) isn't the match type: the Nov 13 1v1s and the Nov 16 2v2s both
     record 1, the 3-player free-for-all 0. film::MatchType now reads the players and teams: 2 players One-on-One, more in
