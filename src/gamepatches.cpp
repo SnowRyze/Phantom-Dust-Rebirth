@@ -4490,6 +4490,8 @@ namespace pdnet::gamepatches
         }
 
         bool PreviewSessionOn() { return g_previewTown || g_previewTownClosing; }
+        std::atomic<ULONGLONG> g_previewClosedAt{ 0 }; // when pdnet's last town session closed (for the lobby-leave log)
+        ULONGLONG PreviewClosedAt() { return g_previewClosedAt; }
 
         bool PreviewPlayerReady()
         {
@@ -4756,6 +4758,20 @@ namespace pdnet::gamepatches
                 g_previewTownClosing = false;
                 if (!g_previewTownAgain)
                 {
+                    // The pause object (0x1404c0130) goes to the town's mode 6 as the session starts (FUN_14012ab20);
+                    // a lobby player froze leaving the lobby after previews (2026-11-16, SNOW-MSI-PC, cause not seen).
+                    // Back in the menus it returns to mode 0 (no pause handling), and the state is logged.
+                    g_previewClosedAt = GetTickCount64();
+                    if (int64_t pause = *reinterpret_cast<int64_t*>(At(0x1404c0130)))
+                    {
+                        int mode = *reinterpret_cast<int32_t*>(pause + 0x50);
+                        Log(L"preview: town session closed - pause mode %d, flags 530034 %X", mode, *reinterpret_cast<uint32_t*>(At(0x140530034)));
+                        if (mode != 0)
+                        {
+                            reinterpret_cast<void (*)(int64_t, int)>(At(0x140167580))(pause, 0);
+                            Log(L"preview: pause mode %d -> 0 (the menus' own)", mode);
+                        }
+                    }
                     RestorePreviewZone();
                     // (RestoreMenuAudio here jammed the audio loader: 3 jobs left queued and the game stuck for good when
                     // the player backed out of the Lab at the same moment. Not called; the menus load their own sound.)
@@ -4989,6 +5005,14 @@ namespace pdnet::gamepatches
             if (active)
                 Log(L"peers: the game drops every peer (%d active, %d listed; called from %llx, game state %d)", active, count,
                     GhidraAddress(_ReturnAddress()), *reinterpret_cast<int32_t*>(At(0x1404bc950)));
+            // Leaving a lobby soon after a skill preview (the freeze above): the pause and town state at that moment.
+            if (ULONGLONG closed = PreviewClosedAt(); closed && GetTickCount64() - closed < 120000)
+            {
+                int64_t pause = *reinterpret_cast<int64_t*>(At(0x1404c0130));
+                Log(L"peers: %llu s after a skill preview: pause mode %d, flags 530034 %X, mode %d, bc41c %d", (GetTickCount64() - closed) / 1000,
+                    pause ? *reinterpret_cast<int32_t*>(pause + 0x50) : -1, *reinterpret_cast<uint32_t*>(At(0x140530034)),
+                    *reinterpret_cast<int32_t*>(At(0x1404bc9d4)), *reinterpret_cast<int32_t*>(At(0x1404bc41c)));
+            }
             g_dropAllPeers();
         }
 

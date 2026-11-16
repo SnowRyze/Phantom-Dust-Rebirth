@@ -78,6 +78,7 @@ Test steps for the older items (from the October "waiting for testers" list):
 - **B button** (Experimental 120): start-up logos: B skips each one, and the game still reaches the title normally. Movies (needs a full copy, not the stub dump): B ends a cut-scene movie and the story carries on. Hung match load (needs other players; cut a peer's network during a load): after 30 s, B leaves: from the lobby's LOADING to the multiplayer menu, from a match load to the lobby. A normal load must be unaffected: B does nothing in the first 30 s.
 
 Open problems:
+- Lobby: a player using the Arsenal editor (skill preview) is invisible to the others, and leaving the lobby afterwards froze (2026-11-16): 173 resets the pause object and logs; needs logs, including another player's.
 - Joins over direct links failing between a Windows PC and the Linux Flatpak on one network (2026-11-13): fix in Experimental 164, not yet tried.
 - Players dropped from each other at a match's end, then the lobby lost (Fisher King / Motley, 2026-11-13): Experimental 163 logs which game function drops them; fix planned once a log confirms it (paused by the user, 2026-11-13).
 - Story progress not saved (reported 2026-11-13, paused by the user): no log yet; the developer PC's own save is fine. The log's "GameSave: wrote ..." lines show each save.
@@ -95,6 +96,10 @@ Ideas, not planned (notes in the change log and reference notes):
 # Change log (newest first)
 
 ## November 2026
+
+Lobby: invisible during the editor, freeze on leaving (2026-11-16, Experimental 173, partly diagnostics). Snow (SNOW-MSI-PC, a non-host) used the lobby's Arsenal Lab with the skill preview (19:09-19:12, then 19:13:08); the other players "couldn't see him in the lobby" while he was in the editor, and leaving the lobby (19:13:22: pdnet left the EOS lobby, the game dropped every peer from FUN_140187d10) froze the game; it was restarted at 19:13:48. The game's lobby keepalive (FUN_140126bd0, called from FUN_140190bb0 right after the town frame in FUN_14017cd00) keeps running during the session, so the invisibility is more likely the preview's game state 6 ("match") as the others' games see it: needs a log from another player in that lobby.
+- 173: when pdnet's session has closed, the pause object (set to the town's mode 6 at the session's start, FUN_14012ab20) goes back to mode 0 if it isn't (logged "preview: town session closed - pause mode N, flags 530034 ..." / "pause mode N -> 0"), so the town's pause handling can't act in the lobby; and a lobby leave within 2 minutes of a preview logs the pause mode, 0x140530034, mode and bc41c ("peers: N s after a skill preview: ...").
+- The same log answers the sound question: during the preview the menu's sounds are 2D bank 0 cues 0 / 1 / 3 (callers 0x14024B456, 0x14024B118, the editor's 0x14016xxxx-0x140171xxx), the preview's are all 3D (bank 1: the town's; bank 0 cues 89-605 from 0x14025A50B, 0x14026EDCC, 0x140271624, 0x14026DCA9: the skills). Blocking 3D is the right split; that log had the option On.
 
 Skill Preview Sound, still sounds and choppy menu sounds (2026-11-16, Experimental 172, diagnostics). DESKTOP-SUFDHSP on 170 with the option Off: preview sound "plays sometimes, also makes the menu noise choppy". Guess: some menu sounds are 3D (caught by the block) and some preview sounds 2D (not caught). 172 logs every distinct sound started while pdnet's town session runs, once each (up to 200): "sound: during the skill preview: 2D/3D bank, cue, sound, from <caller>, menu N - blocked ...". The same log showed the town's music (track 35) starting as each session ends, switched back to the Lab's 29 by KeepPreviewTrack a moment later.
 
