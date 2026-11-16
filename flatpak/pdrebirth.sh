@@ -5,11 +5,14 @@
 #   pdrebirth setup [--name NAME]  set up (again) in the terminal: Windows components, the game, pdnet
 #   pdrebirth kit ARGS             the kit's setup-linux.sh with ARGS (--update, --remove, --help ...)
 #   pdrebirth pdhelper [modloader] PD Helper (arsenal editor) or its Skill Editor; downloads PD Helper the first time
+#   pdrebirth pdhelper-folder      open PD Helper's folder (Arsenals, Mods) in the file manager
+#   pdrebirth logs                 collect the logs for the developers (as Collect-Log.bat does on Windows)
 #   pdrebirth ARGS                 wine-uwp with ARGS (list, stop, ...)
 #
 # Everything is kept in $XDG_DATA_HOME/wine-uwp (~/.var/app/io.github.snowryze.PhantomDustRebirth/data/wine-uwp):
 #   windows/ prefix/ stage/ logs/   wine-uwp's own (Windows components, Wine prefix, the game, logs)
-#   rebirth-kit/                    a writable copy of the kit: setup-linux.sh updates pdnet through it
+#   rebirth-kit/                    a writable copy of the kit: setup-linux.sh updates pdnet through it; its
+#                                   pdlaunch.log has the launcher's steps (updates, game start and exit), as on Windows
 #   iso/Windows11.iso               the Windows ISO while setting up (put your own there to skip the download)
 set -euo pipefail
 
@@ -48,6 +51,8 @@ player_name() {
     sed -n 's/^\xEF\xBB\xBF//; s/^display_name=//p' "$g/pdnet.ini" | tr -d '\r' | head -1
 }
 kit_build() { sed -n 's/^Build: //p' "$1/kit-version.txt" 2>/dev/null | tr -d '\r' | head -1; }
+# the launcher's steps in the kit's pdlaunch.log, as pdlaunch.exe keeps them on Windows
+note() { if [ -d "$kit" ]; then printf '%s %s\n' "$(date '+%F %T.%3N')" "$*" >> "$kit/pdlaunch.log" 2>/dev/null; fi; true; }
 
 # The kit has to be writable (its updater replaces its files), so it is copied out of /app. A newer Flatpak brings a
 # newer kit; a kit that has updated itself past the Flatpak's is left alone, and so is its pdnet.ini.
@@ -190,31 +195,24 @@ The code is valid for 15 minutes." &
         --text="Set up as '$name'. The game starts now; its first title screen should say \"Rebirth\"." || true
 }
 
-# PD Helper (github.com/eradication0/PDHelper) through the kit's pdhelper-linux.sh, shipped in the Flatpak: inside the
-# sandbox it keeps PD Helper and .NET on the game's C: drive and downloads them the first time.
-run_pdhelper() {
-    local script=/app/share/pdrebirth/pdhelper-linux.sh plog=$data/logs/pdhelper.log pid
-    if [ -z "$(find_game)" ]; then
-        if [ -t 1 ]; then echo "Set up Phantom Dust first: flatpak run io.github.snowryze.PhantomDustRebirth" >&2; else
-            "${zenity[@]}" --error --title="PD Helper" --width=420 --text="Set up Phantom Dust first: start Phantom Dust Rebirth once." || true; fi
-        exit 1
-    fi
-    # the kit gets a copy too, for running it outside the Flatpak with a PD Helper folder of your own (kits before
-    # this script didn't have it; a kit update brings its own)
-    if [ -d "$kit" ] && [ ! -f "$kit/pdhelper-linux.sh" ]; then cp "$script" "$kit/" || true; fi
+# PD Helper (github.com/eradication0/PDHelper) and Collect logs through the kit's scripts, shipped in the Flatpak (so
+# they work before a kit brings them). Inside the sandbox pdhelper-linux.sh keeps PD Helper and .NET on the game's C:
+# drive and downloads them the first time. From the menu (no terminal) both show windows of their own (--gui).
+tools=/app/share/pdrebirth
+run_tool() {   # script, arguments
+    local script=$tools/$1; shift
+    # the kit gets a copy too, to run outside the Flatpak (kits before these scripts didn't have them; a kit update
+    # brings its own)
+    if [ -d "$kit" ] && [ ! -f "$kit/$(basename "$script")" ]; then cp "$script" "$kit/" || true; fi
+    export PDREBIRTH_KIT=$kit
     if [ -t 1 ]; then exec bash "$script" "$@"; fi
-    # From the menu: the first-time downloads behind a progress window, errors in a window
-    : > "$plog"
-    bash "$script" --prepare >> "$plog" 2>&1 &
-    pid=$!
-    ( sleep 2; kill -0 "$pid" 2>/dev/null || exit 0
-      "${zenity[@]}" --progress --pulsate --auto-close --no-cancel --title="PD Helper" --width=420 \
-          --text="Downloading PD Helper and .NET 6 (once, about 70 MB)..." < <(while kill -0 "$pid" 2>/dev/null; do sleep 0.2; done; echo 100) ) &
-    if ! wait "$pid"; then
-        "${zenity[@]}" --text-info --title="PD Helper could not start" --width=760 --height=360 --filename="$plog" || true
-        exit 1
-    fi
-    exec bash "$script" "$@" >> "$plog" 2>&1
+    exec bash "$script" --gui "$@"
+}
+need_game() {
+    [ -z "$(find_game)" ] || return 0
+    if [ -t 1 ]; then echo "Set up Phantom Dust first: flatpak run io.github.snowryze.PhantomDustRebirth" >&2; else
+        "${zenity[@]}" --error --title="Phantom Dust Rebirth" --width=420 --text="Set up Phantom Dust first: start Phantom Dust Rebirth once." || true; fi
+    exit 1
 }
 
 case ${1:-} in
@@ -233,11 +231,17 @@ case ${1:-} in
         bash "$kit/setup-linux.sh" --auto-update < /dev/null > "$data/logs/$app-before-start.log" 2>&1 ||
             echo "pdnet update failed: see $data/logs/$app-before-start.log" >&2
     fi
-    exec "$WINE_UWP" run "$app"
+    note "flatpak launcher: starting $app ($(sed -n 's/^\(app-commit\|branch\)=//p' /.flatpak-info 2>/dev/null | tr '\n' ' ')wine-uwp $(cat /app/opt/wine-uwp/share/wine-uwp/VERSION 2>/dev/null || echo '?'))"
+    code=0
+    "$WINE_UWP" run "$app" || code=$?
+    note "game exited (code $code)"
+    exit $code
     ;;
 setup)       shift; setup_terminal "$@" ;;
 setup-steps) setup_steps "${2:-Player}" ;;   # internal: setup_windows runs it in its own session
 kit)         shift; refresh_kit || true; exec bash "$kit/setup-linux.sh" "$@" ;;
-pdhelper)    shift; run_pdhelper "$@" ;;
+pdhelper)    shift; need_game; run_tool pdhelper-linux.sh "$@" ;;
+pdhelper-folder) need_game; run_tool pdhelper-linux.sh --open-folder ;;
+logs)        run_tool collect-logs-linux.sh ;;
 *)           exec "$WINE_UWP" "$@" ;;
 esac

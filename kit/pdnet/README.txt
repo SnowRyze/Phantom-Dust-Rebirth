@@ -34,6 +34,7 @@ What's in the kit
   setup.ps1, remove.ps1, collect-log.ps1, nosuspend.ps1   the scripts behind the .bat files
   setup-linux.sh      Linux (wine-uwp) setup, see below
   pdhelper-linux.sh   Linux: runs PD Helper with the game, see below
+  collect-logs-linux.sh  Linux: what Collect-Log.bat does, see below
 
 Steps
 -----
@@ -72,8 +73,10 @@ Debian 13, Fedora 39, Mint 22, Arch or newer), and GStreamer for the game's vide
    newest version is expected; it then takes the older one, which is the one pdnet is made for.
    Then type your player name.
 2. Start the game from your app menu ("Phantom Dust Rebirth") or with:  ~/.local/bin/phantom-dust-rebirth
-   (it does pdlaunch.exe's job: updates pdnet, then starts the game).
-3. After a test: bash setup-linux.sh --logs, and send the files it copies to your home folder.
+   (it does pdlaunch.exe's job: updates pdnet, then starts the game; its steps go to pdlaunch.log in this folder).
+   Right-click "Phantom Dust Rebirth" in the app menu for PD Helper, PD Helper folder and Collect logs.
+3. After a test: right-click Phantom Dust Rebirth > Collect logs (or: bash collect-logs-linux.sh) and send the files
+   in the folder it puts on your Desktop: pdnet-log and pdlaunch-log as on Windows, plus wine-log and system.
 Updates: as on Windows, the kit updates itself when the game starts, so keep the kit folder where it is. Started
 with plain "wine-uwp run msesper", only a wine-uwp that runs before-start.sh does that; otherwise use
 bash setup-linux.sh --update  now and then.
@@ -82,12 +85,13 @@ Updates in the game turns it off. If it can't update, the game starts as it is
 (log: ~/.local/share/wine-uwp/logs/msesper-before-start.log).
 To stop using pdnet: bash setup-linux.sh --remove. Setting up a newer kit: run its setup-linux.sh.
 (On Linux the game reads pdnet.ini from its own folder, ~/.local/share/wine-uwp/stage/msesper.)
-PD Helper (https://github.com/eradication0/PDHelper, arsenal editor and ModLoader) on Linux: start the game, then run
-bash pdhelper-linux.sh  from this pdnet folder. The first time it offers to download PD Helper 4.1 into ~/PDHelper; if
-you already have it, give its folder instead: bash pdhelper-linux.sh /path/to/PD-Helper-folder. The folder is
-remembered. bash pdhelper-linux.sh modloader starts the Skill Editor. It sets up .NET 6 for PD Helper by itself
-(about 70 MB, once). Flatpak: right-click Phantom Dust Rebirth in the app menu > PD Helper, or
-flatpak run io.github.snowryze.PhantomDustRebirth pdhelper  (PD Helper is downloaded onto the game's C: drive).
+PD Helper (https://github.com/eradication0/PDHelper, arsenal editor and ModLoader) on Linux: start the game, then
+right-click Phantom Dust Rebirth in the app menu > PD Helper (or run bash pdhelper-linux.sh from this pdnet folder).
+The first time it offers to download PD Helper 4.1 into ~/PDHelper, or to use a PD Helper you already have (choose its
+folder; in a terminal: bash pdhelper-linux.sh /path/to/PD-Helper-folder). The folder is remembered.
+bash pdhelper-linux.sh modloader starts the Skill Editor. It sets up .NET 6 for PD Helper by itself (about 70 MB, once).
+Right-click > PD Helper folder opens the folder with Arsenals (saved arsenals) and Mods (put a mod's .sp4 and .json
+there, then Load Modpack in PD Helper). Flatpak: the same right-click entries; PD Helper is on the game's C: drive.
 
 Settings (pdnet.ini in the pdnet folder)
 -----------------------------------
