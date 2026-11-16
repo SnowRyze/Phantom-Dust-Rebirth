@@ -83,7 +83,113 @@ FUN_140125430).
 
 Anything that changes match behaviour needs every player on the same kit, and real tests need at least one other person.
 
+## Mod loader and mod menu (plan, 2026-11-16)
+Read-only so far: from pdnet's code, the game binaries' imports, and the source of Torphedo's pd_loader_core (PDPL
+1.1.0). No code written, nothing tried in the game.
+
+**The idea (from the user):** a .txt list of GitHub repo links, one per mod; each creator uploads a zip to their
+repo's releases. An in-game list with a checkbox per mod. Each mod has an ID; the host's mods go on the lobby, and
+joining a lobby turns on and loads the host's mods. Plus an "auto sort" button for load order.
+
+**Decision (the user, 2026-11-16): pdnet loads the mods itself, not PDPL.** PDPL builds its file list once at start,
+has no enable/disable or load order, and is injected after the game has started. pdnet already redirects file opens,
+is loaded while the game is suspended, and owns the menus, lobbies and downloads. Live skill data has worked before.
+pdnet reads zips laid out the way PDPL mods are, so existing PDPL asset mods keep working. The user is in touch with
+Torphedo: a shared `pdmod.json` format would let one zip work in both loaders.
+
+### What PDPL does, for reference (from its code, not its readme)
+- VFS (PhysicsFS) set up once: loose files in `RoamingState\mods` win, then every `.zip` / `.7z` in the root of
+  `mods` alphabetically, then the game folder (the readme says archives win, the code says otherwise).
+- It inline-hooks `KERNELBASE!CreateFile2`; a file inside an archive is copied to `RoamingState\fake\<file name>`
+  and that copy is opened.
+- Plugin DLLs under VFS `/plugins/` (also inside zips) are mapped with MemoryModule; their DllMain runs.
+- A zip mod's layout: paths as the game opens them, e.g. `Assets/Data/player/pc01a/pc01a2.alr`. Case-sensitive in
+  PDPL; pdnet should compare case-insensitively.
+
+### Where the game opens files
+- Imports: PDUWP.exe, D3D11LibRelease_UWP.dll and MeldRelease_UWP.dll each import `CreateFile2`; PDUWP and the D3D11
+  library also use `fopen` (the CRT, which calls Windows on its own). WPFLib imports neither.
+- Shaders are `.cso` files in the **game root** (not `Assets`), named in PDUWP (435 `.cso` strings).
+- pdnet's hook today (`HookedCreateFile2`, gamepatches.cpp) patches **only PDUWP.exe's import**, and only once Windows
+  has filled the imports in, which is after pdlaunch resumes the game (pdlaunch's watcher keeps calling
+  `HookFileOpens`). So it misses the D3D11 and Meld libraries, `fopen`, and anything opened in the first moments.
+- **So the mod loader needs its own hook:** an inline hook on `KERNELBASE!CreateFile2` (and `CreateFileW`, which the
+  CRT's `fopen` may use) set from `PdInjectedInit` while the game is still suspended. KERNELBASE is loaded by then, so
+  this catches every module and the very first file. pdnet has no inline hook helper yet: add MinHook (small, BSD) to
+  deps, or a hand-written 14-byte jump with a copied prologue. The existing import hook (title art, debug menu) stays
+  and chains in front of it.
+- That PDPL can't replace shaders is most likely its late injection. To be confirmed by logging every open from the
+  first one.
+
+### How pdnet serves a mod file
+- **Mod index:** on start (and on every change), pdnet builds a map: game path (lowercase, `/`) > (mod, entry). Built
+  from the enabled mods in load order; the first mod to claim a path wins. Paths are normalised from the full path the
+  game passes (strip the game folder; handle the `Assets/Data/t:/...` drive-letter paths PDPL mentions).
+- **Opening:** `CreateFile2` must return a real handle, so a zip entry is extracted once to
+  `LocalState\pdnet\modcache\<mod id>\<version>\<path>` (full path, unlike PDPL's name-only `fake\`) and that file is
+  opened. Cached across starts; deleted when the mod's version changes. Loose mods (a folder instead of a zip, for
+  creators testing) are opened in place.
+- **Zip reading:** miniz (single file, MIT) for zip; 7z left out at first (PDPL reads it; most mods are zips).
+- **Live changes:** the index is swapped under a lock. Files the game opens later (per match: maps, models,
+  animations) then come from the new set without a restart. Files the game read once at start (shaders, probably
+  audio banks, gsdata) need either a restart or a reload hook per kind.
+- **Skill data:** reuse the modpack guard's knowledge (`gsdata_<lang>.dat` in memory at 0x1404c5240, 0x44004 bytes;
+  the game copies its stored online copy over the file's, FUN_14017e0a0): a mod's gsdata is written into that block,
+  and the vanilla block is kept to put back when the mod goes off. This is the live path that has already worked.
+
+### The pieces
+1. **Mod list** (`mods.txt`, in this repo, fetched at start like the updater's release check): one line per mod,
+   `<id> <github owner/repo>`. The ID is fixed when a mod is added. Only listed mods show in the menu or load from a
+   lobby. Mods dropped into `LocalState\pdnet\mods\` by hand also show (marked "local", never sent to lobbies).
+2. **What creators ship:** a GitHub release with one zip; `pdmod.json` inside it: `id, name, version, author,
+   description, kind (assets | plugin), online (match | local), touches (skills, maps, models, animation, audio,
+   shaders, ...), load_after / load_before`. `online: local` = cosmetic / client only (audio, UI, outfits); those
+   don't need to match the host. Release notes carry `sha256 <zip> <hex>`, as pdnet's own releases do.
+3. **Downloads:** pdnet in the game (it has network access; EOS runs there) and pdlaunch at start, reusing
+   CheckForUpdate's HTTPS + sha256 code. Stored as `LocalState\pdnet\mods\<id>\<version>.zip`.
+4. **In-game menu:** Options > Mods (or Multiplayer > Settings > Mods): a paged list like the Theatre film list (10 per
+   page, LB / RB). Per row: checkbox, name, version, author, and a mark for "plays online" vs "only you". A: toggle.
+   X: move (load order). Y: **Auto sort**. Saved to settings.ini (`mods_enabled=`, `mods_order=`). A mod that touches
+   only per-match files applies at once; one that touches start-up files (shaders, audio) says "restart to apply".
+5. **Auto sort:** a topological sort on `load_after` / `load_before`, then by kind (plugins and frameworks lowest,
+   gameplay data, cosmetics on top), then name. From the index, the menu says when two enabled mods replace the same
+   file and which wins.
+6. **Lobby:** the host's enabled `online: match` mods go in a new lobby attribute `PD_MODS` = `id@version,...` in load
+   order (EOS caps an attribute at 1000 bytes: ~60 mods). The lobby list shows "Modded". Modded lobbies are Unrated.
+7. **Joining:** if the joiner's `match` mods equal the host's, join as now. If not: "This lobby uses: X 1.2, Y 0.3.
+   Download and use them?" Yes > download, swap the index to the host's set (plus the joiner's own `local` mods), put
+   the skill data in, join. Leaving the lobby puts the player's own set back. Only if a needed mod touches start-up
+   files (or is a plugin): close, restart, rejoin by lobby ID (`pdnet\pending-join`).
+8. **Plugin DLLs (later):** loaded with MemoryModule from the zip (as PDPL does) or unpacked and loaded with
+   LoadLibrary. Can't be unloaded, so turning one off needs a restart.
+
+### Risks
+- **Code from lobbies:** a `plugin` mod runs with the game's rights. From a lobby, only mods on the curated `mods.txt`,
+  at the exact version and sha256, after the joiner says yes. Plugins go on the list only after someone has read the
+  source.
+- **Swapping mid-load:** the index must not change while a match loads or runs (a map file from one set, a model from
+  another). Swap only in menus / the lobby, and refuse to start a match when a member's PD_MODS differ.
+- **Start-up files:** which kinds are read once at start is unknown until the open log exists. Until then assume
+  restart for shaders and audio.
+- **A broken mod can stop the game starting:** if the last start never reached the title screen, pdnet starts once
+  with no mods and says so.
+- **Two hooks on CreateFile2** (the import hook and the KERNELBASE one): the import hook calls the original through the
+  inline hook, so both run; the order must stay title art / debug menu first, mods second.
+
+### Suggested order
+1. Inline hook on KERNELBASE `CreateFile2` / `CreateFileW` from PdInjectedInit; log every open from the first (one
+   kit, run once) to learn which files load at start and which per match, and whether shaders come through.
+2. Mod index + miniz + extract cache; one hand-placed zip in `LocalState\pdnet\mods\` replaces a model, a map and a
+   shader in the game.
+3. settings.ini `mods_enabled=` / `mods_order=`, live swap of the index from the menus.
+4. In-game Mods menu (list, checkboxes, order, Auto sort, restart prompt where needed).
+5. mods.txt + downloads with sha256.
+6. Skill data from mods, live, with vanilla put back.
+7. PD_MODS on lobbies, Modded tag, Unrated; join flow (live where possible, restart + rejoin otherwise).
+8. Later: plugin DLLs; agree `pdmod.json` with Torphedo.
+
 ## Log
+- 2026-11-16: Mod loader and mod menu: plan written (above); pdnet loads mods itself, not PDPL (the user's call). Read-only, no kit built.
 (Newest first: what was tried, what happened.)
 - 2026-11-16: Film nametag colours (Conceptual 40): in a film the ally colour goes to the watched player and their team
   in the film (snapshot teams, film::Info::team), the enemy colour to the rest; the flying camera keeps the last
