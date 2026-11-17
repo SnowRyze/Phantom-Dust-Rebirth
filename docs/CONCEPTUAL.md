@@ -85,6 +85,9 @@ Anything that changes match behaviour needs every player on the same kit, and re
 
 ## Log
 (Newest first: what was tried, what happened.)
+- 2026-11-16: Film nametag colours (Conceptual 40): in a film the ally colour goes to the watched player and their team
+  in the film (snapshot teams, film::Info::team), the enemy colour to the rest; the flying camera keeps the last
+  watched player's side. Before, the battle's own sides (this PC's slot 0) decided it.
 - 2026-11-16: Remote hands on the HUD (Conceptual 39): watching a player other than this PC's, the hand showed plain
   knobs, no coloured cost badges. FUN_140151f90 draws a slot's badge only when its bit is set in the HUD's per-player
   mask (HUD object DAT_1404bec00 + player * 0x2c + 0x2e4; +0x2dc per slot is the draw-in state, 2-4 animate), and its

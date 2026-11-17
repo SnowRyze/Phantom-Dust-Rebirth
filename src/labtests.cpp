@@ -363,6 +363,15 @@ namespace pdnet::labtests
         uint32_t TagColour(int slot)
         {
             if (Health(slot) <= 0) return GetConfig().deadNametagColor;
+            if (FilmActive())
+            {
+                // A film: ally for the player being watched and their film teammates (the film's own teams), enemy for the
+                // rest; with the flying camera, the last player watched counts (the user, 2026-11-16).
+                static int viewer = 0;
+                if (g_deadTarget >= 0 && g_deadTarget < 4) viewer = g_deadTarget;
+                bool ally = slot == viewer || (slot >= 0 && slot < 4 && g_filmInfo.team[slot] >= 0 && g_filmInfo.team[slot] == g_filmInfo.team[viewer]);
+                return ally ? GetConfig().allyNametagColor : GetConfig().enemyNametagColor;
+            }
             int local = LocalSlot();
             if (slot == local) return GetConfig().allyNametagColor;
             uint8_t* mine = PlayerObject(local);
