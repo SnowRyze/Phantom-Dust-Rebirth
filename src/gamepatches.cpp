@@ -7,6 +7,8 @@
 #include "log.h"
 #include "rebirth_word.h"
 #include "gamepads.h"
+#include "labtests.h"
+#include "film.h"
 #include <fstream>
 #include <winrt/Windows.ApplicationModel.Core.h>
 #include <winrt/Windows.UI.Core.h>
@@ -22,6 +24,7 @@ namespace pdnet::gamepatches
     {
         constexpr uint64_t kGhidraBase = 0x140000000;
 
+        std::atomic<bool> g_theatre{ false }; // the Settings screen (menu 68) is showing the Theatre's film list
         std::atomic<uint8_t> g_bodyTags{ 0 }; // nametags on dead bodies wanted (the lobby host's setting)
         // What the game's nametag code reads (routines below), kept current by NametagColours: dead bodies keep their
         // tag only in Tag Team, and each other player's tag colour by match slot (ally / enemy, both ARGB twice).
@@ -917,7 +920,18 @@ namespace pdnet::gamepatches
         int HookedPushMenu(int64_t manager, int menu, char force)
         {
             int current = CurrentMenu(manager);
-            if (menu == 68) g_settingsOpenedAt = GetTickCount64();
+            bool theatre = false;
+            if (menu == 40 && current == 36) // Theater (livetrade 40 from livemain 36): the film list, not Trade 
+            {
+                menu = 68; // the Settings screen, as the Theatre
+                theatre = true;
+                Log(L"theatre: opened (in place of Trade)");
+            }
+            if (menu == 68)
+            {
+                g_theatre = theatre;
+                g_settingsOpenedAt = GetTickCount64();
+            }
             RenameStrings(); // cheap; covers string tables loaded after start-up
             if (menu != current) Log(L"menu: open %d (from %d)", menu, current);
             if (GetConfig().debugMenu && menu == 5 && current == 8)
@@ -1920,6 +1934,70 @@ namespace pdnet::gamepatches
         // tells which row the panel is for). Changes go to pdnet.ini (SaveSetting) and apply at once where they can.
         constexpr int kSettingsMenu = 68;
         bool InSettings() { return CurrentMenu(MenuManager()) == kSettingsMenu; }
+
+        // Theatre: the multiplayer menu's Theater item (was Trade, livetrade 40) opens this same
+        // screen with the saved films as its rows (film::List), newest first, and each film's details as the row's hint.
+        // A on a film picks it; playback isn't built yet, so that is only logged for now. The screen fits 10 rows: all the
+        // films (up to 100 kept) are paged through 10 at a time with LB / RB (or Page Up / Page Down, Q / E); the rows'
+        // texts are buffers the window keeps reading, so a page change only rewrites them.
+        constexpr int kTradeMenu = 40, kTheatreRows = 10, kTheatreFilms = 100;
+        std::vector<film::Info> g_films;
+        char g_filmRow[kTheatreRows][112];
+        char g_filmHint[kTheatreRows][160];
+        int g_filmRows = 0, g_filmPage = 0;
+        const char* kTheatreBar = "\a8#Select \a2#Watch \a580r\a3#Back";
+
+        void StartFilmBattle(const film::Info& f); // (below)
+        int FilmPages() { return g_films.empty() ? 1 : static_cast<int>((g_films.size() + kTheatreRows - 1) / kTheatreRows); }
+
+        void FillFilmPage()
+        {
+            if (g_films.empty())
+            {
+                sprintf_s(g_filmRow[0], "\a160wNo films yet\f\a1#\a230c\f\a0#");
+                strcpy_s(g_filmHint[0], "Every match is saved as a film. Play one, then come back.");
+                return;
+            }
+            char page[48] = "";
+            if (FilmPages() > 1) sprintf_s(page, "  (page %d of %d: LB / RB)", g_filmPage + 1, FilmPages());
+            for (int r = 0; r < g_filmRows; ++r)
+            {
+                size_t i = static_cast<size_t>(g_filmPage) * kTheatreRows + r;
+                if (i >= g_films.size())
+                {
+                    g_filmRow[r][0] = 0;
+                    strcpy_s(g_filmHint[r], page);
+                    continue;
+                }
+                const film::Info& f = g_films[i];
+                const char* type = film::MatchType(f);
+                char length[24], label[48], lobby[64] = "";
+                sprintf_s(length, "%d:%02d", static_cast<int>(f.minutes), static_cast<int>(f.minutes * 60) % 60);
+                // Numbered films (Conceptual 38 on): "Lobby 3  Match 2"; older ones: their date.
+                if (f.lobbySession) sprintf_s(label, "Lobby %u  Match %u", f.lobbySession, f.matchInLobby);
+                else strcpy_s(label, f.when.empty() ? "Film" : f.when.c_str());
+                if (f.lobbySession) sprintf_s(lobby, " %s, lobby %.8s.", f.when.c_str(), f.lobby.empty() ? "offline" : f.lobby.c_str() + (f.lobby.size() > 10 ? 2 : 0));
+                _snprintf_s(g_filmRow[r], _TRUNCATE, "\a160w%s\f\a1#\a230c%s %s\f\a0#", label, type, length);
+                _snprintf_s(g_filmHint[r], _TRUNCATE, "%s on stage %d: %s.%s%s", type, f.stage, f.players.empty() ? "players not recorded" : f.players.c_str(), lobby, page);
+            }
+        }
+
+        void RefreshFilmRows()
+        {
+            g_films = film::List(kTheatreFilms);
+            g_filmPage = 0;
+            g_filmRows = g_films.empty() ? 1 : (std::min)(kTheatreRows, static_cast<int>(g_films.size()));
+            FillFilmPage();
+        }
+
+        void TurnFilmPage(int step)
+        {
+            int pages = FilmPages();
+            if (pages <= 1) return;
+            g_filmPage = (g_filmPage + step + pages) % pages;
+            FillFilmPage();
+            Log(L"theatre: page %d of %d", g_filmPage + 1, pages);
+        }
         struct Colour { const char* name; uint32_t rgb; };
         constexpr Colour kColours[] = { { "Yellow", 0xFFE600 }, { "Red", 0xFF5A5A }, { "Blue", 0x4FB4FF }, { "Green", 0x5AFF6E },
                                         { "Purple", 0xB46EFF }, { "Orange", 0xFFA03C }, { "Cyan", 0x3CF0FF }, { "Pink", 0xFF78C8 },
@@ -2125,6 +2203,19 @@ namespace pdnet::gamepatches
             int64_t input[2] = { 0, 0 };
             int64_t buttons = reinterpret_cast<InputFn>(At(0x1402168a0))(input); // g1 #37 (0): the buttons, as the script reads them
             int row = args[0] - kFirstOptionRow;
+            if (g_theatre)
+            {
+                static ULONGLONG last = 0;
+                size_t pick = static_cast<size_t>(g_filmPage) * kTheatreRows + row;
+                if ((buttons & 0x1010) && row >= 0 && row < kTheatreRows && pick < g_films.size() && GetTickCount64() - last > 300)
+                {
+                    last = GetTickCount64();
+                    int64_t sound[2] = { 0, 0 };
+                    reinterpret_cast<InputFn>(At(0x140261750))(sound); // the menu's select sound
+                    Log(L"theatre: film %s chosen (%S, %S) - playback isn't built yet", g_films[pick].file.c_str(), g_films[pick].when.c_str(), g_films[pick].players.c_str());
+                }
+                return 0;
+            }
             if (row >= 0 && row < kSettingRows)
             {
                 int64_t sound[2] = { 37, 0 };
@@ -2335,7 +2426,44 @@ namespace pdnet::gamepatches
         int64_t HookedButtons(int64_t* args)
         {
             int64_t buttons = g_buttons(args);
-            if (!InSettings() || (args && args[0] != 0)) return buttons;
+            if (InSettings() && g_theatre && (!args || args[0] == 0))
+            {
+                static bool held[2] = {};
+                uint8_t keys[256];
+                bool haveKeys = KeysHeld(keys);
+                bool next = AnyPadHolds(0x800) || (haveKeys && (keys[VK_NEXT] || keys['E'])); // RB, Page Down, E
+                bool previous = AnyPadHolds(0x400) || (haveKeys && (keys[VK_PRIOR] || keys['Q'])); // LB, Page Up, Q
+                if (next && !held[0] || previous && !held[1])
+                {
+                    int64_t sound[2] = { 37, 0 };
+                    reinterpret_cast<InputFn>(At(0x140261750))(sound);
+                    TurnFilmPage(next && !held[0] ? 1 : -1);
+                }
+                held[0] = next;
+                held[1] = previous;
+                // A: the film on the highlighted row. The window's cursor is its +0x12 (FUN_14024b000 moves it), the screen's
+                // window the manager's +0x10402; pdnet's rows are the window's only rows, so the cursor is the row. A is kept
+                // from the script (it would run the row's old action).
+                static ULONGLONG lastPick = 0;
+                if ((buttons & 0x1010) && GetTickCount64() - lastPick > 300)
+                {
+                    lastPick = GetTickCount64();
+                    int64_t manager = MenuManager();
+                    int window = manager ? *reinterpret_cast<int16_t*>(manager + 0x10402) : -1;
+                    int row = window >= 0 && window < 16 ? WindowAt(manager, window)[0x12 / 2] : -1;
+                    size_t pick = static_cast<size_t>(g_filmPage) * kTheatreRows + row;
+                    if (row >= 0 && row < kTheatreRows && pick < g_films.size())
+                    {
+                        int64_t sound[2] = { 0, 0 };
+                        reinterpret_cast<InputFn>(At(0x140261750))(sound); // the menu's select sound
+                        Log(L"theatre: film %s chosen (%S, %S)", g_films[pick].file.c_str(), g_films[pick].when.c_str(), g_films[pick].players.c_str());
+                        StartFilmBattle(g_films[pick]);
+                    }
+                    else Log(L"theatre: A on row %d (window %d): no film there", row, window);
+                }
+                return buttons & ~0x1010ll;
+            }
+            if (!InSettings() || (args && args[0] != 0) || g_theatre) return buttons;
             static uint64_t last = 0; // the script reads the buttons several times a frame: act once per press
             bool a = (buttons & 0x1010) != 0, b = (buttons & 0x2020) != 0;
             bool fresh = GetTickCount64() - last > 150;
@@ -2364,7 +2492,7 @@ namespace pdnet::gamepatches
         // The button bar (menu command 88 with 2, text): the Options screen's "Change / Back" gets "A Save".
         int64_t HookedButtonBar(int64_t* args)
         {
-            const char* kSave = g_confirmingSave ? kConfirmBar : kNormalBar;
+            const char* kSave = g_theatre ? kTheatreBar : g_confirmingSave ? kConfirmBar : kNormalBar;
             char text[64];
             if (args && args[0] == 1 && CopyString(reinterpret_cast<const char*>(args[1]), text, sizeof(text)) && strcmp(text, "LOADING") == 0 &&
                 CurrentMenu(MenuManager()) == kLobbyMenu && !g_matchLoadingSince)
@@ -2384,6 +2512,17 @@ namespace pdnet::gamepatches
         {
             bool rows = strcmp(added, "\a160wVoice Chat\f\a1#\a230c%s\f\a0#") == 0, hints = strcmp(added, "Set your voice chat status.") == 0;
             if (!rows && !hints) return false;
+            if (g_theatre)
+            {
+                if (rows) RefreshFilmRows();
+                for (int r = 0; r < g_filmRows; ++r)
+                {
+                    int64_t item[8] = { reinterpret_cast<int64_t>(rows ? g_filmRow[r] : g_filmHint[r]) };
+                    g_addItem(item);
+                }
+                if (rows) Log(L"theatre: %d film(s) listed", static_cast<int>(g_films.size()));
+                return true;
+            }
             if (rows)
             {
                 g_settingsSaved = EditableConfig(); // what leaving unsaved goes back to
@@ -2404,6 +2543,9 @@ namespace pdnet::gamepatches
         {
             if (menu != kSettingsMenu) return;
             int texts = RelabelScript(script, kSettingsTexts, std::size(kSettingsTexts)), patched = PatchSettingsScript(script);
+            static constexpr Relabel kToTheatre[] = { { "ONLINE SETTINGS", "THEATRE" } }, kToSettings[] = { { "THEATRE", "ONLINE SETTINGS" } };
+            if (g_theatre) RelabelScript(script, kToTheatre, 1);
+            else RelabelScript(script, kToSettings, 1);
             if (fresh) Log(L"gamepatch: Settings menu (was Xbox Live Options): %d text(s), A button %s", texts, patched ? L"changes settings" : L"left as it is (script not as expected)");
         }
 
@@ -2854,6 +2996,52 @@ namespace pdnet::gamepatches
             *reinterpret_cast<int32_t*>(At(0x140519abc)) = 3; // "downloaded"
             Log(L"gamepatch: Test Arsenal: opponent = a copy of arsenal %d", index);
             return true;
+        }
+
+        // Theatre: a film plays in a Test Arsenal battle started straight away (no picks): the film's stage and layout, its
+        // players' characters when the film recorded them (version 2), this player's current arsenal on both sides for now.
+        // labtests plays the film once the battle starts.
+        // The scoreboard battle (FUN_140214770) builds each side's deck counts (DAT_140585fe8[slot]) with FUN_14014f830
+        // from 30 skill ids; the battle loads its skills from those. For a film, both decks are the film players' own, so
+        // every skill the film uses is loaded (Conceptual 29 crashed on an effect from a skill this battle hadn't loaded).
+        using DeckFn = void (*)(uint64_t, int, const int16_t*);
+        void HookedDeck(uint64_t a, int slot, const int16_t* skills)
+        {
+            int16_t film[30];
+            if (g_testBattle && labtests::FilmDeck(slot, film))
+            {
+                Log(L"theatre: slot %d plays with the film's deck (%d %d %d %d ...)", slot, film[0], film[1], film[2], film[3]);
+                skills = film;
+            }
+            reinterpret_cast<DeckFn>(At(0x14014f830))(a, slot, skills);
+        }
+
+        void StartFilmBattle(const film::Info& f)
+        {
+            uint8_t* save = *reinterpret_cast<uint8_t**>(At(0x1404bec10));
+            int index = save ? *reinterpret_cast<int32_t*>(save + 0x3b08) : -1;
+            if (!labtests::QueueFilm(f.file) || !CopyArsenalToOpponent(index))
+            {
+                Log(L"theatre: the film's battle couldn't start");
+                return;
+            }
+            int characters[2] = { f.character[0], f.character[1] }; // each film player keeps their slot
+            *reinterpret_cast<int32_t*>(At(0x1403de844)) = index;
+            g_testBattle = true;
+            g_testStage = f.stage;
+            g_testLayout = f.layout;
+            g_testCharacter = characters[0];
+            g_testOpponentCharacter = characters[1];
+            g_testArsenal = index;
+            g_testPicking = kPickingNone;
+            LoadMultiplayerTextures();
+            ResetLabVariables();
+            MenuParam(kScoreBattleMenu, 0) = 1; // livedbtl: start the battle
+            int64_t manager = MenuManager();
+            *At(0x1404bbc34) = 0;
+            g_pushMenu(manager, kScoreBattleMenu, 0);
+            *reinterpret_cast<char*>(manager + 0x1062c) = 0;
+            Log(L"theatre: battle for the film: stage %d, layout %d, characters %d / %d", f.stage, f.layout, characters[0], characters[1]);
         }
 
         void OpenTestArsenal()
@@ -4014,6 +4202,23 @@ namespace pdnet::gamepatches
                 if (g_testCharacter >= 0) *reinterpret_cast<int32_t*>(setup + 8) = g_testCharacter;
                 if (g_testOpponentCharacter >= 0) *reinterpret_cast<int32_t*>(setup + 0x48 + 8) = g_testOpponentCharacter;
                 Log(L"gamepatch: Test Arsenal: battle on map %d, layout %u, character %d, opponent's %d", stage, layout, *reinterpret_cast<int32_t*>(setup + 8), *reinterpret_cast<int32_t*>(setup + 0x48 + 8));
+                // A film with 3 or 4 players: the setup has 4 entries of 0x48 (FUN_140128990 copies them; a player is
+                // there when its first int isn't 0) and this battle fills 2. The others are copies of the opponent's
+                // entry with the film player's character, and their deck counts are built from the film (slots 0 and 1
+                // get theirs through HookedDeck).
+                int players = labtests::FilmPlayers();
+                for (int k = 2; k < players && k < 4; ++k)
+                {
+                    memcpy(setup + k * 0x48, setup + 0x48, 0x48);
+                    int character = labtests::FilmCharacter(k);
+                    if (character >= 0) *reinterpret_cast<int32_t*>(setup + k * 0x48 + 8) = character;
+                    int16_t deck[30];
+                    for (int16_t& id : deck) id = -1;
+                    labtests::FilmDeck(k, deck);
+                    reinterpret_cast<float*>(At(0x1404bc958))[k] = 1.0f; // its Aura rate
+                    if (reinterpret_cast<uint8_t**>(At(0x140585fe8))[k]) reinterpret_cast<DeckFn>(At(0x14014f830))(0, k, deck); // its deck counts, when allocated
+                    Log(L"theatre: battle slot %d added for the film (character %d, deck %d %d %d ...)", k, *reinterpret_cast<int32_t*>(setup + k * 0x48 + 8), deck[0], deck[1], deck[2]);
+                }
             }
             reinterpret_cast<MatchSetupFn>(At(0x140128990))(a, localSlot, mode, setup, e, stage, layout);
         }
@@ -5054,6 +5259,13 @@ namespace pdnet::gamepatches
         std::call_once(once, []
         {
             WatchPeerDrops();
+            labtests::Install(); // the dead camera and Theatre playback
+            film::Start();       // Theatre films: every online match is recorded
+            {
+                bool player = HookCall(0x1402148da, 0x14014f830, reinterpret_cast<void*>(&HookedDeck));
+                bool opponent = HookCall(0x14021491f, 0x14014f830, reinterpret_cast<void*>(&HookedDeck));
+                Log(L"theatre: film decks %s", player && opponent ? L"hooked" : L"NOT hooked (skills in films may crash)");
+            }
             DynamicCases();
             if (!HookFileOpens()) Log(L"gamepatch: title screen: CreateFile2 import not found");
             g_bodyTags = GetConfig().nametagsOnBodies ? 1 : 0;
