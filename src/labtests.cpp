@@ -141,7 +141,9 @@ namespace pdnet::labtests
 
         // A film's battle is running (match state 6). The film's controls and time control work only then: after it, A on
         // the results screen kept pausing the game's update and it hung on a black screen (Conceptual 36).
-        bool FilmActive() { return g_filmShown && Var<int32_t>(0x1404bc950) == 6; }
+        // Only in the film's own battle (a Test Arsenal one): a real match after a film once still counted as the film
+        // (2026-11-19, DESKTOP-SUFDHSP: a debug-menu battle after the Theatre took the film's pause, speed and keys).
+        bool FilmActive() { return g_filmShown && gamepatches::TestBattle() && Var<int32_t>(0x1404bc950) == 6; }
         size_t g_filmAt = 0;
         ULONGLONG g_filmStart = 0;
         uint32_t g_filmBase = 0;
@@ -1074,7 +1076,7 @@ namespace pdnet::labtests
 
         void FilmFrame()
         {
-            if (!g_filmPlaying) return;
+            if (!g_filmPlaying || !gamepatches::TestBattle()) return;
             RestoreFilmCapsules();
             uint64_t elapsed = g_stepHooked ? static_cast<uint64_t>(g_filmClock) : GetTickCount64() - g_filmStart;
             int frame = FrameNow();
@@ -1228,6 +1230,8 @@ namespace pdnet::labtests
         {
             if (g_filmShown) Log(L"theatre: battle over");
             g_filmPlaying = g_filmShown = false;
+            g_filmPaused = false;
+            g_filmRate = 1.0f;
             // The end of a battle is noticed only when the next one starts, after a film for it may already be queued
             // (Conceptual 35: a film after another battle played 0 records): a queued film is kept.
             if (!g_filmQueued) g_filmEvents.clear();
@@ -1259,6 +1263,9 @@ namespace pdnet::labtests
             auto original = reinterpret_cast<CameraFn>(At(0x14012bfc0));
             if (InMatchNow() && !InBattle())
             {
+                // A real match: a Test Arsenal or Theatre battle before it is over (it was only noticed when the next
+                // Test Arsenal battle started, so a film stayed "shown" into this match).
+                if (g_wasInBattle) { g_wasInBattle = false; EndOfBattle(); }
                 DeadCameraFrame(original);
                 return;
             }
