@@ -2756,6 +2756,32 @@ namespace pdnet::gamepatches
 
         int16_t* WindowAt(int64_t manager, int index) { return reinterpret_cast<int16_t*>(manager + 0x40 + index * 0x103c); }
 
+        // The highlighted row of pdnet's list on the Settings screen (Theater, Mods list). The screen's window number
+        // (manager +0x10402) can be the hints' window, whose cursor (+0x12) stays 0: in the Mods list every press acted on
+        // the top mod (eat, 2026-11-22). The list is the window with `rows` rows (+0x16) whose cursor moves: of the windows
+        // with that many rows, the highest cursor (the hints' stays 0). FUN_14024b000 moves +0x12 between 0 and +0x16 - 1.
+        int ListCursorRow(int rows)
+        {
+            int64_t manager = MenuManager();
+            if (!manager || rows <= 0) return -1;
+            int best = -1, bestWindow = -1;
+            for (int w = 0; w < 16; ++w)
+            {
+                int16_t* win = WindowAt(manager, w);
+                if (win[0x16 / 2] != rows) continue;
+                int cursor = win[0x12 / 2];
+                if (cursor >= 0 && cursor < rows && cursor > best) { best = cursor; bestWindow = w; }
+            }
+            if (best < 0)
+            {
+                int screen = *reinterpret_cast<int16_t*>(manager + 0x10402);
+                return screen >= 0 && screen < 16 ? WindowAt(manager, screen)[0x12 / 2] : -1;
+            }
+            static int told = 0;
+            if (told < 6 && best > 0) { ++told; Log(L"menu: list cursor row %d (window %d of %d rows)", best, bestWindow, rows); }
+            return best;
+        }
+
         void OpenSavePopup()
         {
             int64_t manager = MenuManager();
@@ -2798,12 +2824,8 @@ namespace pdnet::gamepatches
             ShowButtonBar(on ? kConfirmBar : kNormalBar);
         }
 
-        int TheatreCursorRow()
-        {
-            int64_t manager = MenuManager();
-            int window = manager ? *reinterpret_cast<int16_t*>(manager + 0x10402) : -1;
-            return window >= 0 && window < 16 ? WindowAt(manager, window)[0x12 / 2] : -1;
-        }
+        int ListCursorRow(int rows); // (below)
+        int TheatreCursorRow() { return ListCursorRow(g_filmRows); }
 
         void TheatreDelete()
         {
@@ -2874,7 +2896,7 @@ namespace pdnet::gamepatches
                     lastPick = GetTickCount64();
                     int64_t manager = MenuManager();
                     int window = manager ? *reinterpret_cast<int16_t*>(manager + 0x10402) : -1;
-                    int row = window >= 0 && window < 16 ? WindowAt(manager, window)[0x12 / 2] : -1;
+                    int row = ListCursorRow(g_filmRows);
                     size_t pick = static_cast<size_t>(g_filmPage) * kTheatreRows + row;
                     if (row >= 0 && row < kTheatreRows && pick < g_films.size())
                     {
@@ -2904,7 +2926,7 @@ namespace pdnet::gamepatches
                 for (int i = 0; i < 5; ++i) { pressed[i] = now[i] && !held[i]; held[i] = now[i]; }
                 int64_t manager = MenuManager();
                 int window = manager ? *reinterpret_cast<int16_t*>(manager + 0x10402) : -1;
-                int row = window >= 0 && window < 16 ? WindowAt(manager, window)[0x12 / 2] : -1; // the cursor (as in the Theatre)
+                int row = ListCursorRow(g_modRows); // the cursor (as in the Theatre)
                 size_t at = static_cast<size_t>(g_modPage) * kModRows + (row >= 0 ? row : 0);
                 auto sound = [](int64_t which) { int64_t s[2] = { which, 0 }; reinterpret_cast<InputFn>(At(0x140261750))(s); };
                 if (g_movingMod >= 0 && row >= 0 && row < kModRows && static_cast<int>(at) != g_movingMod && at < g_mods.size()) MoveModTo(at); // carried with the cursor
