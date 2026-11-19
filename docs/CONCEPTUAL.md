@@ -269,11 +269,39 @@ directly with one address per script argument, a PowerShell wrapper passing arra
   draw its preview instead of the script's command 18 (how: sprites added to MNet's sprite list, or a texture of its
   own; the sprite list's location is the next thing to find); (4) check the script's pick handler turns item 100 + index
   into the pick (g4 #576) for any index. Lobbies: both PCs have the same stage list when their mods match (PD_MODS).
-  Also to check: anything else keyed by map number (BGM, AI navigation com/stNN for AI battles).- Prebake pieces: a generated stageset_en.dat (and _ja) with entries 30+ (map numbers from 40 up, flag 1), each map
+  Also to check: anything else keyed by map number (BGM, AI navigation com/stNN for AI battles).- **Menu sprites (Ghidra, 2026-11-21):** menu command 16 (FUN_140246920) loads `<name>.alr` into one of 64 texture
+  slots (menu manager +0x10530 + slot x 0x20); command 17 sets the slot's +0x18 to the sprite handle list
+  (FUN_140199120); command 18 / 95 draw handle = list[sprite] (FUN_1401983e0). The list comes from the .alr's **second
+  root chunk** (type 0x10, parsed by FUN_140197750): u32 texture count, u32 sprite count, 16-byte set name, textures x
+  0x20 (16-byte .dds name + 16 bytes), textures x 0x14 (u16 width, u16 height, ...), then sprites x 60 bytes: u32
+  texture index, 32-byte source name, 4 floats uv rectangle (u0, v0, u1, v1, fractions of the texture), u32 width, u32
+  height. MNet.alr: 12 textures, 84 sprites. Previews 49-65 are named mission_map_stNN.tga: st02-st07 on MNet0400
+  (1024x512), st08 + st12-st17 on MNet0410, st22, 23, 25, 26 on MNet0420; all 254x112. **Textures 3-8 (MNet0430 to
+  MNet0480) are 32x32 placeholders**, free to become preview sheets (256x1024: 9 strips each). The sprite chunk ends at
+  0x17d8 and the resource buffer starts at 0x2000, so about 34 more sprite records fit before it has to move (texture
+  offsets are relative to the buffer, so moving it is safe).
+- **Prebake, concretely:** pdlaunch, from the enabled map mods (category=Map / a stNN-less .alr + .dat pair, with
+  mod-info.ini or pdmod.json), in active-mod order, slot k = stage index 30 + k, map number 40 + k:
+  (1) stageset_en.dat / _ja.dat: the game's 30 entries + one per slot (name and short name from the mod, internal
+  name `st<NN>-<id>`, layouts = the number of CP00 sections in the mod's .dat, flag 1);
+  (2) Assets/Data/Map/st<NN>.alr / .dat = the mod's files;
+  (3) Menu/MNet.alr: the game's, with its previews (preview.png, 254 or 256 x 112) drawn into placeholder textures 3+
+  (uncompressed BGRA, 256 x 1024, decoded with WIC) and sprite records 84 + k appended (count byte updated);
+  all of it as one generated archive or loose files in PDPL's folder, rebuilt only when the slot list changes;
+  (4) LocalState\pdnet\map-slots.txt for pdnet: slot, stage index, map number, sprite, mod id.
+  pdnet, in menu 47: add an item (command 59, 100 + index) per slot after the script's last one; answer command 87
+  kind 57 (unlocked) with 1 for slots; draw sprite 84 + k (command 18 at 48, 261) instead of the script's while the
+  cursor is on slot k. Live later: the same generator run by pdnet, with PDPL mounting the result.
+- Still to check before building: the script's pick handler for items it didn't add (item 100 + index -> g4 #576); the
+  loading screen's picture per map (LdCg##.alr, 128x256, keyed by map number?) and music per map; that nothing reads
+  the map number into a fixed-size table (map numbers 40+).- Prebake pieces: a generated stageset_en.dat (and _ja) with entries 30+ (map numbers from 40 up, flag 1), each map
   mod's .alr / .dat served as Assets/Data/Map/st40.alr / .dat, previews added to an MNet sheet, and pdnet answering
   the unlocked query. Still to check: the picker's preview choice (next: a run with menu_debug=on through the picker),
   and anything else keyed by map number (BGM, AI navigation com/stNN, lighting, intro camera stNNcam.alr: not needed).
 ## Log
+- 2026-11-21: Menu sprites decoded (Ghidra): sprite lists live in an .alr's second root chunk (textures, then 60-byte sprites
+  with uv rectangles); MNet's map previews are sprites 49-65, and textures 3-8 are 32x32 placeholders that can hold
+  custom previews. Prebake plan written out in "New map slots".
 - 2026-11-21: Map picker run with menu_debug=47 (the user, Conceptual 51; menus fine this time): the picker lists stages
   from a fixed location order (indices 30+ never visited), adds item 100 + index, and draws one MNet sprite per map
   (49-65) as the preview. Notes in "New map slots". menu_debug removed from settings.ini again.
