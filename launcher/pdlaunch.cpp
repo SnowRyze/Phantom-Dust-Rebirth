@@ -155,6 +155,11 @@ namespace
     }
 
     std::wstring Setting(const wchar_t* key, const wchar_t* fallback); // (below)
+    bool UrlGet(const std::wstring& url, std::string& body, unsigned long timeoutMs); // (below)
+    std::string Sha256(const std::string& data); // (below)
+    // The mod catalog (mod_list_url= in pdnet.ini or settings.ini): mods\mods.txt in this repository's Conceptual branch.
+    constexpr wchar_t kModListUrl[] = L"https://raw.githubusercontent.com/SnowRyze/Phantom-Dust-Rebirth/Conceptual/mods/mods.txt";
+    const modsync::Net kModNet{ UrlGet, Sha256 };
 
     // Mod loader (Conceptual, step 1; docs\MOD_LOADER_CODE.md): PDPL, Torphedo's Phantom Dust Plugin Loader
     // (pd_loader_core.dll, next to pdlaunch.exe), loaded after pdnet while the game is still suspended. It loads mod files
@@ -176,7 +181,7 @@ namespace
             Log(L"mods: the last start didn't reach the title screen - starting without mods (PDPL not loaded)");
             return;
         }
-        modsync::Sync(localState, Log); // PDPL's mods folder = the player's mod list (step 2), before PDPL reads it
+        modsync::Sync(localState, Log, &kModNet, Setting(L"mod_list_url", kModListUrl)); // catalog downloads, then PDPL's mods folder = the mod list, before PDPL reads it
         std::wstring dll = g_dir + L"pd_loader_core.dll", pdnet = g_dir + L"pdnet.dll";
         if (GetFileAttributesW(dll.c_str()) == INVALID_FILE_ATTRIBUTES)
         {
@@ -881,6 +886,21 @@ namespace
         return ok;
     }
 
+    // HttpsGet with a whole https:// URL (the mod catalog and downloads, modsync).
+    bool UrlGet(const std::wstring& url, std::string& body, unsigned long timeoutMs)
+    {
+        URL_COMPONENTS parts{ sizeof(parts) };
+        wchar_t host[256], path[2048], extra[1024];
+        parts.lpszHostName = host;
+        parts.dwHostNameLength = _countof(host);
+        parts.lpszUrlPath = path;
+        parts.dwUrlPathLength = _countof(path);
+        parts.lpszExtraInfo = extra;
+        parts.dwExtraInfoLength = _countof(extra);
+        if (!WinHttpCrackUrl(url.c_str(), 0, 0, &parts) || parts.nScheme != INTERNET_SCHEME_HTTPS) return false;
+        return HttpsGet(host, std::wstring(path) + extra, body, timeoutMs);
+    }
+
     // Lowercase hex digest (BCRYPT_MD5_ALGORITHM / BCRYPT_SHA256_ALGORITHM) of some bytes; empty on failure.
     std::string HashHex(LPCWSTR algorithm, const std::string& data)
     {
@@ -895,6 +915,8 @@ namespace
         BCryptCloseAlgorithmProvider(alg, 0);
         return hex;
     }
+
+    std::string Sha256(const std::string& data) { return HashHex(BCRYPT_SHA256_ALGORITHM, data); }
 
     std::string ReadFileBytes(const std::wstring& path)
     {
@@ -1239,10 +1261,11 @@ int wmain(int argc, wchar_t** argv)
 
     if (argc == 2 && _wcsicmp(argv[1], L"-attach") == 0) return Attach();
 
-    // pdlaunch.exe -syncmods <LocalState folder>: only the mod folder sync (testing; modsync.h), logged to pdlaunch.log.
-    if (argc == 3 && _wcsicmp(argv[1], L"-syncmods") == 0)
+    // pdlaunch.exe -syncmods <LocalState folder> [catalog URL or file]: only the mod sync with its catalog downloads
+    // (testing; modsync.h), logged to pdlaunch.log.
+    if ((argc == 3 || argc == 4) && _wcsicmp(argv[1], L"-syncmods") == 0)
     {
-        modsync::Sync(argv[2], Log);
+        modsync::Sync(argv[2], Log, &kModNet, argc == 4 ? std::wstring(argv[3]) : Setting(L"mod_list_url", kModListUrl));
         return 0;
     }
 

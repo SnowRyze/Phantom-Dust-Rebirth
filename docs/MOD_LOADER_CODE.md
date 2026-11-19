@@ -28,6 +28,10 @@ priority order with its details, plus `conflict` lines) for pdnet's Mods menu (s
 <LocalState>` runs only this, for testing. pdnet writes `mods-boot.txt` when PDPL loads and deletes it past the title
 screen (safe mode), and logs the mod list.
 
+**Step 5 as built (2026-11-19): also in pdlaunch** (`modsync.cpp`, at game start, with pdlaunch's own `HttpsGet` /
+SHA-256): sections 1 (catalog), 6.2 and 7.2 as planned, except that downloads happen at the next start rather than in the
+game: the Mods list turns a catalog mod on, pdlaunch downloads it before PDPL loads. Failed lookups are cached 6 hours too.
+
 **Torphedo's answers (2026-11-19):**
 - The console only appears when the game is sideloaded, and hiding the window would be easy. Rebirth supports unpacked
   (sideloaded) copies, so pdnet handles it itself (section 4.3); no change in PDPL needed.

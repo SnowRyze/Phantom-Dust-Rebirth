@@ -150,7 +150,65 @@ Rebirth's metadata only, and `touches` is worked out from the paths at every sca
 7. Lobbies.
 8. Catalog plugins.
 
+Status (2026-11-19): 1, 2, 4 and 5 built (Conceptual 41-45); 3's live part waits on PDPL exports (safe mode is in). None tried in the game yet: the user tests everything at once with the list below.
+
+### To test (all at once, newest kit)
+Folders: PDPL's = `%LOCALAPPDATA%\Packages\Microsoft.MSEsper_8wekyb3d8bbwe\RoamingState\mods`; Rebirth's =
+`...\LocalState\pdnet\mods`. Copy mods into them (don't move). Logs: kit `pdlaunch.log`, `LocalState\pdnet.log`,
+`LocalState\pdnet\pdpl.log` (Options > Send Log sends all three).
+
+**PDPL in the game (step 1)**
+1. No console window at start (Store copy, and an unpacked copy if there is one). pdnet.log: `pdpl: ready for PDPL
+   (hidden console, ...)`.
+2. pdlaunch.log: `mods: PDPL loaded (its file hook was in after N ms)` (not "wasn't seen in 5 s").
+3. A zip in PDPL's folder with a changed model (`Assets/Data/player/pc01a/pc01a2.alr`) shows in a match.
+4. The same with a map (`stNN.dat`) and a shader (`.cso` at the zip's root). Shaders are the open question.
+5. The title screen still reads "Rebirth" (pdnet's title art and PDPL both hook file opens).
+6. pdnet.log after 1 and 5 minutes: `pdpl: ... used N ms of CPU`: hundreds of ms is fine, tens of seconds is a busy loop.
+7. `pdpl.log` lists the files the game opened (in blocks; send it, it shows what loads at start vs per match).
+8. Nothing slower: start-up time, menus, match loading.
+
+**Mod folder sync (step 2)**
+9. A zip in Rebirth's folder shows in the game; pdlaunch.log `mods: N mod(s), M on, in order: ...`, and PDPL's folder has
+   `!rb000-<id>.zip`.
+10. Two mods changing the same file: the higher one in the list wins.
+11. A `.7z` mod: with 7-Zip installed its name shows in the list; without it, it still loads (no name or details).
+12. Safe mode: close the game from Task Manager on the start-up logos; the next start has pdlaunch.log `starting without
+    mods`, no mods in the game; the start after that has them again.
+
+**Mods list (step 4)**
+13. Multiplayer menu: the first item reads "Mods" with hint "Turn mods on and off, and choose which wins."; the Lobby
+    Browser still works (search options, then the list).
+14. Mods opens the list (title MODS), rows `[x] name  version  Online / Only you / PDPL`, hint with description, author,
+    wins over / loses to.
+15. The button bar: is the X icon right (`\a4#`, a guess)? Y should be right.
+16. A toggles; LB / RB pages (needs 11+ mods); X picks up, up / down carries, X puts down; PDPL folder mods can't move.
+17. Y auto sorts: a mod with `"load_after": ["other-id"]` ends up above it; a cosmetic (`"online": "local"`) mod at the top.
+18. Back returns to the multiplayer menu; restart: the order and on / off stuck (settings.ini `mods_order`,
+    `mods_enabled`), and the game uses them (a mod turned off is gone, its `!rb` file deleted).
+19. Settings, Theatre and Custom Settings (same screen) still work as before.
+
+**Catalog and downloads (step 5)** (needs a real entry in `mods/mods.txt` on the Conceptual branch, or `mod_list_url=` in
+settings.ini pointing at a test catalog)
+20. A catalog mod shows in the Mods list, off, right column "Download", hint "From the mod catalog ... Turn it on and it
+    downloads at the next game start."
+21. Turn it on, leave, restart: pdlaunch.log `newest release ...`, `downloading ...`, `downloaded, N bytes, sha256 ok`; it's in
+    the game and in the list with its real name.
+22. Game start isn't much slower with downloads (they happen while the game waits); a big mod on a slow line is the risk.
+23. A catalog entry whose release has no sha256 line, or a repo that doesn't exist: the list's hint gives the reason; no
+    crash, other mods fine.
+24. No internet: the catalog from the last start is used; downloaded mods keep working.
+
 ## Log
+- 2026-11-19: Mod loader step 5, catalog and downloads (Conceptual 45), all in pdlaunch at game start (launcher\modsync.cpp):
+  the catalog mods\mods.txt (`<id> <owner/repo> [plugin]`; empty for now) from mod_list_url (default: this repo's Conceptual
+  branch on raw.githubusercontent.com), cached in pdnet\modstore\catalog.txt. Catalog mods are off until turned on in the Mods
+  list (shown with "Download"); for each one on, GitHub's releases/latest (cached 6 h with failures, modstore\releases.txt)
+  gives the first .zip / .7z with a `sha256 <file> <hex>` line in its notes; downloaded to modstore\<id>\<tag>.zip, hash
+  checked, newest 3 kept, then copied into PDPL's folder like the rest. A catalog mod with plugins/ DLLs needs the catalog's
+  plugin flag. Tested with pdlaunch -syncmods and a test catalog: this repo's stable-15 release (pdnet-update-184.zip,
+  11 MB) downloaded with sha256 ok; Torphedo's (no sha256 line) and a missing repo refused with reasons; bad line skipped;
+  second run used the caches (1 s). Not yet tried in the game.
 - 2026-11-19: Mod loader step 4, the Mods list (Conceptual 44): the user asked for Quick Join to become the mods list. Its
   pick opened the session list (43) straight from the multiplayer menu (36; this PC's log: '43 (from 36)' then 'Quick Join -
   any game type'; the Lobby Browser goes 36 -> 38 -> 43); HookedPushMenu turns it into menu 68 in a Mods mode (g_modsList)

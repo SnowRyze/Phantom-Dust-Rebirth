@@ -12,6 +12,13 @@ namespace modsync
 {
     using LogFn = void (*)(const wchar_t* fmt, ...);
 
+    // pdlaunch's HTTPS and hashing (the updater's), for the catalog and the downloads.
+    struct Net
+    {
+        bool (*get)(const std::wstring& url, std::string& body, unsigned long timeoutMs); // HTTPS GET; false unless 200
+        std::string (*sha256)(const std::string& data);                                  // lowercase hex
+    };
+
     // Mods come from (in this order of precedence for ids):
     //   LocalState\pdnet\modstore\<id>\*.zip|.7z  catalog downloads (the newest file of each id)
     //   LocalState\pdnet\mods\*.zip|.7z           the player's mods for Rebirth's menu
@@ -21,5 +28,13 @@ namespace modsync
     // follow in name order (PDPL's), as their names decide that.
     // Writes LocalState\pdnet\mods-state.txt (the result, for pdnet's Mods menu) and caches what's inside each archive in
     // LocalState\pdnet\modinfo\. Never throws; problems are logged and listed in the state file.
-    void Sync(const std::wstring& localState, LogFn log);
+    //
+    // The catalog (step 5): catalogUrl (https://..., or a local file for testing) lists the mods Rebirth can download,
+    // one per line: "<id> <github owner/repo> [plugin]" (# comments). It's fetched at every start (the copy in
+    // modstore\catalog.txt is used when it can't be reached). Catalog mods are off until the player turns them on in the
+    // Mods list; for each one that's on, the newest GitHub release is looked up (cached 6 hours in modstore\releases.txt:
+    // GitHub allows 60 lookups an hour), and its first .zip / .7z with a "sha256 <file> <hex>" line in the release notes
+    // is downloaded to modstore\<id>\<tag>.<ext> and checked; the newest 3 of each mod are kept. Catalog mods that aren't
+    // downloaded are listed in the state file too, without a path. net null: no catalog, no downloads.
+    void Sync(const std::wstring& localState, LogFn log, const Net* net, const std::wstring& catalogUrl);
 }

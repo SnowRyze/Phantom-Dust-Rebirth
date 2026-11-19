@@ -1,0 +1,11 @@
+# Rebirth's mod catalog: the mods the game's Mods list can download (Conceptual branch; docs\MOD_LOADER_CODE.md).
+# pdlaunch reads this file from GitHub at every game start.
+#
+# One line per mod:  <id> <github owner/repo> [plugin]
+#   id      a-z, 0-9 and -, 3 to 32 characters; never changes once listed (lobbies and settings use it)
+#   repo    the GitHub repository whose newest release is the mod: its first .zip or .7z that the release notes give
+#           a line "sha256 <file name> <64 hex digits>" for
+#   plugin  only for mods with DLLs under plugins/, and only after someone has read their source
+#
+# Example (not a real mod):
+# neon-arena  someone/pd-neon-arena

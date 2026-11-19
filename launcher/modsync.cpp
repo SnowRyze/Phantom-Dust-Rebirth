@@ -512,6 +512,174 @@ namespace modsync
             return false;
         }
 
+        // ---- the catalog and downloads (step 5) ----
+
+        const Net* g_net = nullptr;
+
+        struct CatalogEntry { std::string id, repo; bool plugin = false; };
+
+        std::vector<CatalogEntry> ParseCatalog(const std::string& text)
+        {
+            std::vector<CatalogEntry> out;
+            std::set<std::string> seen;
+            for (const auto& line : Split(text, '\n'))
+            {
+                if (line.empty() || line[0] == '#') continue;
+                std::vector<std::string> words;
+                std::string word;
+                for (char c : line + " ")
+                {
+                    if (c == ' ' || c == '\t') { if (!word.empty()) words.push_back(word); word.clear(); }
+                    else word += c;
+                }
+                if (words.size() < 2) continue;
+                CatalogEntry e{ words[0], words[1] };
+                if (CleanId(e.id) != e.id || std::count(e.repo.begin(), e.repo.end(), '/') != 1 || seen.count(e.id))
+                {
+                    g_log(L"mods: catalog line skipped (id must be a-z 0-9 -, repo owner/name, ids once): %s", Wide(line).c_str());
+                    continue;
+                }
+                for (size_t i = 2; i < words.size(); ++i)
+                    if (Lower(words[i]) == "plugin") e.plugin = true;
+                seen.insert(e.id);
+                out.push_back(e);
+            }
+            return out;
+        }
+
+        std::vector<CatalogEntry> LoadCatalog(const std::wstring& storeDir, const std::wstring& url)
+        {
+            std::string text;
+            bool fetched = false;
+            if (url.rfind(L"https://", 0) == 0) fetched = g_net && g_net->get(url, text, 8000);
+            else if (!url.empty()) fetched = !(text = ReadText(url)).empty(); // a local file (testing)
+            std::wstring cache = storeDir + L"\\catalog.txt";
+            if (fetched) WriteText(cache, text);
+            else
+            {
+                text = ReadText(cache);
+                if (!url.empty()) g_log(L"mods: catalog not reached (%s) - %s", url.c_str(), text.empty() ? L"no copy from an earlier start either" : L"using the copy from an earlier start");
+            }
+            auto catalog = ParseCatalog(text);
+            g_log(L"mods: catalog: %zu mod(s)", catalog.size());
+            return catalog;
+        }
+
+        struct Release { std::string tag, url, asset, sha; uint64_t checked = 0; };
+
+        uint64_t Now()
+        {
+            FILETIME ft;
+            GetSystemTimeAsFileTime(&ft);
+            return ((static_cast<uint64_t>(ft.dwHighDateTime) << 32) | ft.dwLowDateTime) / 10000000ull;
+        }
+
+        // modstore\releases.txt: id, tag, url, asset, sha256, time checked (seconds), tab-separated.
+        std::map<std::string, Release> LoadReleases(const std::wstring& file)
+        {
+            std::map<std::string, Release> out;
+            for (const auto& line : Split(ReadText(file), '\n'))
+            {
+                std::vector<std::string> f;
+                std::string cur;
+                for (char c : line) { if (c == '\t') { f.push_back(cur); cur.clear(); } else cur += c; }
+                f.push_back(cur);
+                if (f.size() < 6) continue;
+                out[f[0]] = Release{ f[1], f[2], f[3], f[4], _strtoui64(f[5].c_str(), nullptr, 10) };
+            }
+            return out;
+        }
+
+        void SaveReleases(const std::wstring& file, const std::map<std::string, Release>& releases)
+        {
+            std::string text;
+            for (const auto& [id, r] : releases)
+                text += id + "\t" + r.tag + "\t" + r.url + "\t" + r.asset + "\t" + r.sha + "\t" + std::to_string(r.checked) + "\n";
+            WriteText(file, text);
+        }
+
+        std::string PercentDecode(const std::string& s)
+        {
+            std::string out;
+            for (size_t i = 0; i < s.size(); ++i)
+            {
+                if (s[i] == '%' && i + 2 < s.size() && isxdigit(static_cast<unsigned char>(s[i + 1])) && isxdigit(static_cast<unsigned char>(s[i + 2])))
+                {
+                    out += static_cast<char>(strtoul(s.substr(i + 1, 2).c_str(), nullptr, 16));
+                    i += 2;
+                }
+                else out += s[i];
+            }
+            return out;
+        }
+
+        // The newest release of a catalog mod: its first .zip / .7z that the notes give a sha256 for.
+        bool LookUpRelease(const CatalogEntry& e, Release& r, std::string& why)
+        {
+            std::string json;
+            if (!g_net->get(L"https://api.github.com/repos/" + Wide(e.repo) + L"/releases/latest", json, 8000))
+            {
+                why = "GitHub didn't answer, or the repo has no release";
+                return false;
+            }
+            r = Release{};
+            r.tag = JsonGetString(json, "tag_name");
+            std::string body = JsonGetString(json, "body");
+            const std::string key = "\"browser_download_url\"";
+            for (size_t at = json.find(key); at != std::string::npos && r.url.empty(); at = json.find(key, at + 1))
+            {
+                size_t i = SkipBlank(json, at + key.size());
+                if (i >= json.size() || json[i] != ':') continue;
+                i = SkipBlank(json, i + 1);
+                std::string url = JsonString(json, i);
+                std::string name = PercentDecode(url.substr(url.find_last_of('/') + 1));
+                std::wstring ext = Extension(Wide(name));
+                if (ext != L".zip" && ext != L".7z") continue;
+                std::string marker = "sha256 " + name + " ";
+                size_t s = body.find(marker);
+                if (s == std::string::npos) continue;
+                std::string hex = Lower(body.substr(s + marker.size(), 64));
+                if (hex.size() != 64 || hex.find_first_not_of("0123456789abcdef") != std::string::npos) continue;
+                r.url = url;
+                r.asset = name;
+                r.sha = hex;
+            }
+            if (r.tag.empty()) { why = "no release found"; return false; }
+            if (r.url.empty()) { why = "its newest release has no .zip / .7z with a sha256 line in the notes"; return false; }
+            r.checked = Now();
+            return true;
+        }
+
+        std::string SafeName(const std::string& tag)
+        {
+            std::string out;
+            for (char c : tag) out += (isalnum(static_cast<unsigned char>(c)) || c == '.' || c == '-' || c == '_') ? c : '_';
+            return out.empty() ? "release" : out;
+        }
+
+        // Downloads the release into modstore\<id>\<tag>.<ext> (if it isn't there yet), checks it, keeps the newest 3.
+        bool Download(const CatalogEntry& e, const Release& r, const std::wstring& dir, std::string& why)
+        {
+            std::wstring file = dir + L"\\" + Wide(SafeName(r.tag)) + Extension(Wide(r.asset));
+            if (Exists(file)) return true;
+            CreateDirectoryW(dir.c_str(), nullptr);
+            std::string data;
+            g_log(L"mods: %S: downloading %S (%S)", e.id.c_str(), r.asset.c_str(), r.tag.c_str());
+            if (!g_net->get(Wide(r.url), data, 120000)) { why = "the download failed"; return false; }
+            if (g_net->sha256(data) != r.sha) { why = "the download doesn't match its sha256"; return false; }
+            if (!WriteText(file, data)) { why = "couldn't be saved"; return false; }
+            g_log(L"mods: %S %S: downloaded, %zu bytes, sha256 ok", e.id.c_str(), r.tag.c_str(), data.size());
+            std::vector<std::pair<uint64_t, std::wstring>> versions;
+            for (const auto& f : List(dir))
+            {
+                uint64_t size, time;
+                if (!f.dir && IsArchive(f.name) && FileInfo(dir + L"\\" + f.name, size, time)) versions.push_back({ time, f.name });
+            }
+            std::sort(versions.rbegin(), versions.rend());
+            for (size_t i = 3; i < versions.size(); ++i) DeleteFileW((dir + L"\\" + versions[i].second).c_str());
+            return true;
+        }
+
         // Files in PDPL's mods folder that aren't archives: loose game files, which win over every archive. PDPL's own
         // DLLs in the folder's root (pdpl.exe copies pd_loader_core.dll there) and plugins\ and disabled\ don't count.
         size_t LooseFiles(const std::wstring& dir, bool root)
@@ -532,17 +700,78 @@ namespace modsync
         }
     }
 
-    void Sync(const std::wstring& localState, LogFn log)
+    void Sync(const std::wstring& localState, LogFn log, const Net* net, const std::wstring& catalogUrl)
     {
         g_log = log;
+        g_net = net;
         size_t cut = localState.find_last_of(L'\\');
         if (localState.empty() || cut == std::wstring::npos) { log(L"mods: no LocalState folder - mods not synced"); return; }
         std::wstring pdnetDir = localState + L"\\pdnet", roaming = localState.substr(0, cut) + L"\\RoamingState";
         std::wstring pdplDir = roaming + L"\\mods", disabledDir = pdplDir + L"\\disabled", localDir = pdnetDir + L"\\mods",
                      storeDir = pdnetDir + L"\\modstore", cacheDir = pdnetDir + L"\\modinfo";
-        for (const auto& d : { pdnetDir, roaming, pdplDir, disabledDir, localDir, cacheDir }) CreateDirectoryW(d.c_str(), nullptr);
+        for (const auto& d : { pdnetDir, roaming, pdplDir, disabledDir, localDir, storeDir, cacheDir }) CreateDirectoryW(d.c_str(), nullptr);
         if (!Exists(Tar())) log(L"mods: %s not found - .zip details can't be read (names and conflicts unknown)", Tar().c_str());
         log(L"mods: .7z details: %s", SevenZip().empty() ? L"7-Zip isn't installed (PDPL still loads .7z mods)" : SevenZip().c_str());
+
+        // ---- order and on / off (settings.ini, written by the Mods menu) ----
+        std::string settings = ReadText(pdnetDir + L"\\settings.ini"), orderText, enabledText;
+        SettingsValue(settings, "mods_order", orderText);
+        bool haveEnabled = SettingsValue(settings, "mods_enabled", enabledText);
+        std::vector<std::string> order = Split(orderText, ',');
+        std::set<std::string> known(order.begin(), order.end()), enabledSet;
+        for (const auto& id : Split(enabledText, ',')) enabledSet.insert(id);
+
+        // ---- the catalog: downloads for the catalog mods that are on ----
+        std::vector<CatalogEntry> catalog;
+        std::map<std::string, std::string> notDownloaded; // id -> why
+        if (net)
+        {
+            catalog = LoadCatalog(storeDir, catalogUrl);
+            std::wstring releasesFile = storeDir + L"\\releases.txt";
+            auto releases = LoadReleases(releasesFile);
+            bool changed = false;
+            for (const auto& e : catalog)
+            {
+                if (!enabledSet.count(e.id)) continue;
+                Release r;
+                std::string why;
+                auto cached = releases.find(e.id);
+                bool fresh = cached != releases.end() && Now() - cached->second.checked < 6 * 3600;
+                if (fresh && cached->second.url.empty()) // a failed lookup, kept 6 hours too (GitHub's hourly limit)
+                {
+                    notDownloaded[e.id] = cached->second.asset;
+                    continue;
+                }
+                if (fresh) r = cached->second;
+                else if (LookUpRelease(e, r, why))
+                {
+                    if (cached == releases.end() || cached->second.tag != r.tag) log(L"mods: %S: newest release %S (%S)", e.id.c_str(), r.tag.c_str(), r.asset.c_str());
+                    releases[e.id] = r;
+                    changed = true;
+                }
+                else if (cached != releases.end())
+                {
+                    log(L"mods: %S: %S - using the release found earlier (%S)", e.id.c_str(), why.c_str(), cached->second.tag.c_str());
+                    r = cached->second;
+                }
+                else
+                {
+                    log(L"mods: %S (%S): %S", e.id.c_str(), e.repo.c_str(), why.c_str());
+                    notDownloaded[e.id] = why;
+                    releases[e.id] = Release{ "", "", why, "", Now() }; // no url: the reason, tried again in 6 hours
+                    changed = true;
+                    continue;
+                }
+                if (!Download(e, r, storeDir + L"\\" + Wide(e.id), why))
+                {
+                    log(L"mods: %S %S: %S", e.id.c_str(), r.tag.c_str(), why.c_str());
+                    notDownloaded[e.id] = why;
+                }
+            }
+            if (changed) SaveReleases(releasesFile, releases);
+        }
+        std::map<std::string, const CatalogEntry*> inCatalog;
+        for (const auto& e : catalog) inCatalog[e.id] = &e;
 
         // ---- find the mods ----
         std::vector<Mod> mods;
@@ -578,6 +807,22 @@ namespace modsync
             }
             if (!newest.empty()) add(Source::Catalog, storeDir + L"\\" + d.name, newest, false, CleanId(Utf8(d.name)));
         }
+        // Catalog mods with nothing downloaded: listed (no path) so the Mods list can turn them on.
+        {
+            std::set<std::string> have;
+            for (const auto& m : mods) have.insert(m.id);
+            for (const auto& e : catalog)
+            {
+                if (have.count(e.id)) continue;
+                Mod m;
+                m.source = Source::Catalog;
+                m.id = e.id;
+                m.name = e.id;
+                auto why = notDownloaded.find(e.id);
+                m.problem = why != notDownloaded.end() ? "not downloaded: " + why->second : "not downloaded";
+                mods.push_back(std::move(m));
+            }
+        }
         for (const auto& f : List(localDir))
             if (!f.dir && IsArchive(f.name)) add(Source::Local, localDir, f.name, false, {});
         for (const auto& f : List(pdplDir))
@@ -597,21 +842,17 @@ namespace modsync
             bool plugins = false;
             m.touches = Touches(m.files, plugins);
             m.plugins = plugins;
-            // No catalog yet (step 5): a downloaded mod with DLLs needs the catalog's plugin flag, which nothing can give yet.
-            if (m.source == Source::Catalog && m.plugins) m.problem = "has plugins (needs the catalog's plugin flag)";
+            // A downloaded mod with DLLs needs the catalog's "plugin" flag (someone read its source): without it, it's never
+            // put in PDPL's folder.
+            if (m.source == Source::Catalog && m.plugins && !(inCatalog.count(m.id) && inCatalog[m.id]->plugin))
+                m.problem = "has plugins (needs the catalog's plugin flag)";
         }
 
-        // ---- order and on / off (settings.ini, written by the Mods menu) ----
-        std::string settings = ReadText(pdnetDir + L"\\settings.ini"), orderText, enabledText;
-        SettingsValue(settings, "mods_order", orderText);
-        bool haveEnabled = SettingsValue(settings, "mods_enabled", enabledText);
-        std::vector<std::string> order = Split(orderText, ',');
-        std::set<std::string> known(order.begin(), order.end()), enabledSet;
-        for (const auto& id : Split(enabledText, ',')) enabledSet.insert(id);
         for (auto& m : mods)
         {
             bool isNew = !known.count(m.id);
-            if (m.source == Source::Pdpl && isNew) m.enabled = !m.inDisabled; // as the player left it
+            if (m.source == Source::Catalog) m.enabled = enabledSet.count(m.id) > 0; // catalog mods: only once turned on
+            else if (m.source == Source::Pdpl && isNew) m.enabled = !m.inDisabled; // as the player left it
             else if (!haveEnabled || isNew) m.enabled = true;
             else m.enabled = enabledSet.count(m.id) > 0;
         }
@@ -654,7 +895,7 @@ namespace modsync
                 }
                 continue;
             }
-            if (!m.enabled || (!m.problem.empty() && m.problem.rfind("has plugins", 0) == 0)) continue;
+            if (!m.enabled || m.path.empty() || (!m.problem.empty() && m.problem.rfind("has plugins", 0) == 0)) continue;
             wchar_t prefix[16];
             swprintf_s(prefix, L"!rb%03d-", slot++);
             std::wstring name = prefix + Wide(m.id) + m.ext, target = pdplDir + L"\\" + name;

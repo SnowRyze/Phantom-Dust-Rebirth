@@ -2164,13 +2164,16 @@ namespace pdnet::gamepatches
                     continue;
                 }
                 const ModRow& m = g_mods[i];
-                const char* kind = m.source == "pdpl" ? "PDPL" : m.online == "local" ? "Only you" : "Online";
+                bool notDownloaded = m.source == "catalog" && m.problem.rfind("not downloaded", 0) == 0;
+                const char* kind = notDownloaded ? "Download" : m.source == "pdpl" ? "PDPL" : m.online == "local" ? "Only you" : "Online";
                 _snprintf_s(g_modRow[r], _TRUNCATE, "\a160w%s[%s] %s\f\a1#\a230c%s %s\f\a0#", static_cast<int>(i) == g_movingMod ? "> " : "",
                             m.on ? "x" : "  ", m.name.c_str(), m.version.c_str(), kind);
-                std::string hint = m.description.empty() ? m.name : m.description;
+                std::string hint = notDownloaded ? "From the mod catalog: " + m.name + "." : m.description.empty() ? m.name : m.description;
                 if (!m.author.empty()) hint += " By " + m.author + ".";
                 hint += ModOverlapText(static_cast<int>(i));
-                if (!m.problem.empty()) hint += " (" + m.problem + ")";
+                if (notDownloaded) hint += m.on ? " Downloads at the next game start." : " Turn it on and it downloads at the next game start.";
+                if (notDownloaded && m.problem != "not downloaded") hint += " (" + m.problem.substr(16) + ")"; // after "not downloaded: "
+                else if (!notDownloaded && !m.problem.empty()) hint += " (" + m.problem + ")";
                 if (!m.Movable()) hint += " PDPL folder: ordered by file name.";
                 if (static_cast<int>(i) == g_movingMod) hint += " Up / down to move, X to put it down.";
                 if (g_modsDirty) hint += "\nChanges apply at the next game start.";
