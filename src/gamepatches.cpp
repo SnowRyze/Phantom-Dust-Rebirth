@@ -3148,22 +3148,30 @@ namespace pdnet::gamepatches
 
         // New map slots (Conceptual; docs\CONCEPTUAL.md, "New map slots"). pdlaunch (launcher\mapslots.cpp) gives each map
         // mod that's on a stage entry from 30 up (entry index = map number), copies its files to st<N>.alr / .dat, and
-        // writes a stage list with the entries and an MNet.alr with a preview sprite per slot, all as loose files PDPL
-        // serves; LocalState\pdnet\map-slots.txt lists them ("slot <entry> <sprite> <mod id> <name>"). The map picker
+        // writes a stage list with the entries, as loose files PDPL serves; LocalState\pdnet\map-slots.txt lists them
+        // ("slot <entry> <preview> <mod id> <name>") and map-previews.bin holds the previews on one DXT1 sheet (strip k at
+        // (k / 9) * 256, (k % 9) * 114, 254 x 112), which MakeMnetCopy adds to pdnet's MNet.alr copy as one texture and ONE
+        // sprite for all of them (g_mapPreviewSprite): the character select's portraits leave room for 3 sprites at most
+        // (the list has to end before 0x2000), and a generated MNet.alr of pdlaunch's kept the portraits out (Experimental
+        // 191). The map picker
         // (livestagesel, menu 47) walks a fixed list of entries 2-26 only, so in that menu pdnet:
         // - adds a row per slot (menu command 59: id 100 + entry, the entry's name from the stage table) right after the
         //   script's last row (stage 8, id 108);
         // - answers the stage query's "unlocked" (menu command 87 kind 0x39) with 1 for the slots: their bits (entry + 27)
         //   are past the 56 the game keeps, so they always read locked;
-        // - draws the slot's preview (MNet sprite) instead of the script's (menu command 18: sheet 3, sprite, 48, 261)
-        //   while the cursor (window field 9, as menu command 55(window, 9) reads it) is on a slot's row;
+        // - draws the slot's preview instead of the script's (menu command 18: sheet 3, sprite, 48, 261) while the cursor
+        //   (window field 9, as menu command 55(window, 9) reads it) is on a slot's row: the shared sprite, its source
+        //   rectangle moved to the slot's strip first (as the lobby banners, SpriteRect);
         // - and at the pick (session command 40, FUN_140213c00: entry -> 0x14051775c, its map number -> 0x140527bc8, a
         //   random layout -> 0x140527c54) with the cursor on a slot's row, passes that slot's entry, whatever the script
         //   worked out from the row.
         // A slot counts only if the game's stage table has it with the multiplayer flag (the stage list came from PDPL).
         MenuCommandFn g_addIdItem = nullptr; // menu command 59 (HookedAddIdItem, below)
-        struct MapSlot { int entry; int sprite; };
+        struct MapSlot { int entry; int sprite; }; // sprite: the slot's strip in map-previews.bin
         std::vector<MapSlot> g_mapSlots;
+        std::atomic<int> g_mapPreviewSprite{ -1 }; // MNET's sprite for the map previews (MakeMnetCopy); -1 none
+        uint32_t* MnetHandles();                   // (below, with the character select)
+        int16_t* SpriteRect(uint32_t handle);      // (below, with the lobby banners)
         std::atomic<int> g_mapWindow{ -1 };   // the window the map picker's rows went into; -1 none yet
         int8_t g_mapRowSlot[256];             // row -> index into g_mapSlots; -1 a script row
         constexpr int kStageEntrySize = 0x28; // the stage table at 0x140509ba0 (+0 name, +0x18 map number, +0x20 flag)
@@ -3224,10 +3232,22 @@ namespace pdnet::gamepatches
         {
             if (args && args[0] == 3 && args[2] == 48 && args[3] == 261)
             {
-                int k = CursorMapSlot();
-                if (k >= 0)
+                int k = CursorMapSlot(), sprite = g_mapPreviewSprite;
+                uint32_t* list = k >= 0 && sprite >= 0 ? MnetHandles() : nullptr;
+                int16_t* rect = list ? SpriteRect(list[sprite]) : nullptr;
+                if (rect)
                 {
-                    int64_t a[8] = { args[0], g_mapSlots[k].sprite, args[2], args[3] };
+                    int strip = g_mapSlots[k].sprite;
+                    int16_t x = static_cast<int16_t>(strip / 9 * 256), y = static_cast<int16_t>(strip % 9 * 114);
+                    static int told = 0;
+                    if (told < 4 && (rect[0] != x || rect[1] != y))
+                    {
+                        ++told;
+                        Log(L"gamepatch: map picker: preview %d - sprite %d's rectangle %d,%d %dx%d -> %d,%d", strip, sprite, rect[0], rect[1], rect[2], rect[3], x, y);
+                    }
+                    __try { rect[0] = x, rect[1] = y, rect[2] = 254, rect[3] = 112; }
+                    __except (EXCEPTION_EXECUTE_HANDLER) { return g_drawSheetSprite(args); }
+                    int64_t a[8] = { args[0], sprite, args[2], args[3] };
                     return g_drawSheetSprite(a);
                 }
             }
@@ -3285,7 +3305,7 @@ namespace pdnet::gamepatches
             while (std::getline(in, line))
             {
                 int entry = 0, sprite = 0;
-                if (sscanf_s(line.c_str(), "slot\t%d\t%d", &entry, &sprite) == 2 && entry >= 30 && entry < 65 && sprite > 0 && sprite < 128)
+                if (sscanf_s(line.c_str(), "slot\t%d\t%d", &entry, &sprite) == 2 && entry >= 30 && entry < 65 && sprite >= 0 && sprite < 36)
                     g_mapSlots.push_back({ entry, sprite });
             }
             if (g_mapSlots.empty()) return;
@@ -5513,16 +5533,15 @@ namespace pdnet::gamepatches
             return ok;
         }
 
-        // Returns the number of sprites added, or -1 (file left as it is; `why` says what didn't match).
-        int MakeMnetCopy(const wchar_t* original, const std::wstring& copy, const char*& why)
+        // The character select portraits into `in` (the game's MNet.alr). Returns the number of sprites added, or -1 (`in`
+        // left as it is; `why` says what didn't match).
+        int AddPortraits(std::vector<uint8_t>& in, const char*& why)
         {
             constexpr size_t kSize = 863232;
             constexpr uint32_t kData = 0x2000; // the data's start (header +0xc)
             constexpr uint32_t kTex = 0x34, kInfo = 0x338, kSprites = 0x428, kSprite = 0x3c;
             constexpr uint32_t kEnd = kSprites + kMnetGameSprites * kSprite;
-            std::vector<uint8_t> d, p;
-            why = "MNet.alr not read";
-            if (!ReadWholeFile(original, d, kSize)) return -1;
+            std::vector<uint8_t> d = in, p;
             auto u32 = [&](size_t at) -> uint32_t& { return *reinterpret_cast<uint32_t*>(&d[at]); };
             auto u16 = [&](size_t at) -> uint16_t& { return *reinterpret_cast<uint16_t*>(&d[at]); };
             auto f32 = [&](size_t at) -> float& { return *reinterpret_cast<float*>(&d[at]); };
@@ -5623,14 +5642,170 @@ namespace pdnet::gamepatches
                 if (u32(kSprites + k * kSprite) < 12) ++counts[u32(kSprites + k * kSprite)];
             for (int t = 0; t < 12; ++t) u32(kInfo + t * 0x14 + 8) = counts[t];
 
-            why = "the copy couldn't be written";
+            in.swap(d);
+            return added;
+        }
+
+        // A .alr texture name word: six characters in base 40 ("" 0-9 a-z _), as the texture table stores names.
+        uint32_t AlrNameWord(const char* six)
+        {
+            static const char kChars[] = "0123456789abcdefghijklmnopqrstuvwxyz_";
+            uint32_t w = 0;
+            bool ended = false;
+            for (int i = 0; i < 6; ++i)
+            {
+                char c = ended ? '\0' : six[i];
+                ended = ended || !c;
+                const char* p = c ? strchr(kChars, c) : nullptr;
+                w = w * 40 + (p ? static_cast<uint32_t>(p - kChars) + 1 : 0);
+            }
+            return w;
+        }
+
+        bool MapPreviewsWanted()
+        {
+            return GetModuleHandleW(L"pd_loader_core.dll") &&
+                   GetFileAttributesW((LocalStatePath() + L"\\pdnet\\map-previews.bin").c_str()) != INVALID_FILE_ATTRIBUTES;
+        }
+
+        // The new map slots' previews (LocalState\pdnet\map-previews.bin, from pdlaunch: launcher\mapslots.cpp) into `d`:
+        // one more texture (the sheet, after the resources, as a copy of texture 1's entry: 256 x 1024 DXT1) and ONE more
+        // sprite on it (a copy of sprite 55, st08's preview), whose source rectangle the map picker moves to each map's
+        // strip (HookedDrawSheetSprite). The texture table, the root chain and the sprite record are laid out again; they
+        // must still end before the data (0x2000: the portraits' limit, a copy with its data at 0x3000 crashed). Returns the
+        // sprite's number, or -1 (`d` left as it is).
+        int AddMapPreviews(std::vector<uint8_t>& d, const char*& why)
+        {
+            std::vector<uint8_t> p;
+            why = "no map previews";
+            if (!MapPreviewsWanted() || !ReadWholeFile(LocalStatePath() + L"\\pdnet\\map-previews.bin", p, 8 << 20)) return -1;
+            auto rd32 = [](const std::vector<uint8_t>& b, size_t at) { uint32_t v = 0; if (at + 4 <= b.size()) memcpy(&v, &b[at], 4); return v; };
+            auto rd16 = [](const std::vector<uint8_t>& b, size_t at) { uint16_t v = 0; if (at + 2 <= b.size()) memcpy(&v, &b[at], 2); return v; };
+            why = "map-previews.bin not as expected";
+            if (p.size() < 20 || memcmp(p.data(), "PDMP", 4) != 0 || rd32(p, 4) != 1) return -1;
+            uint32_t sheetW = rd16(p, 8), sheetH = rd16(p, 10), dataSize = rd32(p, 16);
+            if ((sheetW != 256 && sheetW != 512 && sheetW != 1024) || sheetH != 1024 || dataSize != sheetW * sheetH / 2 || 20 + static_cast<size_t>(dataSize) > p.size()) return -1;
+
+            why = "MNet.alr not as expected";
+            if (d.size() < 0x40 || rd32(d, 0) != 0x11) return -1;
+            uint32_t hdr = rd32(d, 4), rbOff = rd32(d, 12), rbSize = rd32(d, 20), root0 = rd32(d, 0x20), root1 = rd32(d, 0x24);
+            if (rd16(d, 16) != 2 || hdr != 0x28 || static_cast<size_t>(rbOff) + rbSize > d.size() || rd32(d, hdr) != 0x15) return -1;
+            uint32_t texN = rd32(d, hdr + 8), texSize = rd32(d, hdr + 4);
+            if (texN > 60 || hdr + texSize != root0 || texSize != 0xC + texN * 0x1C || root1 <= root0 || rd32(d, root1) != 0x10) return -1;
+            uint32_t chunk = rd32(d, root1 + 4), body = root1 + 8, A = rd32(d, body), B = rd32(d, body + 4);
+            if (A != texN || B < 56 || 8 + 0x18 + A * 0x20 + A * 0x14 + B * 60 != chunk || rd32(d, root1 + chunk) != 0 || rd32(d, root1 + chunk + 4) != 8) return -1;
+            size_t tex1 = hdr + 0xC + 0x1C, names = body + 0x18, infos = names + A * 0x20, sprites = infos + A * 0x14;
+            if (d[tex1 + 13] != 0x0c || d[tex1 + 14] != 0x81 || d[tex1 + 15] != 0x0a || rd32(d, sprites + 55 * 60) != 1) return -1;
+            why = "no room left in MNet.alr's sprite list";
+            if (static_cast<size_t>(root1) + 0x1C + chunk + 0x20 + 0x14 + 60 + 8 > rbOff || B + 1 > 128) return -1;
+
+            std::vector<uint8_t> out(d.begin(), d.begin() + hdr), res(d.begin() + rbOff, d.begin() + rbOff + rbSize);
+            auto add = [&](const uint8_t* from, size_t n) { out.insert(out.end(), from, from + n); };
+            auto add32 = [&](uint32_t v) { add(reinterpret_cast<const uint8_t*>(&v), 4); };
+            auto put32 = [](uint8_t* at, uint32_t v) { memcpy(at, &v, 4); };
+            auto putF = [](uint8_t* at, float v) { memcpy(at, &v, 4); };
+            while (res.size() % 0x800) res.push_back(0);
+            uint32_t sheetAt = static_cast<uint32_t>(res.size());
+            res.insert(res.end(), p.begin() + 20, p.begin() + 20 + dataSize);
+            unsigned long log2 = 0;
+            _BitScanReverse(&log2, sheetW);
+
+            add32(0x15);
+            add32(0xC + (texN + 1) * 0x1C);
+            add32(texN + 1);
+            add(&d[hdr + 0xC], texN * 0x1C);
+            uint8_t entry[0x1C];
+            memcpy(entry, &d[tex1], 0x1C);
+            put32(entry + 4, sheetAt);
+            entry[14] = static_cast<uint8_t>(log2 << 4 | (entry[14] & 0xf));
+            put32(entry + 0x14, AlrNameWord("mnet95"));
+            put32(entry + 0x18, AlrNameWord("00"));
+            add(entry, 0x1C);
+            uint32_t newRoot0 = static_cast<uint32_t>(out.size());
+            add(&d[root0], root1 - root0);
+            uint32_t newRoot1 = static_cast<uint32_t>(out.size());
+            add32(0x10);
+            add32(chunk + 0x20 + 0x14 + 60);
+            add32(A + 1);
+            add32(B + 1);
+            add(&d[body + 8], 16);
+            add(&d[names], A * 0x20);
+            uint8_t name[0x20];
+            memcpy(name, &d[names + 1 * 0x20], 0x20);
+            memset(name, 0, 16);
+            memcpy(name, "MNet9500.dds", 12);
+            add(name, 0x20);
+            add(&d[infos], A * 0x14);
+            uint8_t info[0x14];
+            memcpy(info, &d[infos + 1 * 0x14], 0x14);
+            uint16_t wh[2] = { static_cast<uint16_t>(sheetW), static_cast<uint16_t>(sheetH) };
+            memcpy(info, wh, 4);
+            put32(info + 8, 1); // sprites on it
+            add(info, 0x14);
+            add(&d[sprites], B * 60);
+            uint8_t sprite[60];
+            memcpy(sprite, &d[sprites + 55 * 60], 60);
+            put32(sprite, A);
+            memset(sprite + 4, 0, 32);
+            memcpy(sprite + 4, "mission_map_custom.tga", 22);
+            putF(sprite + 36, 0.0f);
+            putF(sprite + 40, 0.0f);
+            putF(sprite + 44, 254.0f / sheetW);
+            putF(sprite + 48, 112.0f / sheetH);
+            put32(sprite + 52, 254);
+            put32(sprite + 56, 112);
+            add(sprite, 60);
+            add32(0);
+            add32(8);
+            if (out.size() > rbOff) return -1;
+            out.resize(rbOff, 0);
+            out.insert(out.end(), res.begin(), res.end());
+            put32(&out[12], rbOff);
+            put32(&out[20], static_cast<uint32_t>(res.size()));
+            put32(&out[0x20], newRoot0);
+            put32(&out[0x24], newRoot1);
+            d.swap(out);
+            return static_cast<int>(B);
+        }
+
+        // pdnet's copy of MNet.alr (LocalState\pdnet\MNet.alr): the character select's portraits (charsel_portraits=on)
+        // and the new map slots' previews, either or both. False when neither went in (the game keeps its own file).
+        bool MakeMnetCopy(const wchar_t* original, const std::wstring& copy)
+        {
+            std::vector<uint8_t> d;
+            if (!ReadWholeFile(original, d, 8 << 20))
+            {
+                Log(L"gamepatch: MNet.alr not read - character select portraits and map previews left out");
+                return false;
+            }
+            const char* why = "charsel_portraits=off";
+            int added = GetConfig().charselPortraits ? AddPortraits(d, why) : -1;
+            if (added >= 0)
+            {
+                g_monsterPortraits = added;
+                Log(L"gamepatch: character select portraits: %d sprites added (MNET sprites %d-%d: monsters, blank, Advanced list portraits)", added, kMonsterPortraitFirst, kMonsterPortraitFirst + added - 1);
+            }
+            else Log(L"gamepatch: character select portraits left as they are (%S)", why);
+            int preview = AddMapPreviews(d, why);
+            if (preview >= 0)
+            {
+                g_mapPreviewSprite = preview;
+                Log(L"gamepatch: map picker: previews added (MNET sprite %d)", preview);
+            }
+            else if (MapPreviewsWanted()) Log(L"gamepatch: map picker: previews left out (%S)", why);
+            if (added < 0 && preview < 0) return false;
             CreateDirectoryW((LocalStatePath() + L"\\pdnet").c_str(), nullptr);
             HANDLE file = g_createFile2(copy.c_str(), GENERIC_WRITE, 0, CREATE_ALWAYS, nullptr);
-            if (file == INVALID_HANDLE_VALUE) return -1;
             DWORD written = 0;
-            BOOL ok = WriteFile(file, d.data(), static_cast<DWORD>(d.size()), &written, nullptr) && written == d.size();
-            CloseHandle(file);
-            return ok ? added : -1;
+            bool ok = file != INVALID_HANDLE_VALUE && WriteFile(file, d.data(), static_cast<DWORD>(d.size()), &written, nullptr) && written == d.size();
+            if (file != INVALID_HANDLE_VALUE) CloseHandle(file);
+            if (!ok)
+            {
+                Log(L"gamepatch: the MNet.alr copy couldn't be written - the game keeps its own");
+                g_monsterPortraits = 0;
+                g_mapPreviewSprite = -1;
+            }
+            return ok;
         }
 
 
@@ -6180,7 +6355,7 @@ namespace pdnet::gamepatches
                 });
                 if (!copy.empty()) return g_createFile2(copy.c_str(), access, share, disposition, params);
             }
-            if (n > 14 && _wcsicmp(name + n - 13, L"menu\\MNet.alr") == 0 && (name[n - 14] == L'/' || name[n - 14] == L'\\') && GetConfig().charselPortraits)
+            if (n > 14 && _wcsicmp(name + n - 13, L"menu\\MNet.alr") == 0 && (name[n - 14] == L'/' || name[n - 14] == L'\\') && (GetConfig().charselPortraits || MapPreviewsWanted()))
             {
                 static std::once_flag once;
                 static std::wstring copy;
@@ -6190,11 +6365,7 @@ namespace pdnet::gamepatches
                     g_dataPrefix = std::wstring(name, name + n - 13);
                     Log(L"variants: data folder '%s'", g_dataPrefix.c_str());
                     std::wstring path = LocalStatePath() + L"\\pdnet\\MNet.alr";
-                    const char* why = "";
-                    int added = MakeMnetCopy(name, path, why);
-                    if (added >= 0) copy = path, g_monsterPortraits = added;
-                    if (added >= 0) Log(L"gamepatch: character select portraits: %d sprites added (MNET sprites %d-%d: monsters, blank, Advanced list portraits)", added, kMonsterPortraitFirst, kMonsterPortraitFirst + added - 1);
-                    else Log(L"gamepatch: character select portraits left as they are (%S)", why);
+                    if (MakeMnetCopy(name, path)) copy = path;
                 });
                 if (!copy.empty()) return g_createFile2(copy.c_str(), access, share, disposition, params);
             }

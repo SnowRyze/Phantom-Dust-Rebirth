@@ -25,13 +25,10 @@ namespace mapslots
     namespace
     {
         LogFn g_log = nullptr;
-        constexpr int kStripW = 254, kStripH = 112, kStripPitch = 114, kSheetW = 256, kSheetH = 1024, kPerSheet = 9;
-        constexpr uint32_t kMaxSprites = 128; // the game allocates 0x200 bytes of sprite handles per sheet set
+        constexpr int kStripW = 254, kStripH = 112, kStripPitch = 114, kColumnW = 256, kSheetH = 1024, kPerSheet = 9;
 
         uint32_t U32(const std::string& b, size_t o) { uint32_t v = 0; if (o + 4 <= b.size()) memcpy(&v, b.data() + o, 4); return v; }
         uint16_t U16(const std::string& b, size_t o) { uint16_t v = 0; if (o + 2 <= b.size()) memcpy(&v, b.data() + o, 2); return v; }
-        void Put32(std::string& b, size_t o, uint32_t v) { if (o + 4 <= b.size()) memcpy(b.data() + o, &v, 4); }
-        void PutF(std::string& b, size_t o, float v) { if (o + 4 <= b.size()) memcpy(b.data() + o, &v, 4); }
         void Add32(std::string& b, uint32_t v) { b.append(reinterpret_cast<const char*>(&v), 4); }
         void Add16(std::string& b, uint16_t v) { b.append(reinterpret_cast<const char*>(&v), 2); }
 
@@ -221,140 +218,29 @@ namespace mapslots
             return out;
         }
 
-        // ---- the .alr ----
+        // ---- the preview sheet (pdnet puts it into its MNet.alr copy) ----
 
-        const char kNameChars[] = "\0" "0123456789abcdefghijklmnopqrstuvwxyz_";
-        uint32_t NameWord(const std::string& six)
+        // map-previews.bin: "PDMP", u32 1, u16 sheet width, u16 sheet height, u32 strips, u32 data size, then the sheet as
+        // DXT1. Strip k (254 x 112) is at x = (k / 9) * 256, y = (k % 9) * 114; the sheet is 256, 512 or 1024 wide (9, 18
+        // or 36 strips) and 1024 high.
+        std::string PreviewSheet(const std::vector<std::vector<uint8_t>>& strips)
         {
-            uint32_t w = 0;
-            for (size_t i = 0; i < 6; ++i)
+            int columns = static_cast<int>((strips.size() + kPerSheet - 1) / kPerSheet);
+            int sheetW = columns <= 1 ? 256 : columns <= 2 ? 512 : 1024;
+            std::vector<uint8_t> sheet(static_cast<size_t>(sheetW) * kSheetH * 4, 0);
+            for (size_t k = 0; k < strips.size() && k < static_cast<size_t>(sheetW / kColumnW * kPerSheet); ++k)
             {
-                char c = i < six.size() ? six[i] : '\0';
-                const char* p = c ? static_cast<const char*>(memchr(kNameChars + 1, c, sizeof(kNameChars) - 2)) : nullptr;
-                w = w * 40 + (p ? static_cast<uint32_t>(p - kNameChars) : 0);
+                int x = static_cast<int>(k / kPerSheet) * kColumnW, y = static_cast<int>(k % kPerSheet) * kStripPitch;
+                for (int row = 0; row < kStripH; ++row)
+                    memcpy(&sheet[(static_cast<size_t>(y + row) * sheetW + x) * 4], &strips[k][static_cast<size_t>(row) * kStripW * 4], kStripW * 4);
             }
-            return w;
-        }
-
-        // MNet.alr with `strips` (BGRA, 254 x 112 each) on new sheets after its textures and sprites after its 84; the
-        // sprite for strip i is firstSprite + i. Empty on a layout it doesn't expect (logged).
-        std::string RebuildMNet(const std::string& base, const std::vector<std::vector<uint8_t>>& strips, uint32_t& firstSprite)
-        {
-            auto fail = [&](const wchar_t* why) { g_log(L"maps: MNet.alr not rebuilt: %s", why); return std::string(); };
-            if (U32(base, 0) != 0x11) return fail(L"not an .alr");
-            uint32_t hdr = U32(base, 4), rbOff = U32(base, 12), roots = U16(base, 16), rbSize = U32(base, 20);
-            if (roots != 2 || hdr != 0x20 + 4 * roots || rbOff + rbSize > base.size()) return fail(L"unexpected header");
-            uint32_t root0 = U32(base, 0x20), root1 = U32(base, 0x24);
-            if (U32(base, hdr) != 0x15) return fail(L"no texture table");
-            uint32_t texN = U32(base, hdr + 8), texSize = U32(base, hdr + 4);
-            if (hdr + texSize != root0 || texSize != 0xC + texN * 0x1C || root1 <= root0) return fail(L"unexpected texture table");
-            if (U32(base, root1) != 0x10) return fail(L"no sprite chunk");
-            uint32_t chunk = U32(base, root1 + 4), d = root1 + 8;
-            uint32_t A = U32(base, d), B = U32(base, d + 4);
-            if (A != texN || 8 + 0x18 + A * 0x20 + A * 0x14 + B * 60 != chunk || U32(base, root1 + chunk) != 0 || U32(base, root1 + chunk + 4) != 8)
-                return fail(L"unexpected sprite chunk");
-            // Templates: texture 1 (MNet0410, 256 x 1024 DXT1) and sprite 55 (st08's strip on it).
-            size_t texEntry1 = hdr + 0xC + 1 * 0x1C;
-            if (static_cast<uint8_t>(base[texEntry1 + 13]) != 0x0c || static_cast<uint8_t>(base[texEntry1 + 14]) != 0x81 || static_cast<uint8_t>(base[texEntry1 + 15]) != 0x0a)
-                return fail(L"texture 1 isn't 256x1024 DXT1");
-            size_t names = d + 0x18, infos = names + A * 0x20, sprites = infos + A * 0x14;
-            if (U32(base, sprites + 55 * 60) != 1) return fail(L"sprite 55 isn't on texture 1");
-            uint32_t sheets = static_cast<uint32_t>((strips.size() + kPerSheet - 1) / kPerSheet);
-            if (B + strips.size() > kMaxSprites) return fail(L"too many sprites");
-            firstSprite = B;
-
-            // Resources: the game's, then one DXT1 sheet per 9 strips.
-            std::string resources = base.substr(rbOff, rbSize);
-            std::vector<uint32_t> sheetAt;
-            for (uint32_t s = 0; s < sheets; ++s)
-            {
-                std::vector<uint8_t> sheet(static_cast<size_t>(kSheetW) * kSheetH * 4, 0);
-                for (uint32_t k = 0; k < kPerSheet && s * kPerSheet + k < strips.size(); ++k)
-                {
-                    const auto& strip = strips[s * kPerSheet + k];
-                    for (int y = 0; y < kStripH; ++y)
-                        memcpy(&sheet[(static_cast<size_t>(k * kStripPitch + y) * kSheetW) * 4], &strip[static_cast<size_t>(y) * kStripW * 4], kStripW * 4);
-                }
-                while (resources.size() % 0x800) resources += '\0';
-                sheetAt.push_back(static_cast<uint32_t>(resources.size()));
-                resources += EncodeDxt1(sheet, kSheetW, kSheetH);
-            }
-
-            // Texture table: the game's entries + one per sheet (a copy of texture 1's, new offset and name).
-            std::string table;
-            Add32(table, 0x15);
-            Add32(table, 0xC + (texN + sheets) * 0x1C);
-            Add32(table, texN + sheets);
-            table += base.substr(hdr + 0xC, texN * 0x1C);
-            for (uint32_t s = 0; s < sheets; ++s)
-            {
-                std::string e = base.substr(texEntry1, 0x1C);
-                char digits[8];
-                sprintf_s(digits, "%02u", 90 + s);
-                Put32(e, 4, sheetAt[s]);
-                Put32(e, 0x14, NameWord("mnet" + std::string(digits))); // "mnet9000", "mnet9100": the sheet's name,
-                Put32(e, 0x18, NameWord("00"));                         // as the sprite chunk's MNet9000.dds
-                table += e;
-            }
-
-            // Sprite chunk: the game's textures and sprites + the new sheets and strips.
-            std::string body;
-            Add32(body, A + sheets);
-            Add32(body, B + static_cast<uint32_t>(strips.size()));
-            body += base.substr(d + 8, 16);
-            body += base.substr(names, A * 0x20);
-            for (uint32_t s = 0; s < sheets; ++s)
-            {
-                std::string n = base.substr(names + 1 * 0x20, 0x20);
-                char name[16] = {};
-                sprintf_s(name, "MNet%02u00.dds", 90 + s);
-                memcpy(n.data(), name, 16);
-                body += n;
-            }
-            body += base.substr(infos, A * 0x14);
-            for (uint32_t s = 0; s < sheets; ++s)
-            {
-                std::string info = base.substr(infos + 1 * 0x14, 0x14);
-                Put32(info, 8, static_cast<uint32_t>((std::min<size_t>)(kPerSheet, strips.size() - s * kPerSheet)));
-                body += info;
-            }
-            body += base.substr(sprites, B * 60);
-            for (size_t i = 0; i < strips.size(); ++i)
-            {
-                std::string sp = base.substr(sprites + 55 * 60, 60);
-                uint32_t s = static_cast<uint32_t>(i / kPerSheet), k = static_cast<uint32_t>(i % kPerSheet);
-                Put32(sp, 0, A + s);
-                char name[32] = {};
-                sprintf_s(name, "mission_map_custom%02zu.tga", i);
-                memcpy(sp.data() + 4, name, 32);
-                PutF(sp, 0x24, 0.0f);
-                PutF(sp, 0x28, static_cast<float>(k * kStripPitch) / kSheetH);
-                PutF(sp, 0x2C, static_cast<float>(kStripW) / kSheetW);
-                PutF(sp, 0x30, static_cast<float>(k * kStripPitch + kStripH) / kSheetH);
-                Put32(sp, 0x34, kStripW);
-                Put32(sp, 0x38, kStripH);
-                body += sp;
-            }
-
-            // Lay it out: header, texture table, root 0's chain, root 1's chunk + end marker, zeros, resources.
-            std::string out = base.substr(0, hdr);
-            out += table;
-            uint32_t newRoot0 = static_cast<uint32_t>(out.size());
-            out += base.substr(root0, root1 - root0);
-            uint32_t newRoot1 = static_cast<uint32_t>(out.size());
-            Add32(out, 0x10);
-            Add32(out, 8 + static_cast<uint32_t>(body.size()));
-            out += body;
-            Add32(out, 0);
-            Add32(out, 8);
-            uint32_t newRbOff = (std::max)(rbOff, static_cast<uint32_t>((out.size() + 0xFFF) & ~0xFFFu));
-            out.resize(newRbOff, '\0');
-            out += resources;
-            Put32(out, 12, newRbOff);
-            Put32(out, 20, static_cast<uint32_t>(resources.size()));
-            Put32(out, 0x20, newRoot0);
-            Put32(out, 0x24, newRoot1);
-            return out;
+            std::string dxt = EncodeDxt1(sheet, sheetW, kSheetH), out = "PDMP";
+            Add32(out, 1);
+            Add16(out, static_cast<uint16_t>(sheetW));
+            Add16(out, static_cast<uint16_t>(kSheetH));
+            Add32(out, static_cast<uint32_t>(strips.size()));
+            Add32(out, static_cast<uint32_t>(dxt.size()));
+            return out + dxt;
         }
     }
 
@@ -375,7 +261,7 @@ namespace mapslots
         g_log = log;
         std::vector<MapMod> maps(mapsIn.begin(), mapsIn.begin() + (std::min)(mapsIn.size(), SlotNumbers().size()));
         if (mapsIn.size() > maps.size()) log(L"maps: %zu map mods, only %zu slots - the rest are left out", mapsIn.size(), maps.size());
-        std::wstring data = pdplDir + L"\\Assets\\Data", listFile = pdnetDir + L"\\map-generated.txt", slotsFile = pdnetDir + L"\\map-slots.txt";
+        std::wstring data = pdplDir + L"\\Assets\\Data", listFile = pdnetDir + L"\\map-generated.txt", slotsFile = pdnetDir + L"\\map-slots.txt", previewFile = pdnetDir + L"\\map-previews.bin";
         std::set<std::wstring> written; // paths relative to pdplDir
 
         auto write = [&](const std::wstring& rel, const std::string& bytes)
@@ -384,7 +270,7 @@ namespace mapslots
             else log(L"maps: couldn't write %s", rel.c_str());
         };
 
-        std::string slots = "# map slots (pdlaunch, mapslots.cpp): slot number = stage entry = map number; sprite in MNet; mod id; name\n";
+        std::string slots = "# map slots (pdlaunch, mapslots.cpp): slot number = stage entry = map number; preview (strip in map-previews.bin); mod id; name\n";
         if (!maps.empty())
         {
             // Stage list: the game's, then entries up to the last slot (blank fillers where there's no map).
@@ -432,13 +318,14 @@ namespace mapslots
                 }
                 strips.push_back(std::move(strip));
             }
-            uint32_t firstSprite = 0;
-            std::string mnet = RebuildMNet(ReadAll(gameDir + L"\\Assets\\Data\\Menu\\MNet.alr"), strips, firstSprite);
-            if (!mnet.empty()) write(L"Assets\\Data\\Menu\\MNet.alr", mnet);
+            // The previews go to pdnet (LocalState\pdnet\map-previews.bin), which adds them to its own copy of MNet.alr
+            // with the character select's portraits: one MNet.alr for both (a generated MNet.alr here kept the
+            // portraits out, Experimental 191).
+            if (!WriteIfChanged(previewFile, PreviewSheet(strips))) log(L"maps: couldn't write %s", previewFile.c_str());
             for (size_t k = 0; k < maps.size(); ++k)
             {
-                slots += "slot\t" + std::to_string(SlotNumbers()[k]) + "\t" + std::to_string(mnet.empty() ? -1 : static_cast<int>(firstSprite + k)) + "\t" + maps[k].id + "\t" + maps[k].name + "\n";
-                log(L"maps: %S = st%02d (\"%S\", preview sprite %d)", maps[k].id.c_str(), SlotNumbers()[k], maps[k].name.c_str(), mnet.empty() ? -1 : static_cast<int>(firstSprite + k));
+                slots += "slot\t" + std::to_string(SlotNumbers()[k]) + "\t" + std::to_string(k) + "\t" + maps[k].id + "\t" + maps[k].name + "\n";
+                log(L"maps: %S = st%02d (\"%S\", preview %zu)", maps[k].id.c_str(), SlotNumbers()[k], maps[k].name.c_str(), k);
             }
         }
 
@@ -463,7 +350,7 @@ namespace mapslots
             newList += u + "\n";
         }
         WriteIfChanged(listFile, newList);
-        if (maps.empty()) DeleteFileW(slotsFile.c_str());
+        if (maps.empty()) { DeleteFileW(slotsFile.c_str()); DeleteFileW(previewFile.c_str()); }
         else WriteIfChanged(slotsFile, slots);
     }
 }
