@@ -9,6 +9,7 @@
 #include "gamepads.h"
 #include "labtests.h"
 #include "film.h"
+#include "p2p.h"
 #include <fstream>
 #include <winrt/Windows.ApplicationModel.Core.h>
 #include <winrt/Windows.UI.Core.h>
@@ -5299,10 +5300,54 @@ namespace pdnet::gamepatches
             g_dropAllPeers();
         }
 
+        // Cross lag (2026-11-19, a 4-player Tag Team, SUFDHSP / toaf / DD6A8L0 / 2HIO1FG): the Epic-relayed link between
+        // SUFDHSP and toaf went quiet for about 4 s (EOS: "interrupted", then restored). Each game's keepalive ran out
+        // (150 calls, about 4.5 s) and dropped the other, so from then on each PC played the match without the other.
+        // While pdnet's link to that peer is still open, the countdown is now held at 2 for up to kKeepHoldMs: the game
+        // waits for the peer (FUN_14012bbb0 holds frames while a peer's data is old), the link's reliable packets
+        // arrive when EOS restores it, and the match goes on together. A peer that has left has no link, and is dropped
+        // as before. The peer's EOS id is in its entry (+0x5e, 16 bytes; the sda endpoint snapshot).
+        constexpr ULONGLONG kKeepHoldMs = 20000;
+        ULONGLONG g_holdSince[16]{};
+
+        std::string PeerEosId(int i)
+        {
+            const uint8_t* e = At(0x140595ea8) + i * 0x298 + 0x5e;
+            std::string id;
+            bool any = false;
+            for (int k = 0; k < 16; ++k) { char two[3]; sprintf_s(two, "%02x", e[k]); id += two; any = any || e[k]; }
+            return any ? id : std::string();
+        }
+
+        void HoldQuietPeers(int count)
+        {
+            ULONGLONG now = GetTickCount64();
+            for (int i = 0; i < count && i < 16; ++i)
+            {
+                auto e = reinterpret_cast<int32_t*>(At(0x140595ea8) + i * 0x298);
+                if (!e[0] || e[3] > 2)
+                {
+                    if (g_holdSince[i] && e[0]) Log(L"peers: peer %d (slot %d) is sending again after %llu ms - kept in the match", i, e[1], now - g_holdSince[i]);
+                    g_holdSince[i] = 0;
+                    continue;
+                }
+                std::string id = PeerEosId(i);
+                if (id.empty() || !p2p::HasLink(id)) continue; // gone: the game drops it
+                if (!g_holdSince[i])
+                {
+                    g_holdSince[i] = now;
+                    Log(L"peers: peer %d (slot %d, %S) has gone quiet but its link is open - the game waits for it (up to %llu s)", i, e[1], id.substr(0, 8).c_str(), kKeepHoldMs / 1000);
+                }
+                if (now - g_holdSince[i] < kKeepHoldMs) e[3] = 2;
+                else if (e[3] == 2) Log(L"peers: peer %d (slot %d) quiet for %llu s - the game drops it", i, e[1], (now - g_holdSince[i]) / 1000);
+            }
+        }
+
         void HookedPeerKeepalive()
         {
             ++g_keepaliveCalls;
             int32_t count = *reinterpret_cast<int32_t*>(At(0x140594ea4));
+            HoldQuietPeers(count);
             PeerEntryView before[16] = {};
             for (int i = 0; i < count && i < 16; ++i)
             {

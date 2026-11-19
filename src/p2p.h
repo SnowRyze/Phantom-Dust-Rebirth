@@ -44,4 +44,8 @@ namespace pdnet::p2p
     // This PC's camera tilt (film::Look) to every linked player, on channel 3 ("PDLK", u8 slot, i16 tilt * 30000), unreliable.
     // Builds without channel 3 drop it: it doesn't decode as a control message.
     void SendLook(int slot, float tilt);
+
+    // A link to `peer` (EOS product user id, any case) is open: the peer hasn't left, even if its packets have stopped
+    // for a while (EOS restores interrupted connections).
+    bool HasLink(const std::string& peer);
 }

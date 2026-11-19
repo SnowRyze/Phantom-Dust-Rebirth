@@ -18,6 +18,7 @@ namespace pdnet::p2p
     uint16_t OpenLink(const std::string&, bool) { return 0; }
     void CloseLink(const std::string&) {}
     void SendLook(int, float) {}
+    bool HasLink(const std::string&) { return false; }
 }
 
 #else
@@ -755,6 +756,14 @@ namespace pdnet::p2p
             Log(L"p2p: starting (game datagrams via EOS P2P; links on %s)", net::IpToString(net::InterfaceIp()).c_str());
             std::thread([] { Sleep(3000); SelfTest(); }).detach(); // after the game has opened its port
         });
+    }
+
+    bool HasLink(const std::string& peer)
+    {
+        std::lock_guard guard(g_lock);
+        for (auto& [id, link] : g_links)
+            if (_stricmp(id.c_str(), peer.c_str()) == 0) return true;
+        return false;
     }
 
     void SendLook(int slot, float tilt)
