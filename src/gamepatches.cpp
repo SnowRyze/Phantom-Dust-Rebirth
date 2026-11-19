@@ -3242,7 +3242,7 @@ namespace pdnet::gamepatches
         //   worked out from the row.
         // A slot counts only if the game's stage table has it with the multiplayer flag (the stage list came from PDPL).
         MenuCommandFn g_addIdItem = nullptr; // menu command 59 (HookedAddIdItem, below)
-        struct MapSlot { int entry; int sprite; }; // sprite: the slot's strip in map-previews.bin
+        struct MapSlot { int entry; int sprite; std::string name; }; // sprite: the slot's strip in map-previews.bin
         std::vector<MapSlot> g_mapSlots;
         std::atomic<int> g_mapPreviewSprite{ -1 }; // MNET's sprite for the map previews (MakeMnetCopy); -1 none
         uint32_t* MnetHandles();                   // (below, with the character select)
@@ -3255,6 +3255,47 @@ namespace pdnet::gamepatches
         {
             int count = *reinterpret_cast<int32_t*>(At(0x14050a5d0));
             return entry > 0 && entry < count && *reinterpret_cast<int32_t*>(At(0x140509ba0) + entry * kStageEntrySize + 0x20) == 1;
+        }
+
+        // The slots' entries in the game's stage table, when the game's stage list didn't have them (the stage list
+        // pdlaunch generates, served by PDPL; 2026-11-23: on two players' PCs the table stayed at the game's 30 entries
+        // while the map files loaded, so the stage info for maps 30+ was missing). Filled from map-slots.txt as pdlaunch
+        // fills the file: blank filler entries (flag 0) up to the last slot, each slot with its name, map number = entry,
+        // 1 layout, the multiplayer flag. Checked at start-up, when the map picker lists its rows and at each match load.
+        char g_stageText[65][2][48];
+        void EnsureStageEntries(const wchar_t* when)
+        {
+            if (g_mapSlots.empty()) return;
+            int last = 0;
+            for (const MapSlot& s : g_mapSlots) last = (std::max)(last, s.entry);
+            int32_t* count = reinterpret_cast<int32_t*>(At(0x14050a5d0));
+            uint8_t* table = At(0x140509ba0);
+            int now = *count;
+            if (now < 30 || now > 65 || last >= 65) return; // not loaded yet, or not the table this pdnet knows
+            bool missing = now <= last;
+            for (const MapSlot& s : g_mapSlots)
+                missing = missing || *reinterpret_cast<int32_t*>(table + s.entry * kStageEntrySize + 0x18) != s.entry ||
+                          *reinterpret_cast<int32_t*>(table + s.entry * kStageEntrySize + 0x20) != 1;
+            if (!missing) return;
+            for (int n = 30; n <= last; ++n)
+            {
+                const MapSlot* slot = nullptr;
+                for (const MapSlot& s : g_mapSlots) if (s.entry == n) slot = &s;
+                if (n < now && !slot) continue; // the game's own entry
+                uint8_t* e = table + n * kStageEntrySize;
+                if (slot) sprintf_s(g_stageText[n][0], "%s", slot->name.substr(0, 47).c_str()), sprintf_s(g_stageText[n][1], "st%02d", n);
+                else sprintf_s(g_stageText[n][0], "%02d Dummy", n), sprintf_s(g_stageText[n][1], "%02d Dummy", n);
+                memset(e, 0, kStageEntrySize);
+                const char* name = g_stageText[n][0];
+                *reinterpret_cast<const char**>(e) = name;                     // name
+                *reinterpret_cast<const char**>(e + 8) = name;                 // short name (the loading screen's)
+                *reinterpret_cast<const char**>(e + 0x10) = g_stageText[n][1]; // internal name
+                *reinterpret_cast<int32_t*>(e + 0x18) = n;
+                *reinterpret_cast<int32_t*>(e + 0x1c) = slot ? 1 : 0;
+                *reinterpret_cast<int32_t*>(e + 0x20) = slot ? 1 : 0;
+            }
+            if (*count < last + 1) *count = last + 1;
+            Log(L"gamepatch: map picker: the game's stage table had %d entries, new map entries filled in (%d now; %s)", now, *count, when);
         }
 
         bool IsMapSlot(int entry)
@@ -3280,6 +3321,7 @@ namespace pdnet::gamepatches
             if (g_mapSlots.empty() || CurrentMenu(MenuManager()) != kStageMenu || window < 0 || position < 0) return;
             if (position == 0) memset(g_mapRowSlot, -1, sizeof(g_mapRowSlot));
             if (args[0] != 108) return; // stage 8: the script's last row
+            EnsureStageEntries(L"map picker");
             int row = position + 1, added = 0;
             for (size_t k = 0; k < g_mapSlots.size() && row < 256; ++k)
             {
@@ -3359,6 +3401,7 @@ namespace pdnet::gamepatches
             int map = *reinterpret_cast<int32_t*>(At(0x140530264));
             if (map >= 30 && map < 65 && g_mapFiles[map][0].name)
             {
+                EnsureStageEntries(L"match load");
                 auto table = reinterpret_cast<uint64_t*>(At(0x1403f2b60));
                 for (int f = 0; f < 2; ++f)
                     if (entry == table + (map * 2 + f) * 3)
@@ -3380,8 +3423,14 @@ namespace pdnet::gamepatches
             while (std::getline(in, line))
             {
                 int entry = 0, sprite = 0;
+                if (!line.empty() && line.back() == '\r') line.pop_back();
                 if (sscanf_s(line.c_str(), "slot\t%d\t%d", &entry, &sprite) == 2 && entry >= 30 && entry < 65 && sprite >= 0 && sprite < 36)
-                    g_mapSlots.push_back({ entry, sprite });
+                {
+                    size_t tab = 0; // the name: the 5th field
+                    for (int k = 0; k < 4 && tab != std::string::npos; ++k) tab = line.find('\t', tab + (k ? 1 : 0));
+                    std::string name = tab != std::string::npos ? line.substr(tab + 1) : "";
+                    g_mapSlots.push_back({ entry, sprite, name.empty() ? "Map " + std::to_string(entry) : name });
+                }
             }
             if (g_mapSlots.empty()) return;
             int count = *reinterpret_cast<int32_t*>(At(0x14050a5d0));
@@ -3405,6 +3454,7 @@ namespace pdnet::gamepatches
             g_queueMapFile = reinterpret_cast<QueueMapFileFn>(InlineHookBytes(0x14021ab70, start, start, reinterpret_cast<void*>(&HookedQueueMapFile), L"map load files"));
             hooks = hooks && g_queueMapFile;
             Log(L"gamepatch: map picker: %zu new map(s) from map-slots.txt, stage table has %d entries%s", g_mapSlots.size(), count, hooks ? L"" : L" - NOT all hooks in");
+            EnsureStageEntries(L"start-up");
         }
 
         // What each row of a command-59 list does when picked, by window and position. The Laboratory's window reports

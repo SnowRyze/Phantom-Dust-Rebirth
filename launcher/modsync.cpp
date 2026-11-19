@@ -1283,7 +1283,7 @@ namespace modsync
             }
 
         // ---- new map slots (mapslots.cpp) ----
-        // Each enabled map mod, in priority order, becomes a new stage in the multiplayer map picker (its .alr / .dat
+        // Each enabled map mod (slots by mod id, mapslots.cpp) becomes a new stage in the multiplayer map picker (its .alr / .dat
         // under a free stage number, its preview on the picker's sheet); with none, the generated files are removed.
         if (!gameDir.empty())
         {

@@ -259,8 +259,13 @@ namespace mapslots
     void Generate(const std::wstring& gameDir, const std::wstring& pdplDir, const std::wstring& pdnetDir, const std::vector<MapMod>& mapsIn, LogFn log)
     {
         g_log = log;
-        std::vector<MapMod> maps(mapsIn.begin(), mapsIn.begin() + (std::min)(mapsIn.size(), SlotNumbers().size()));
-        if (mapsIn.size() > maps.size()) log(L"maps: %zu map mods, only %zu slots - the rest are left out", mapsIn.size(), maps.size());
+        // Slots go by mod id, not by the player's own mod order: every PC in a lobby has the same map mods on (the
+        // lobby compares them), so the same ids give the same slots everywhere. In priority order, two players with the
+        // same maps could have them swapped (2026-11-23: one PC's "map 30" was Aquarium, another's Construct).
+        std::vector<MapMod> sorted(mapsIn);
+        std::stable_sort(sorted.begin(), sorted.end(), [](const MapMod& a, const MapMod& b) { return a.id < b.id; });
+        std::vector<MapMod> maps(sorted.begin(), sorted.begin() + (std::min)(sorted.size(), SlotNumbers().size()));
+        if (sorted.size() > maps.size()) log(L"maps: %zu map mods, only %zu slots - the ones last by id are left out", sorted.size(), maps.size());
         std::wstring data = pdplDir + L"\\Assets\\Data", listFile = pdnetDir + L"\\map-generated.txt", slotsFile = pdnetDir + L"\\map-slots.txt", previewFile = pdnetDir + L"\\map-previews.bin";
         std::set<std::wstring> written; // paths relative to pdplDir
 
