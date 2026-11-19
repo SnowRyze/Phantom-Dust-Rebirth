@@ -346,6 +346,9 @@ directly with one address per script argument, a PowerShell wrapper passing arra
   the unlocked query. Still to check: the picker's preview choice (next: a run with menu_debug=on through the picker),
   and anything else keyed by map number (BGM, AI navigation com/stNN, lighting, intro camera stNNcam.alr: not needed).
 ## Log
+- 2026-11-21: Conceptual 53 test: Test Arsenal on Aquarium (map 30) loads and plays (3.5 minutes, no crash); pdnet.log shows
+  both files swapped in (map load: st30.alr / st30.dat). Check 49 passes (AI navigation missing didn't matter). Still open: 45
+  (preview), 46-48 (a lobby match on it, a second PC), 50, 51.
 - 2026-11-21: Conceptual 52 test: new map row, pick and hosting worked; the battle load crashed. Cause: the map files come
   from a name table by map number (blank for 30). Fixed in Conceptual 53 (pdnet swaps in the slot's names); slot 32 skipped
   (the game's own st32). Retest checks 46-49.
