@@ -45,6 +45,9 @@ namespace pdnet::gamepatches
     bool MindReading();
     // True from Lab > Test Arsenal until back in the menus: its wins don't count for the scoreboard.
     bool TestBattle();
+    // A join was refused because the lobby's mods aren't this start's (they're set up for the next): for the next 30 s
+    // the game's "Could not find a session." says "This lobby uses mods. Restart the game ..." instead.
+    void ModLobbyRefused();
     // Theatre films: slot's Advanced pick (the PD_VARIANT text, "1|slot|character|colour|dodge|set") while that slot plays
     // a variant, into `out`; false (and "") for a normal pick.
     bool FilmVariant(int slot, char* out, size_t size);
