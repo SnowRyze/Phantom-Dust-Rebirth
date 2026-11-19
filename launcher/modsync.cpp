@@ -814,7 +814,16 @@ namespace modsync
                 if (!f.dir && IsArchive(f.name) && FileInfo(dir + L"\\" + f.name, size, time)) versions.push_back({ time, f.name });
             }
             std::sort(versions.rbegin(), versions.rend());
-            for (size_t i = 3; i < versions.size(); ++i) DeleteFileW((dir + L"\\" + versions[i].second).c_str());
+            // The newest 3 by file time, but never the file just downloaded: a PC whose clock went back makes an older
+            // download look newer.
+            size_t kept = 0;
+            for (const auto& [time, name] : versions)
+            {
+                bool justNow = _wcsicmp((dir + L"\\" + name).c_str(), file.c_str()) == 0;
+                if (justNow) continue;              // this release: always kept
+                if (kept < 2) { ++kept; continue; } // and the 2 newest others
+                DeleteFileW((dir + L"\\" + name).c_str());
+            }
             return true;
         }
 
@@ -993,14 +1002,23 @@ namespace modsync
             uint64_t newestTime = 0;
             std::string id = CleanId(Utf8(d.name));
             const LobbyMod* l = lobbyStart ? lobbyEntry(id) : nullptr;
+            // Which download: a lobby start's release; else the newest release GitHub gave (releases.txt), whose file is
+            // <tag>.<ext>; else the newest file. (By file time alone, a PC whose clock had gone back kept an older release:
+            // Aquarium 0.1 over the 0.2 just downloaded, Experimental 192.)
+            auto known = releases.find(id);
+            std::wstring releaseStem = known != releases.end() && !known->second.tag.empty() ? Wide(SafeName(known->second.tag)) : L"";
+            std::wstring release;
             for (const auto& f : List(storeDir + L"\\" + d.name))
             {
                 uint64_t size, time;
                 if (f.dir || !IsArchive(f.name) || !FileInfo(storeDir + L"\\" + d.name + L"\\" + f.name, size, time)) continue;
-                bool lobbys = l && !l->tag.empty() && _wcsicmp(f.name.substr(0, f.name.size() - Extension(f.name).size()).c_str(), Wide(SafeName(l->tag)).c_str()) == 0;
-                if (lobbys) { newest = f.name; break; } // a lobby start: the lobby's release, not the newest
+                std::wstring stem = f.name.substr(0, f.name.size() - Extension(f.name).size());
+                bool lobbys = l && !l->tag.empty() && _wcsicmp(stem.c_str(), Wide(SafeName(l->tag)).c_str()) == 0;
+                if (lobbys) { newest = f.name; release.clear(); break; } // a lobby start: the lobby's release, not the newest
+                if (!releaseStem.empty() && _wcsicmp(stem.c_str(), releaseStem.c_str()) == 0) release = f.name;
                 if (time >= newestTime) { newest = f.name; newestTime = time; }
             }
+            if (!release.empty()) newest = release;
             if (!newest.empty()) add(Source::Catalog, storeDir + L"\\" + d.name, newest, false, id);
         }
         // Catalog mods with nothing downloaded: listed (no path) so the Mods list can turn them on.
