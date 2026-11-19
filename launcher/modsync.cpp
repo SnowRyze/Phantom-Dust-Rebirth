@@ -16,6 +16,8 @@ namespace modsync
     namespace
     {
         LogFn g_log = nullptr;
+        const Net* g_net = nullptr; // null: no catalog, downloads or file hashes
+        std::string ReadBytes(const std::wstring& p); // (below)
 
         enum class Source { Catalog, Local, Pdpl };
         const wchar_t* SourceName(Source s) { return s == Source::Catalog ? L"catalog" : s == Source::Local ? L"local" : L"pdpl"; }
@@ -27,6 +29,7 @@ namespace modsync
             bool inDisabled = false;      // a player's PDPL archive waiting in RoamingState\mods\disabled
             uint64_t size = 0, mtime = 0;
             std::string id, name, version, author, description, online = "match", problem;
+            std::string sha, tag; // sha256 of the archive (lobbies compare it), the release tag (catalog mods)
             std::vector<std::string> after, before, touches, files; // files: lowercase game paths
             bool plugins = false, enabled = true, read = false;
         };
@@ -420,6 +423,7 @@ namespace modsync
                 else if (k == "online") m.online = v;
                 else if (k == "after") m.after = Split(v, ',');
                 else if (k == "before") m.before = Split(v, ',');
+                else if (k == "sha") m.sha = v;
             }
             m.read = true;
             return true;
@@ -429,7 +433,7 @@ namespace modsync
         {
             std::string t = "modinfo 1\n";
             t += "id=" + Field(m.id) + "\nname=" + Field(m.name) + "\nversion=" + Field(m.version) + "\nauthor=" + Field(m.author) +
-                 "\ndescription=" + Field(m.description) + "\nonline=" + m.online + "\nafter=" + Join(m.after, ',') + "\nbefore=" + Join(m.before, ',') + "\n";
+                 "\ndescription=" + Field(m.description) + "\nonline=" + m.online + "\nafter=" + Join(m.after, ',') + "\nbefore=" + Join(m.before, ',') + "\nsha=" + m.sha + "\n";
             for (const auto& f : m.files) t += "f " + f + "\n";
             WriteText(file, t);
         }
@@ -440,7 +444,16 @@ namespace modsync
         void Inspect(Mod& m, const std::wstring& cacheDir)
         {
             std::wstring cache = CachePath(cacheDir, m);
-            if (LoadCache(cache, m)) return;
+            if (LoadCache(cache, m))
+            {
+                if (m.sha.empty() && g_net) // cached before hashes were kept
+                {
+                    m.sha = g_net->sha256(ReadBytes(m.path));
+                    SaveCache(cache, m);
+                }
+                return;
+            }
+            if (g_net) m.sha = g_net->sha256(ReadBytes(m.path)); // lobbies compare mods by it
             std::vector<std::string> entries;
             bool sevenZip = m.ext == L".7z";
             bool listed = false;
@@ -542,8 +555,6 @@ namespace modsync
 
         // ---- the catalog and downloads (step 5) ----
 
-        const Net* g_net = nullptr;
-
         struct CatalogEntry { std::string id, repo; bool plugin = false; };
 
         std::vector<CatalogEntry> ParseCatalog(const std::string& text)
@@ -599,7 +610,7 @@ namespace modsync
         {
             FILETIME ft;
             GetSystemTimeAsFileTime(&ft);
-            return ((static_cast<uint64_t>(ft.dwHighDateTime) << 32) | ft.dwLowDateTime) / 10000000ull;
+            return ((static_cast<uint64_t>(ft.dwHighDateTime) << 32) | ft.dwLowDateTime) / 10000000ull - 11644473600ull; // Unix seconds
         }
 
         // modstore\releases.txt: id, tag, url, asset, sha256, time checked (seconds), tab-separated.
@@ -642,10 +653,20 @@ namespace modsync
         }
 
         // The newest release of a catalog mod: its first .zip / .7z that the notes give a sha256 for.
-        bool LookUpRelease(const CatalogEntry& e, Release& r, std::string& why)
+        // tag empty: the newest release; else that release (a lobby's).
+        bool LookUpRelease(const CatalogEntry& e, const std::string& tag, Release& r, std::string& why)
         {
-            std::string json;
-            if (!g_net->get(L"https://api.github.com/repos/" + Wide(e.repo) + L"/releases/latest", json, 8000))
+            std::string json, path = "/releases/latest";
+            if (!tag.empty())
+            {
+                path = "/releases/tags/";
+                for (char c : tag) // percent-encode anything but unreserved characters
+                {
+                    if (isalnum(static_cast<unsigned char>(c)) || c == '-' || c == '.' || c == '_' || c == '~') path += c;
+                    else { char hex[4]; sprintf_s(hex, "%%%02X", static_cast<unsigned char>(c)); path += hex; }
+                }
+            }
+            if (!g_net->get(L"https://api.github.com/repos/" + Wide(e.repo) + Wide(path), json, 8000))
             {
                 why = "GitHub didn't answer, or the repo has no release";
                 return false;
@@ -749,20 +770,73 @@ namespace modsync
         std::set<std::string> known(order.begin(), order.end()), enabledSet;
         for (const auto& id : Split(enabledText, ',')) enabledSet.insert(id);
 
+        // ---- one start with a lobby's mods (step 7) ----
+        // pdnet writes LocalState\pdnet\lobby-mods.txt when this PC tries to join a lobby whose gameplay mods differ from
+        // its own (lines "lobby <id>", "time <unix seconds>", "mod <id> <sha256 start> [<release tag>]", tab-separated).
+        // PDPL can't change mods while the game runs, so the next start uses exactly those mods (catalog ones downloaded at
+        // the lobby's release), plus this PC's own "online": "local" ones; the player then joins the lobby again. Used once
+        // (renamed lobby-mods.used.txt), and only within 2 hours.
+        struct LobbyMod { std::string id, sha, tag; };
+        std::vector<LobbyMod> lobbyMods;
+        bool lobbyStart = false;
+        {
+            std::wstring request = pdnetDir + L"\\lobby-mods.txt";
+            std::string text = ReadText(request);
+            if (!text.empty())
+            {
+                MoveFileExW(request.c_str(), (pdnetDir + L"\\lobby-mods.used.txt").c_str(), MOVEFILE_REPLACE_EXISTING);
+                std::string lobbyId;
+                uint64_t when = 0;
+                for (const auto& line : Split(text, '\n'))
+                {
+                    auto w = Split(line, '\t');
+                    if (w.size() >= 2 && w[0] == "lobby") lobbyId = w[1];
+                    else if (w.size() >= 2 && w[0] == "time") when = _strtoui64(w[1].c_str(), nullptr, 10);
+                    else if (w.size() >= 3 && w[0] == "mod") lobbyMods.push_back({ w[1], Lower(w[2]), w.size() > 3 ? w[3] : "" });
+                }
+                lobbyStart = when && Now() - when < 2 * 3600;
+                if (lobbyStart) log(L"mods: this start uses lobby %S's mods (%zu), as asked when joining it", lobbyId.c_str(), lobbyMods.size());
+                else log(L"mods: lobby-mods.txt is older than 2 hours - not used");
+            }
+        }
+        auto lobbyEntry = [&](const std::string& id) -> const LobbyMod*
+        {
+            for (const auto& l : lobbyMods) if (l.id == id) return &l;
+            return nullptr;
+        };
+
         // ---- the catalog: downloads for the catalog mods that are on ----
         std::vector<CatalogEntry> catalog;
         std::map<std::string, std::string> notDownloaded; // id -> why
+        std::map<std::string, Release> releases;
         if (net)
         {
             catalog = LoadCatalog(storeDir, catalogUrl);
             std::wstring releasesFile = storeDir + L"\\releases.txt";
-            auto releases = LoadReleases(releasesFile);
+            releases = LoadReleases(releasesFile);
             bool changed = false;
             for (const auto& e : catalog)
             {
+                std::string why;
+                if (lobbyStart) // the lobby's catalog mods, at the lobby's release
+                {
+                    const LobbyMod* l = lobbyEntry(e.id);
+                    if (!l || l->tag.empty()) continue;
+                    Release r;
+                    if (!Exists(storeDir + L"\\" + Wide(e.id) + L"\\" + Wide(SafeName(l->tag)) + L".zip") &&
+                        !Exists(storeDir + L"\\" + Wide(e.id) + L"\\" + Wide(SafeName(l->tag)) + L".7z"))
+                    {
+                        if (!LookUpRelease(e, l->tag, r, why) || r.sha.rfind(l->sha, 0) != 0 || !Download(e, r, storeDir + L"\\" + Wide(e.id), why))
+                        {
+                            if (why.empty()) why = "the lobby's file isn't that release's";
+                            log(L"mods: %S %S (for the lobby): %S", e.id.c_str(), l->tag.c_str(), why.c_str());
+                            notDownloaded[e.id] = why;
+                        }
+                    }
+                    continue;
+                }
                 if (!enabledSet.count(e.id)) continue;
                 Release r;
-                std::string why;
                 auto cached = releases.find(e.id);
                 bool fresh = cached != releases.end() && Now() - cached->second.checked < 6 * 3600;
                 if (fresh && cached->second.url.empty()) // a failed lookup, kept 6 hours too (GitHub's hourly limit)
@@ -771,7 +845,7 @@ namespace modsync
                     continue;
                 }
                 if (fresh) r = cached->second;
-                else if (LookUpRelease(e, r, why))
+                else if (LookUpRelease(e, "", r, why))
                 {
                     if (cached == releases.end() || cached->second.tag != r.tag) log(L"mods: %S: newest release %S (%S)", e.id.c_str(), r.tag.c_str(), r.asset.c_str());
                     releases[e.id] = r;
@@ -828,12 +902,17 @@ namespace modsync
             if (!d.dir) continue;
             std::wstring newest;
             uint64_t newestTime = 0;
+            std::string id = CleanId(Utf8(d.name));
+            const LobbyMod* l = lobbyStart ? lobbyEntry(id) : nullptr;
             for (const auto& f : List(storeDir + L"\\" + d.name))
             {
                 uint64_t size, time;
-                if (!f.dir && IsArchive(f.name) && FileInfo(storeDir + L"\\" + d.name + L"\\" + f.name, size, time) && time >= newestTime) { newest = f.name; newestTime = time; }
+                if (f.dir || !IsArchive(f.name) || !FileInfo(storeDir + L"\\" + d.name + L"\\" + f.name, size, time)) continue;
+                bool lobbys = l && !l->tag.empty() && _wcsicmp(f.name.substr(0, f.name.size() - Extension(f.name).size()).c_str(), Wide(SafeName(l->tag)).c_str()) == 0;
+                if (lobbys) { newest = f.name; break; } // a lobby start: the lobby's release, not the newest
+                if (time >= newestTime) { newest = f.name; newestTime = time; }
             }
-            if (!newest.empty()) add(Source::Catalog, storeDir + L"\\" + d.name, newest, false, CleanId(Utf8(d.name)));
+            if (!newest.empty()) add(Source::Catalog, storeDir + L"\\" + d.name, newest, false, id);
         }
         // Catalog mods with nothing downloaded: listed (no path) so the Mods list can turn them on.
         {
@@ -874,6 +953,14 @@ namespace modsync
             // put in PDPL's folder.
             if (m.source == Source::Catalog && m.plugins && !(inCatalog.count(m.id) && inCatalog[m.id]->plugin))
                 m.problem = "has plugins (needs the catalog's plugin flag)";
+            // The release tag of a catalog mod's file (lobbies name it, so a joiner can download the same release).
+            if (m.source == Source::Catalog && !m.path.empty())
+            {
+                std::string stem = Utf8(m.file.substr(0, m.file.size() - m.ext.size()));
+                auto r = releases.find(m.id);
+                const LobbyMod* l = lobbyEntry(m.id);
+                m.tag = r != releases.end() && SafeName(r->second.tag) == stem ? r->second.tag : l && SafeName(l->tag) == stem ? l->tag : stem;
+            }
         }
 
         for (auto& m : mods)
@@ -883,11 +970,30 @@ namespace modsync
             else if (m.source == Source::Pdpl && isNew) m.enabled = !m.inDisabled; // as the player left it
             else if (!haveEnabled || isNew) m.enabled = true;
             else m.enabled = enabledSet.count(m.id) > 0;
+            if (lobbyStart) // the lobby's mods (the same file), plus this PC's own ones that only change how things look or sound
+            {
+                const LobbyMod* l = lobbyEntry(m.id);
+                bool fromLobby = l && !m.sha.empty() && m.sha.rfind(l->sha, 0) == 0;
+                m.enabled = fromLobby || (m.enabled && m.online == "local");
+            }
         }
+        if (lobbyStart)
+            for (const auto& l : lobbyMods)
+            {
+                bool found = false;
+                for (const auto& m : mods) found = found || (m.id == l.id && m.enabled);
+                if (!found) log(L"mods: the lobby's %S isn't here (or isn't the same file) - joining will be refused again", l.id.c_str());
+            }
+        std::vector<std::string> lobbyOrder;
+        for (const auto& l : lobbyMods) lobbyOrder.push_back(l.id);
         auto rank = [&](const Mod& m)
         {
-            auto it = std::find(order.begin(), order.end(), m.id);
-            return it == order.end() ? order.size() : static_cast<size_t>(it - order.begin());
+            const auto& list = lobbyStart ? lobbyOrder : order;
+            auto it = std::find(list.begin(), list.end(), m.id);
+            if (it != list.end()) return static_cast<size_t>(it - list.begin());
+            if (!lobbyStart) return order.size();
+            auto own = std::find(order.begin(), order.end(), m.id); // after the lobby's, in the player's own order
+            return list.size() + (own == order.end() ? order.size() : static_cast<size_t>(own - order.begin()));
         };
         std::stable_sort(mods.begin(), mods.end(), [&](const Mod& a, const Mod& b)
         {
@@ -1007,12 +1113,14 @@ namespace modsync
         char when[32];
         sprintf_s(when, "%04u-%02u-%02u %02u:%02u", t.wYear, t.wMonth, t.wDay, t.wHour, t.wMinute);
         std::string state = std::string("# pdlaunch, ") + when + ": mods in priority order (first wins); tab-separated\n";
-        state += "# mod id on|off source name version author online touches plugins files problem path load_after load_before description\n";
+        state += "# mod id on|off source name version author online touches plugins files problem path load_after load_before description sha256(12) tag\n";
+        if (lobbyStart) state += "lobbystart\t1\n"; // this start uses a lobby's mods (the Mods list says so)
         state += "loose\t" + std::to_string(loose) + "\n";
         for (const auto& m : mods)
             state += "mod\t" + m.id + "\t" + (m.enabled ? "on" : "off") + "\t" + Utf8(SourceName(m.source)) + "\t" + Field(m.name) + "\t" +
                      Field(m.version) + "\t" + Field(m.author) + "\t" + m.online + "\t" + Join(m.touches, ',') + "\t" + (m.plugins ? "1" : "0") + "\t" +
-                     std::to_string(m.files.size()) + "\t" + Field(m.problem) + "\t" + Field(Utf8(m.path)) + "\t" + Join(m.after, ',') + "\t" + Join(m.before, ',') + "\t" + Field(m.description) + "\n";
+                     std::to_string(m.files.size()) + "\t" + Field(m.problem) + "\t" + Field(Utf8(m.path)) + "\t" + Join(m.after, ',') + "\t" + Join(m.before, ',') + "\t" + Field(m.description) + "\t" +
+                     m.sha.substr(0, 12) + "\t" + Field(m.tag) + "\n";
         state += conflicts;
         if (!WriteText(pdnetDir + L"\\mods-state.txt", state)) log(L"mods: couldn't write mods-state.txt");
 

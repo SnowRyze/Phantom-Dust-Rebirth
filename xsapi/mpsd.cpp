@@ -7,6 +7,7 @@
 #include "../src/scores.h"
 #include "../src/p2p.h"
 #include "../src/film.h" // Conceptual branch: films record their lobby
+#include "../src/mods.h" // Conceptual branch: lobbies carry the host's mods
 #include "nametrace.h"
 #include <winrt/Windows.Data.Json.h>
 #include <bcrypt.h>
@@ -138,6 +139,7 @@ namespace pdnet::mpsd
             if (!d.hostDeviceToken.empty()) a["PD_HOST"] = U8(d.hostDeviceToken);
             if (d.search) lobbies::Split(a, "PD_SEARCH", SearchJson(*d.search));
             if (d.rated >= 0) a["PD_RATED"] = std::to_string(d.rated);
+            if (!d.mods.empty()) lobbies::Split(a, "PD_MODS", d.mods);
             json::JsonObject mids;
             for (auto& m : d.members)
                 if (!m.reservation && m.memberId) mids.Insert(m.xuid, json::JsonValue::CreateNumberValue(m.memberId));
@@ -231,6 +233,7 @@ namespace pdnet::mpsd
             if (d.search && d.search->numbers.count(L"ratingmin")) d.search->numbers[L"ratingmin"] = 0;
             if (d.search && d.search->numbers.count(L"ratingmax")) d.search->numbers[L"ratingmax"] = 1000000;
             if (auto v = Attr(a, "PD_RATED"); !v.empty()) d.rated = atoi(v.c_str());
+            d.mods = lobbies::Joined(a, "PD_MODS");
             d.shared = lobby.joined;
             d.lobbyMemberCount = lobby.memberCount;
 
@@ -782,6 +785,12 @@ namespace pdnet::mpsd
                 std::optional<lobbies::Lobby> lobby;
                 if (created)
                 {
+                    doc.mods = mods::LobbyTag(); // this start's gameplay mods go with the lobby (PD_MODS); then it's Unrated
+                    if (!doc.mods.empty())
+                    {
+                        doc.rated = 0;
+                        Log(L"xsapi-pdnet: hosting with mods: %S (Unrated)", doc.mods.c_str());
+                    }
                     lobby = lobbies::Create(lobbyId, Bucket(doc.scid, doc.templateName), doc.maxMembers, SessionAttributes(doc), MemberAttributes(*mine));
                     if (!lobby) lobby = lobbies::Join(lobbyId, MemberAttributes(*mine)); // the id is taken: someone made it first
                     if (!lobby) Log(L"xsapi-pdnet: could not create the lobby for %s/%s; the session is local to this PC", doc.templateName.c_str(), doc.sessionName.c_str());
@@ -789,6 +798,21 @@ namespace pdnet::mpsd
                 }
                 else
                 {
+                    // Mods (Conceptual, step 7): the lobby's gameplay mods must be this start's. PDPL can't change them now,
+                    // so a lobby with others is refused and set up for the next game start (mods::RequestForNextStart).
+                    if (auto peek = lobbies::Read(lobbyId))
+                    {
+                        std::string tag = lobbies::Joined(peek->attributes, "PD_MODS");
+                        if (mods::Differs(tag))
+                        {
+                            std::string why;
+                            bool asked = mods::RequestForNextStart(lobbyId, tag, why);
+                            Log(L"xsapi-pdnet: not joining lobby %S: its mods (%S) aren't this start's (%S) - %S", lobbyId.c_str(), tag.empty() ? "none" : tag.c_str(),
+                                mods::LobbyTag().empty() ? "none" : mods::LobbyTag().c_str(), asked ? "restart the game and join again" : why.c_str());
+                            status = mp::WriteSessionStatus::HandleNotFound; // the game's "couldn't join"
+                            return nullptr;
+                        }
+                    }
                     lobby = lobbies::Join(lobbyId, MemberAttributes(*mine));
                     if (!lobby && remote)
                     {
@@ -893,6 +917,7 @@ namespace pdnet::mpsd
         if (doc.search) handle.created = doc.search->created;
         if (!Ticks(handle.created)) handle.created = winrt::clock::now();
         if (auto limit = handle.numbers.find(L"ratinglimit"); limit != handle.numbers.end()) doc.rated = limit->second != 0 ? 1 : 0;
+        if (!doc.mods.empty()) doc.rated = 0; // a lobby with gameplay mods is Unrated, whatever its Rating option says
         doc.search = std::move(handle);
         if (doc.shared && lobbies::Available())
         {

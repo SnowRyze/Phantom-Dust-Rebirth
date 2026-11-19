@@ -150,7 +150,7 @@ Rebirth's metadata only, and `touches` is worked out from the paths at every sca
 7. Lobbies.
 8. Catalog plugins.
 
-Status (2026-11-19): 1, 2, 4, 5 and 6 built (Conceptual 41-46); 3's live part waits on PDPL exports (safe mode is in). None tried in the game yet: the user tests everything at once with the list below.
+Status (2026-11-19): 1, 2 and 4-7 built (Conceptual 41-47); 3's live part waits on PDPL exports (safe mode is in). None tried in the game yet: the user tests everything at once with the list below.
 
 ### To test (all at once, newest kit)
 Folders: PDPL's = `%LOCALAPPDATA%\Packages\Microsoft.MSEsper_8wekyb3d8bbwe\RoamingState\mods`; Rebirth's =
@@ -208,7 +208,31 @@ test catalog)
 29. A PD Helper modpack (ModLoader) on top still works as before.
 30. Skills the mod didn't change keep the Skill Update 1.40 values (compare one with a mod-less game).
 
+**Mods on lobbies (step 7)** (two PCs; the host with a gameplay mod on, e.g. a map or skill mod, the joiner without)
+31. Host's pdnet.log: `hosting with mods: <id>:<hash> (Unrated)`; the lobby's SESSION INFO reads `<rule> (Unrated, 1 mod)`.
+32. Joiner's Lobby Browser: the lobby reads `(Unrated, 1 mod, restart to join)`; a vanilla lobby still reads Rated / Unrated.
+33. Joiner picks it: the game says it couldn't join; pdnet.log `not joining lobby ...: its mods ... aren't this start's -
+    restart the game and join again`; `LocalState\pdnet\lobby-mods.txt` exists.
+34. Joiner restarts: pdlaunch.log `this start uses lobby ...'s mods`; a catalog mod is downloaded at the host's release; the
+    Lobby Browser no longer says "restart to join"; joining works and both play with the mod.
+35. A local (non-catalog) mod on the host that the joiner lacks: pdlaunch.log says it "isn't here"; the join is refused again.
+36. The joiner's own "Only you" mods stay on during the lobby start; the start after that is back to their own list.
+37. A modded match doesn't change ratings (pdnet.log `rating change ... not applied (gameplay mods: Unrated)`).
+38. A modded player opening a vanilla lobby: `(Rated, no mods, restart to join)`; joining sets up a start without gameplay
+    mods. `lobby_mods=off` in settings.ini: the join just fails, no lobby-mods.txt.
+
 ## Log
+- 2026-11-19: Mod loader step 7, mods on lobbies (Conceptual 47). PDPL can't change mods while the game runs, so a lobby with
+  other mods is set up for the next start. Host: mods::LobbyTag (src\mods.cpp, from mods-state.txt: mods on, loaded, not
+  "online": "local") goes in the lobby as PD_MODS (`id:<first 12 hex of the archive's sha256>[:<release tag>]`, comma-
+  separated; pdlaunch now hashes each archive, cached in modinfo, and writes hash + tag to the state file); doc.rated = 0
+  (Unrated) and ApplyRating skips modded matches. Joiner: before lobbies::Join, mpsd reads the lobby's PD_MODS; if it
+  differs from this start's, the join fails (HandleNotFound) and mods::RequestForNextStart writes pdnet\lobby-mods.txt
+  (lobby id, Unix time, the mods) unless lobby_mods=off. pdlaunch's next start (within 2 h, once) uses exactly those mods:
+  catalog ones downloaded at the lobby's tag (releases/tags/<tag>, sha256 checked against the lobby's), others only if
+  the same file, plus the player's own "online": "local" mods; the player then joins again. SESSION INFO: "(Unrated, N mods)",
+  ", restart to join" when they differ. Tested with pdlaunch -syncmods: a fake lobby-mods.txt gave exactly the lobby's mods (a
+  wrong-hash one reported), the next start was back to the player's own list. Not yet tried in the game (needs two PCs).
 - 2026-11-19: Mod catalog admin (the user: the whitelist is controlled by a separate admin app, like the scoreboard, and
   mods are added by pasting a link). The Mod Admin app lives with the leaderboard admin tool, outside the repository:
   D:\PhantomDust-Dumped-NoMovie\admin-tool\Mod Admin.bat / ModAdmin.ps1 / modadmin.ini (never commit, push or ship it). It

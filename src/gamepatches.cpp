@@ -10,6 +10,7 @@
 #include "labtests.h"
 #include "film.h"
 #include "pdpl.h"
+#include "mods.h"
 #include <fstream>
 #include <winrt/Windows.ApplicationModel.Core.h>
 #include <winrt/Windows.UI.Core.h>
@@ -1724,6 +1725,12 @@ namespace pdnet::gamepatches
                 Log(L"gamepatch: rating change %lld not applied (Custom Settings: Unrated)", change);
                 change = 0;
                 rated = 2; // logged already
+            }
+            if (rated == 1 && mods::InUse()) // gameplay mods: Unrated (the lobby says so too, PD_RATED 0)
+            {
+                Log(L"gamepatch: rating change %lld not applied (gameplay mods: Unrated)", change);
+                change = 0;
+                rated = 2;
             }
             if (rated != 1 && rated != 2)
             {
@@ -3957,15 +3964,30 @@ namespace pdnet::gamepatches
             if (!CopyString(reinterpret_cast<const char*>(args[2]), format, sizeof(format)) || !strstr(format, "Game Rule")) return false;
             if (!CopyString(reinterpret_cast<const char*>(args[3]), rule, sizeof(rule)) || !rule[0]) return false;
             int rated = -1;
-            if (inLobby) rated = scores::RatedMatch();
+            std::string modTag; // the lobby's gameplay mods (Conceptual, mod loader step 7)
+            if (inLobby)
+            {
+                rated = scores::RatedMatch();
+                modTag = mods::LobbyTag(); // joined, so the same as this start's
+            }
             else
             {
                 int64_t cursor[2] = { 1, 9 }; // the script pushes 9 then 1: the last push is the first argument
                 int64_t row = reinterpret_cast<MenuCommandFn>(*reinterpret_cast<void**>(At(0x1403eefe0) + 55 * 8))(cursor);
                 rated = row >= 0 ? scores::SearchResultRated(static_cast<size_t>(row)) : -1;
+                modTag = row >= 0 ? mods::SearchResultTag(static_cast<size_t>(row)) : std::string();
             }
-            if (rated < 0) return false;
-            sprintf_s(out, size, "%s (%s)", rule, rated ? "Rated" : "Unrated");
+            // Mods: "(Unrated, 2 mods)"; ", restart to join" when they aren't this start's (joining sets them up for the next).
+            const char* restart = !inLobby && mods::Differs(modTag) ? ", restart to join" : "";
+            if (!modTag.empty())
+            {
+                size_t n = mods::Count(modTag);
+                sprintf_s(out, size, "%s (Unrated, %zu mod%s%s)", rule, n, n == 1 ? "" : "s", restart);
+                return true;
+            }
+            if (rated < 0 && !*restart) return false;
+            if (rated < 0) sprintf_s(out, size, "%s (no mods%s)", rule, restart);
+            else sprintf_s(out, size, "%s (%s%s)", rule, rated ? "Rated" : "Unrated", *restart ? ", no mods, restart to join" : "");
             return true;
         }
 

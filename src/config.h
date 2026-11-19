@@ -55,6 +55,7 @@ namespace pdnet
         bool partnerClassic = false;        // partner_aim=classic: RB / the key switches the game's Lock Onto Partner option; modern (default): it locks onto the partner
         uint32_t partnerLockKey = 0x09;     // partner_lock_key=Tab: keyboard key (Windows virtual-key code) that locks onto the Tag Team partner; none = 0 (controllers: RB)
         bool conceptualUpdatesOff = false; // conceptual_updates=off: this Conceptual kit doesn't update itself (Conceptual branch only)
+        bool lobbyModsAuto = true;         // lobby_mods=auto|off: joining a lobby with other mods sets them up for the next game start (off: the join just fails) (Conceptual, see mods.h)
         std::wstring updateChannel;        // update_channel=stable|experimental|off: which builds pdlaunch updates to (empty: the kit's own kind; Options > Updates)
         std::wstring discordInvite;        // discord_invite=<URL>: the community Discord the main menu's Community button opens (see gamesave.cpp)
         // Lobby Custom Settings (Conceptual branch): what this PC sets for everyone when it hosts a lobby.
