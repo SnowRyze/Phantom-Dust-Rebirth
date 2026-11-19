@@ -183,7 +183,11 @@ namespace pdnet::film
                 int kinds = table ? *reinterpret_cast<int32_t*>(table + 4) - 1 : 0;
                 for (int i = 0; i < 4; ++i)
                 {
-                    s.character[i] = *reinterpret_cast<int32_t*>(At(0x1404bc420) + i * 0x48 + 8);
+                    // The character (colour << 16 | character, e.g. 0x3000a), as the player object keeps it (+0x12c70, copied
+                    // from its setup entry +8 by FUN_14024e790). The setup copy (DAT_1404bc420 + 8) was 0 for the other
+                    // player in a 2-player match (film 32), so a film's battle got character 0 colour 0 for them.
+                    uint8_t* player = reinterpret_cast<uint8_t**>(At(0x1404bc9d8))[i];
+                    s.character[i] = player ? *reinterpret_cast<int32_t*>(player + 0x12c70) : *reinterpret_cast<int32_t*>(At(0x1404bc420) + i * 0x48 + 8);
                     for (int k = 0; k < 3; ++k) memcpy(s.capsules[i * 3 + k], At(0x140585c90) + (i * 3 + k) * 0x48, 12);
                     memcpy(&s.auraRate[i], rates + i, 4);
                     for (int k = 0; k < 30; ++k) s.skills[i][k] = -1;
