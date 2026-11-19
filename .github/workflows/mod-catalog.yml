@@ -1,0 +1,48 @@
+# Keeps the mod catalog's release fields current (mods.txt on the mod-catalog branch, read by players' pdlaunch at every
+# game start): every 5 minutes, each mod's newest release goes into its line (release= file= sha256=,
+# tools/mod-catalog/refresh.py), so players' games download new versions without GitHub API lookups of their own (60 an
+# hour without a login). Uses this workflow's own token only: no credentials anywhere else. Can also be started by hand
+# (Actions > Mod catalog releases > Run workflow). GitHub runs scheduled workflows from the default branch only, and may
+# start them a few minutes late when it's busy.
+name: Mod catalog releases
+
+on:
+  schedule:
+    - cron: '*/5 * * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: write   # to commit mods.txt on the mod-catalog branch
+
+concurrency:
+  group: mod-catalog
+  cancel-in-progress: false
+
+jobs:
+  refresh:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          sparse-checkout: tools/mod-catalog
+          path: main
+
+      - uses: actions/checkout@v4
+        with:
+          ref: mod-catalog
+          path: catalog
+
+      - name: Fill in each mod's newest release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 main/tools/mod-catalog/refresh.py catalog/mods.txt
+
+      - name: Save the catalog if it changed
+        working-directory: catalog
+        run: |
+          if git diff --quiet; then echo "No change."; exit 0; fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898283+github-actions[bot]@users.noreply.github.com"
+          git commit -am "Mod catalog: newest releases"
+          git push

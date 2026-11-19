@@ -156,12 +156,13 @@ namespace
 
     std::wstring Setting(const wchar_t* key, const wchar_t* fallback); // (below)
     bool UrlGet(const std::wstring& url, std::string& body, unsigned long timeoutMs); // (below)
+    bool LatestReleaseTag(const std::wstring& repo, std::string& tag, unsigned long timeoutMs); // (below)
     std::string Sha256(const std::string& data); // (below)
     // The mod catalog (mod_list_url= in pdnet.ini or settings.ini): mods.txt on this repository's own mod-catalog branch,
     // which holds only that file and is written only by the Mod Admin app (outside the repository, like the leaderboard
     // admin tool), so every kit (Conceptual, Experimental, Stable) reads the same whitelist.
     constexpr wchar_t kModListUrl[] = L"https://raw.githubusercontent.com/SnowRyze/Phantom-Dust-Rebirth/mod-catalog/mods.txt";
-    const modsync::Net kModNet{ UrlGet, Sha256 };
+    const modsync::Net kModNet{ UrlGet, Sha256, LatestReleaseTag };
 
     // Mod loader (Conceptual, step 1; docs\MOD_LOADER_CODE.md): PDPL, Torphedo's Phantom Dust Plugin Loader
     // (pd_loader_core.dll, next to pdlaunch.exe), loaded after pdnet while the game is still suspended. It loads mod files
@@ -889,6 +890,46 @@ namespace
             char buf[65536];
             for (DWORD got = 0; WinHttpReadData(request, buf, sizeof(buf), &got) && got;) body.append(buf, got);
             ok = status == 200;
+        }
+        if (request) WinHttpCloseHandle(request);
+        if (connect) WinHttpCloseHandle(connect);
+        if (session) WinHttpCloseHandle(session);
+        return ok;
+    }
+
+    // The tag of a GitHub repo's newest release from the website: github.com/<repo>/releases/latest answers with a redirect
+    // to .../releases/tag/<tag> (percent-encoded). Not the API, so it doesn't use the API's 60 lookups an hour (a "not
+    // modified" API answer does, without a login: checked 2026-11-21). False when GitHub wasn't reached or the repo has no
+    // release (the redirect has no /tag/).
+    bool LatestReleaseTag(const std::wstring& repo, std::string& tag, unsigned long timeoutMs)
+    {
+        bool ok = false;
+        HINTERNET session = WinHttpOpen(L"pdlaunch", WINHTTP_ACCESS_TYPE_AUTOMATIC_PROXY, nullptr, nullptr, 0);
+        if (session) WinHttpSetTimeouts(session, timeoutMs, timeoutMs, timeoutMs, timeoutMs);
+        HINTERNET connect = session ? WinHttpConnect(session, L"github.com", INTERNET_DEFAULT_HTTPS_PORT, 0) : nullptr;
+        std::wstring path = L"/" + repo + L"/releases/latest";
+        HINTERNET request = connect ? WinHttpOpenRequest(connect, L"HEAD", path.c_str(), nullptr, nullptr, nullptr, WINHTTP_FLAG_SECURE) : nullptr;
+        DWORD noRedirects = WINHTTP_DISABLE_REDIRECTS;
+        if (request) WinHttpSetOption(request, WINHTTP_OPTION_DISABLE_FEATURE, &noRedirects, sizeof(noRedirects));
+        if (request && WinHttpSendRequest(request, WINHTTP_NO_ADDITIONAL_HEADERS, 0, nullptr, 0, 0, 0) && WinHttpReceiveResponse(request, nullptr))
+        {
+            DWORD status = 0, size = sizeof(status);
+            WinHttpQueryHeaders(request, WINHTTP_QUERY_STATUS_CODE | WINHTTP_QUERY_FLAG_NUMBER, nullptr, &status, &size, nullptr);
+            wchar_t location[2048] = {};
+            DWORD length = sizeof(location);
+            if (status >= 300 && status < 400 &&
+                WinHttpQueryHeaders(request, WINHTTP_QUERY_LOCATION, WINHTTP_HEADER_NAME_BY_INDEX, location, &length, WINHTTP_NO_HEADER_INDEX))
+            {
+                std::wstring where = location;
+                size_t at = where.find(L"/releases/tag/");
+                if (at != std::wstring::npos)
+                {
+                    std::wstring t = where.substr(at + 14);
+                    t = t.substr(0, t.find_first_of(L"?#"));
+                    for (wchar_t c : t) tag += static_cast<char>(c < 0x80 ? c : '?'); // the URL's own (percent-encoded) form
+                    ok = !tag.empty();
+                }
+            }
         }
         if (request) WinHttpCloseHandle(request);
         if (connect) WinHttpCloseHandle(connect);

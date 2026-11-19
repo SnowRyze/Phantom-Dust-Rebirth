@@ -621,7 +621,11 @@ namespace modsync
 
         // ---- the catalog and downloads (step 5) ----
 
-        struct CatalogEntry { std::string id, repo; bool plugin = false; };
+        // A catalog line: "<id> <owner/repo> [plugin] [release=<tag> file=<url> sha256=<hex>]". The release fields are
+        // filled in by a GitHub Action on the catalog's branch every 5 minutes (.github\workflows\mod-catalog.yml) and by
+        // the Mod Admin app: with them, players' games need no GitHub API lookup at all (raw.githubusercontent.com, where
+        // the catalog is read, has no hourly limit). file must be one of that repo's release downloads.
+        struct CatalogEntry { std::string id, repo; bool plugin = false; std::string tag, url, sha; };
 
         std::vector<CatalogEntry> ParseCatalog(const std::string& text)
         {
@@ -645,7 +649,22 @@ namespace modsync
                     continue;
                 }
                 for (size_t i = 2; i < words.size(); ++i)
-                    if (Lower(words[i]) == "plugin") e.plugin = true;
+                {
+                    const std::string& w = words[i];
+                    if (Lower(w) == "plugin") e.plugin = true;
+                    else if (w.rfind("release=", 0) == 0) e.tag = w.substr(8);
+                    else if (w.rfind("file=", 0) == 0) e.url = w.substr(5);
+                    else if (w.rfind("sha256=", 0) == 0) e.sha = Lower(w.substr(7));
+                }
+                // All three or none, and only a download from the mod's own repo's releases.
+                std::string prefix = "https://github.com/" + Lower(e.repo) + "/releases/download/";
+                bool hex64 = e.sha.size() == 64 && e.sha.find_first_not_of("0123456789abcdef") == std::string::npos;
+                if (!e.tag.empty() || !e.url.empty() || !e.sha.empty())
+                    if (e.tag.empty() || !hex64 || Lower(e.url).rfind(prefix, 0) != 0)
+                    {
+                        g_log(L"mods: catalog: %S's release fields left out (incomplete, or not a download from %S)", e.id.c_str(), e.repo.c_str());
+                        e.tag.clear(), e.url.clear(), e.sha.clear();
+                    }
                 seen.insert(e.id);
                 out.push_back(e);
             }
@@ -719,9 +738,12 @@ namespace modsync
         }
 
         // The newest release of a catalog mod: its first .zip / .7z that the notes give a sha256 for.
-        // tag empty: the newest release; else that release (a lobby's).
-        bool LookUpRelease(const CatalogEntry& e, const std::string& tag, Release& r, std::string& why)
+        // tag empty: the newest release; else that release (a lobby's). answered: GitHub's API answered (false: not
+        // reached, rate-limited or no such release), so a failure is that release's own (no usable file) and needn't be
+        // looked up again until there's a newer one.
+        bool LookUpRelease(const CatalogEntry& e, const std::string& tag, Release& r, std::string& why, bool& answered)
         {
+            answered = false;
             std::string json, path = "/releases/latest";
             if (!tag.empty())
             {
@@ -737,6 +759,7 @@ namespace modsync
                 why = "GitHub didn't answer, or the repo has no release";
                 return false;
             }
+            answered = true;
             r = Release{};
             r.tag = JsonGetString(json, "tag_name");
             std::string body = JsonGetString(json, "body");
@@ -786,6 +809,13 @@ namespace modsync
             if (r.url.empty()) { why = "its newest release has no .zip / .7z (with a sha256: GitHub's, or a line in the notes)"; return false; }
             r.checked = Now();
             return true;
+        }
+
+        // The release a catalog line names (release= file= sha256=, CatalogEntry), or an empty one.
+        Release CatalogRelease(const CatalogEntry& e)
+        {
+            if (e.url.empty()) return {};
+            return Release{ e.tag, e.url, PercentDecode(e.url.substr(e.url.find_last_of('/') + 1)), e.sha, Now() };
         }
 
         std::string SafeName(const std::string& tag)
@@ -921,10 +951,13 @@ namespace modsync
                     const LobbyMod* l = lobbyEntry(e.id);
                     if (!l || l->tag.empty()) continue;
                     Release r;
+                    bool answered = false;
                     if (!Exists(storeDir + L"\\" + Wide(e.id) + L"\\" + Wide(SafeName(l->tag)) + L".zip") &&
                         !Exists(storeDir + L"\\" + Wide(e.id) + L"\\" + Wide(SafeName(l->tag)) + L".7z"))
                     {
-                        if (!LookUpRelease(e, l->tag, r, why) || r.sha.rfind(l->sha, 0) != 0 || !Download(e, r, storeDir + L"\\" + Wide(e.id), why))
+                        bool catalogs = !e.url.empty() && e.tag == l->tag; // the catalog names that release: no API lookup
+                        if (catalogs) r = CatalogRelease(e);
+                        if ((!catalogs && !LookUpRelease(e, l->tag, r, why, answered)) || r.sha.rfind(l->sha, 0) != 0 || !Download(e, r, storeDir + L"\\" + Wide(e.id), why))
                         {
                             if (why.empty()) why = "the lobby's file isn't that release's";
                             log(L"mods: %S %S (for the lobby): %S", e.id.c_str(), l->tag.c_str(), why.c_str());
@@ -934,22 +967,45 @@ namespace modsync
                     continue;
                 }
                 if (!enabledSet.count(e.id)) continue;
+                // At every start: the newest tag from GitHub's website (free). The same tag as the release known already:
+                // that one, without the API. A new tag (or none known): the API, for its file and sha256. The website
+                // not reached: the release known already, if any. (A 6-hour cache before 2026-11-21 left new releases
+                // unseen for hours; the API's "not modified" answers count against its 60 an hour without a login.)
+                // First the catalog's own release fields (kept current by the GitHub Action every 5 minutes): no lookup
+                // at all. Lines without them (not filled in yet) use the website / API below.
                 Release r;
                 auto cached = releases.find(e.id);
-                bool fresh = cached != releases.end() && Now() - cached->second.checked < 6 * 3600;
-                if (fresh && cached->second.url.empty()) // a failed lookup, kept 6 hours too (GitHub's hourly limit)
+                bool fromCatalog = !e.url.empty();
+                std::string webTag;
+                bool web = !fromCatalog && g_net->latestTag && g_net->latestTag(Wide(e.repo), webTag, 8000);
+                if (web) webTag = PercentDecode(webTag);
+                bool known = !fromCatalog && cached != releases.end() && (web ? cached->second.tag == webTag : !cached->second.url.empty());
+                bool answered = false;
+                if (known && cached->second.url.empty()) // that release was looked at: no usable file in it
                 {
                     notDownloaded[e.id] = cached->second.asset;
                     continue;
                 }
-                if (fresh) r = cached->second;
-                else if (LookUpRelease(e, "", r, why))
+                if (fromCatalog)
                 {
-                    if (cached == releases.end() || cached->second.tag != r.tag) log(L"mods: %S: newest release %S (%S)", e.id.c_str(), r.tag.c_str(), r.asset.c_str());
+                    r = CatalogRelease(e);
+                    if (cached == releases.end() || cached->second.tag != r.tag || cached->second.url != r.url)
+                    {
+                        log(L"mods: %S: newest release %S (%S, from the catalog)%s", e.id.c_str(), r.tag.c_str(), r.asset.c_str(),
+                            cached != releases.end() && !cached->second.tag.empty() ? (L", was " + Wide(cached->second.tag)).c_str() : L"");
+                        releases[e.id] = r;
+                        changed = true;
+                    }
+                }
+                else if (known) r = cached->second;
+                else if (LookUpRelease(e, "", r, why, answered))
+                {
+                    log(L"mods: %S: newest release %S (%S)%s", e.id.c_str(), r.tag.c_str(), r.asset.c_str(),
+                        cached != releases.end() && !cached->second.tag.empty() ? (L", was " + Wide(cached->second.tag)).c_str() : L"");
                     releases[e.id] = r;
                     changed = true;
                 }
-                else if (cached != releases.end())
+                else if (cached != releases.end() && !cached->second.url.empty())
                 {
                     log(L"mods: %S: %S - using the release found earlier (%S)", e.id.c_str(), why.c_str(), cached->second.tag.c_str());
                     r = cached->second;
@@ -958,7 +1014,9 @@ namespace modsync
                 {
                     log(L"mods: %S (%S): %S", e.id.c_str(), e.repo.c_str(), why.c_str());
                     notDownloaded[e.id] = why;
-                    releases[e.id] = Release{ "", "", why, "", Now() }; // no url: the reason, tried again in 6 hours
+                    // No url: the reason. Kept under that release's tag when GitHub answered (looked at again once there's
+                    // a newer release); otherwise tried again at the next start.
+                    releases[e.id] = Release{ answered ? r.tag : "", "", why, "", Now() };
                     changed = true;
                     continue;
                 }
