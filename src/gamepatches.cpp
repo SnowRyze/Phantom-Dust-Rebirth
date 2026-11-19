@@ -928,9 +928,11 @@ namespace pdnet::gamepatches
         // SkillPreviewScene) has fully closed, so the host can't start the match on top of it.
         void LobbyAvailableAfterPreview();
 
+        void ClearFilmVariants(const char* why); // (below, with the variants)
         int HookedPushMenu(int64_t manager, int menu, char force)
         {
             int current = CurrentMenu(manager);
+            if (!g_testBattle) ClearFilmVariants("the film's battle is over");
             bool theatre = false;
             if (menu == 40 && current == 36) // Theater (livetrade 40 from livemain 36): the film list, not Trade 
             {
@@ -3046,6 +3048,8 @@ namespace pdnet::gamepatches
             reinterpret_cast<DeckFn>(At(0x14014f830))(a, slot, skills);
         }
 
+        void ApplyFilmVariants(const film::Info& f, int (&characters)[2]); // (below, with the variants)
+        int g_filmCharacterOverride[4] = { -1, -1, -1, -1 }; // slots 2-3 of a film: the character to use instead of the film's
         void StartFilmBattle(const film::Info& f)
         {
             uint8_t* save = *reinterpret_cast<uint8_t**>(At(0x1404bec10));
@@ -3056,6 +3060,7 @@ namespace pdnet::gamepatches
                 return;
             }
             int characters[2] = { f.character[0], f.character[1] }; // each film player keeps their slot
+            ApplyFilmVariants(f, characters);
             *reinterpret_cast<int32_t*>(At(0x1403de844)) = index;
             g_testBattle = true;
             g_testStage = f.stage;
@@ -5403,6 +5408,81 @@ namespace pdnet::gamepatches
                 if (auto it = g_memberVariant.find(user); it != g_memberVariant.end() && !it->second.empty()) ApplyMemberVariant(user, name, it->second);
         }
 
+        // ---- Theatre films (the user, 2026-11-21): an Advanced pick plays as its slot's carrier (kCarriers), so a film
+        // recorded only the carrier value (colour << 16 | 19 / 21 / 22 / 26) and its battle loaded the carrier monster with
+        // none of the variant's files, which crashed the Theatre. Films now record each slot's PD_VARIANT text (snapshot
+        // version 4, film::Info::variant) and the film's battle turns those variants on for their slots before it loads
+        // (ApplyFilmVariants), building their files in the background as for another player's pick. They go off again when
+        // the menus come back after the film (ClearFilmVariants).
+        uint32_t g_filmVariantSlots = 0; // bit per slot turned on for a film
+
+        bool IsCarrierValue(int value, int& slot)
+        {
+            for (int s = 0; s < 4; ++s)
+                if ((value & 0xffff) == kCarriers[s].record) { slot = s; return true; }
+            return false;
+        }
+
+        void ApplyFilmVariants(const film::Info& f, int (&characters)[2])
+        {
+            ClearFilmVariants("a new film");
+            for (int& c : g_filmCharacterOverride) c = -1;
+            for (int s = 0; s < 4; ++s) ClearVariant(s); // this PC's own pick, or one from a lobby, must not show in the film
+            for (int s = 0; s < 4; ++s)
+            {
+                if (!f.present[s] && f.variant[s].empty()) continue;
+                int carrierSlot = -1;
+                bool carrier = IsCarrierValue(f.character[s], carrierSlot);
+                if (!f.variant[s].empty())
+                {
+                    int slot = -1;
+                    variants::Pick pick;
+                    std::string why;
+                    if (!ParseVariant(f.variant[s], slot, pick, why))
+                    {
+                        Log(L"theatre: slot %d's Advanced pick '%S' can't be used: %S", s, f.variant[s].c_str(), why.c_str());
+                    }
+                    else
+                    {
+                        if (slot != s) Log(L"theatre: slot %d's Advanced pick was shared for slot %d - played on slot %d", s, slot, s);
+                        int value = ActivateVariant(s, pick);
+                        Log(L"theatre: slot %d plays the Advanced pick '%S' -> carrier value %X (film's value %X)%s", s, f.variant[s].c_str(), value,
+                            f.character[s], value < 0 ? L" - NOT ACTIVE" : L"");
+                        if (value >= 0)
+                        {
+                            g_filmVariantSlots |= 1u << s;
+                            PrebuildVariant(s, pick, "a Theatre film");
+                            if (s < 2) characters[s] = value;
+                            else g_filmCharacterOverride[s] = value;
+                            continue;
+                        }
+                    }
+                }
+                // No pick recorded (a film from before this build) but a carrier value: without its variant the carrier
+                // monster's own files load, which crashed. Belono (26) is also a normal monster pick, so only Mechano,
+                // Euroto and Hedono are replaced, by Edgar (0).
+                if (carrier && (f.character[s] & 0xffff) != 26)
+                {
+                    Log(L"theatre: slot %d has carrier value %X but no Advanced pick in the film (recorded before Experimental 186) - plays as Edgar", s, f.character[s]);
+                    if (s < 2) characters[s] = 0;
+                    g_filmCharacterOverride[s] = 0;
+                }
+                else if (carrier)
+                    Log(L"theatre: slot %d has value %X (Belono) and no Advanced pick - played as Belono", s, f.character[s]);
+            }
+            LogPickTable("Theatre film");
+        }
+
+        void ClearFilmVariants(const char* why)
+        {
+            if (!g_filmVariantSlots) return;
+            uint32_t slots = g_filmVariantSlots;
+            g_filmVariantSlots = 0;
+            for (int s = 0; s < 4; ++s)
+                if (slots & (1u << s)) ClearVariant(s);
+            Log(L"theatre: film variants off (%S)", why);
+        }
+
         // A carrier file the game opens: built for the active variant (BuildVariantFile), or empty.
         std::wstring VariantFile(LPCWSTR name)
         {
@@ -5738,7 +5818,7 @@ namespace pdnet::gamepatches
                 for (int k = 2; k < players && k < 4; ++k)
                 {
                     memcpy(setup + k * 0x48, setup + 0x48, 0x48);
-                    int character = labtests::FilmCharacter(k);
+                    int character = g_filmCharacterOverride[k] >= 0 ? g_filmCharacterOverride[k] : labtests::FilmCharacter(k);
                     if (character >= 0) *reinterpret_cast<int32_t*>(setup + k * 0x48 + 8) = character;
                     int16_t deck[30];
                     for (int16_t& id : deck) id = -1;
@@ -7001,6 +7081,21 @@ namespace pdnet::gamepatches
     }
 
     bool TestBattle() { return AiBattle(); }
+
+    bool FilmVariant(int slot, char* out, size_t size)
+    {
+        if (!out || size == 0) return false;
+        out[0] = 0;
+        if (slot < 0 || slot >= 4) return false;
+        std::string text;
+        {
+            std::lock_guard guard(g_variantLock);
+            if (g_variants[slot].on) text = VariantText(slot, g_variants[slot].pick);
+        }
+        if (text.empty()) return false;
+        strncpy_s(out, size, text.c_str(), _TRUNCATE);
+        return true;
+    }
 
     // Mind Reading is status effect 0x25. The game's voice rule (FUN_1400c61f0, run for each received voice buffer) plays
     // a buffer when the chat manager (*(DAT_1404bbc48 + 0x18)) has +0xac set or the sender's channel equals +0xa8 (the

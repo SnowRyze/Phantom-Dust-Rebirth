@@ -50,6 +50,8 @@ namespace pdnet::film
         // The match's capsule spots (3 per player, x y z), recorded since Experimental 180 (snapshot version 3).
         bool haveCapsules = false;
         float capsules[12][3]{};
+        // Each slot's Advanced pick (PD_VARIANT text), recorded since Experimental 186 (snapshot version 4); empty otherwise.
+        std::string variant[4];
         Info() { for (auto& deck : skills) for (int16_t& id : deck) id = -1; }
     };
     std::vector<Info> List(size_t max);

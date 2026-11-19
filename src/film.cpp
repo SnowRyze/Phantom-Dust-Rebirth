@@ -134,7 +134,7 @@ namespace pdnet::film
         };
         struct Snapshot
         {
-            uint32_t version = 3;
+            uint32_t version = 4;
             int32_t gameType, rule, stage, layout, localSlot, mode, test;
             SlotInfo slots[4];
             uint8_t localArsenal[100]; // this PC's arsenal for the match (save list + index at save +0x3b08)
@@ -147,6 +147,9 @@ namespace pdnet::film
             // vector). FUN_140148780 sets them at the battle's start from the stage's spot table and one variant value
             // (slot 0's player object +0x18), and each capsule takes its spot when it appears (FUN_14026ff20).
             float capsules[12][3];
+            // Version 4 (Experimental 186): each slot's Advanced pick, the PD_VARIANT text ("1|slot|character|colour|dodge|set";
+            // empty for a normal pick). Such a player's character value is only their slot's carrier (gamepatches.cpp kCarriers).
+            char variant[4][96];
         };
         constexpr size_t kSnapshotV1 = offsetof(Snapshot, character);
 #pragma pack(pop)
@@ -512,7 +515,9 @@ namespace pdnet::film
                         info.team[i] = s.slots[i].team;
                         info.character[i] = s.version >= 2 ? s.character[i] : -1;
                     }
-                    info.haveCapsules = s.version >= 3 && length >= sizeof(Snapshot);
+                    info.haveCapsules = s.version >= 3 && length >= offsetof(Snapshot, variant);
+                    if (s.version >= 4 && length >= sizeof(Snapshot))
+                        for (int i = 0; i < 4; ++i) info.variant[i] = std::string(s.variant[i], strnlen(s.variant[i], sizeof(s.variant[i])));
                     if (info.haveCapsules) memcpy(info.capsules, s.capsules, sizeof(info.capsules));
                     info.gameType = s.gameType;
                     info.stage = s.stage;
@@ -659,6 +664,9 @@ namespace pdnet::film
                         Snapshot s{};
                         if (TakeSnapshot(s))
                         {
+                            for (int i = 0; i < 4; ++i)
+                                if (gamepatches::FilmVariant(i, s.variant[i], sizeof(s.variant[i])))
+                                    Log(L"film: slot %d plays an Advanced pick: '%S' (character value %X)", i, s.variant[i], s.character[i]);
                             std::lock_guard guard(g_lock);
                             AddRecord(kSnapshot, 0, &s, sizeof(s));
                         }

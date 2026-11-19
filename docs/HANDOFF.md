@@ -100,6 +100,12 @@ Ideas, not planned (notes in the change log and reference notes):
 
 ## November 2026
 
+Theatre films with Advanced picks (2026-11-21, Experimental 186, the user's request; not yet tried). An Advanced pick plays as its slot's carrier (kCarriers: 19 Mechano, 21 Euroto, 22 Hedono, 26 Belono) with files pdnet builds (variants.cpp), so a film held only the carrier value and its battle loaded the carrier without the variant: the Theatre crashed. Now:
+- Films record each slot's PD_VARIANT text (snapshot version 4, Snapshot::variant; gamepatches::FilmVariant reads g_variants). Logged: "film: slot N plays an Advanced pick: '...'".
+- StartFilmBattle calls ApplyFilmVariants: every variant off first (this PC's own or a lobby's), then each recorded pick turned on for its slot (ActivateVariant + PrebuildVariant, as for another player's pick), its carrier value used for the battle (slots 2-3 through g_filmCharacterOverride in HookedTestStart). Logged: "theatre: slot N plays the Advanced pick ...", then the pick table.
+- A film from before 186 with a Mechano / Euroto / Hedono value and no pick: that slot plays as Edgar (logged); Belono stays Belono (also a normal monster pick).
+- The film's variants go off on the first menu push after the film's battle (ClearFilmVariants, "theatre: film variants off").
+
 Multiplayer menu order reverted (2026-11-21, Experimental 185, the user's request): 174's MultiplayerOrder (Quick Join held back and added after Theater as "Importer", and the pick remap in CheckSendLogPick) is removed. The menu is the game's own order again with pdnet's renames: Quick Join, Lobby Browser, Create Match, Theater, Shop, Lab, Scoreboard, Online Settings.
 Stray aura pieces (2026-11-21, the user, seen in Blender on Baroness): Mac's and Baroness's aura hull (shader saura) has its left hand and left wrist pieces upside down below the floor in the bind pose (y -16; every other model has them at +16), shown in battle as glow flying around the character. A scan of every Advanced entry's body draws for pieces below the floor also found Ubiquitous's second model (npc03a version 1: left hand aura at y -8). variants.cpp HideStrayDraws (kStrayDraws: folder, version, draw number, checked joint) sets those draws' indices all to the first one in the built file (nothing drawn; record sizes unchanged). The game's files are untouched. Logged as "N stray draws hidden" on the build line.
 
