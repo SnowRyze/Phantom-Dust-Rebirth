@@ -40,6 +40,10 @@ differs from the game folder's file, so untouched values keep the stored copy's 
 `lobby-mods.txt` sets the next start to the lobby's mods (`launcher/modsync.cpp`); PD_MODS entries are
 `id:<sha256 start>[:<tag>]` (`src/mods.cpp`), and a modded lobby is Unrated. Live joining waits on PDPL exports.
 
+**Step 8 as built (2026-11-19):** section 10; PDPL loads the plugins. pdlaunch also reads each plugin DLL's import table
+and warns when it imports `pd_loader_core.dll` (PDPL 1.2.2 exports nothing, so such a plugin can't load: request 1).
+`tools/test-mods/make-test-mods.ps1` builds two test plugin mods.
+
 **The catalog's admin (2026-11-19, the user's call):** the whitelist is edited only with the Mod Admin app, which lives
 outside the repository with the leaderboard admin tool (`admin-tool\Mod Admin.bat`). It stores the catalog as `mods.txt` on
 the repo's own `mod-catalog` branch through GitHub's API; mods are added by pasting a link to their GitHub repo, and the

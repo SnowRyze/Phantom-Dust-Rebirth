@@ -150,7 +150,7 @@ Rebirth's metadata only, and `touches` is worked out from the paths at every sca
 7. Lobbies.
 8. Catalog plugins.
 
-Status (2026-11-19): 1, 2 and 4-7 built (Conceptual 41-47); 3's live part waits on PDPL exports (safe mode is in). None tried in the game yet: the user tests everything at once with the list below.
+Status (2026-11-19): 1, 2 and 4-8 built (Conceptual 41-48); 3's live part waits on PDPL exports (safe mode is in). None tried in the game yet: the user tests everything at once with the list below.
 
 ### To test (all at once, newest kit)
 Folders: PDPL's = `%LOCALAPPDATA%\Packages\Microsoft.MSEsper_8wekyb3d8bbwe\RoamingState\mods`; Rebirth's =
@@ -221,7 +221,27 @@ test catalog)
 38. A modded player opening a vanilla lobby: `(Rated, no mods, restart to join)`; joining sets up a start without gameplay
     mods. `lobby_mods=off` in settings.ini: the join just fails, no lobby-mods.txt.
 
+**Plugins (step 8)** (`powershell -File tools\test-mods\make-test-mods.ps1` makes `out\test-mods\test-plugin.zip` and
+`test-plugin-core.zip`; copy both into Rebirth's mods folder)
+39. Mods list: both show "Contains code (test_plugin.dll): it runs inside the game."; test-plugin-core also says it uses
+    pd_loader_core.dll's functions and won't load.
+40. pdnet.log / pdpl.log: `[test_plugin] loaded by PDPL in process ... - plugins work`. If it's missing, PDPL's loading of
+    plugins (or the output pipe) doesn't work: send pdpl.log.
+41. test-plugin-core: no "[test_plugin_core]" line, PDPL says it couldn't load it, and the game runs normally. (If it does
+    load, PDPL exports more than dumpbin showed: good news, tell Torphedo's request list.)
+42. A catalog mod with DLLs but no `plugin` flag in the catalog: the list says "has plugins (needs the catalog's plugin
+    flag)" and it isn't loaded. With the flag (Mod Admin, Plugin on): it loads.
+
 ## Log
+- 2026-11-19: Mod loader step 8, plugins (Conceptual 48). PDPL loads plugins/*.dll from the archives it mounts at start;
+  catalog mods with DLLs already needed the catalog's plugin flag (step 5). New: pdlaunch lists each mod's plugin DLLs and
+  reads their import tables (extracted with tar / 7-Zip, PeImports); a plugin importing pd_loader_core.dll gets a warning
+  (PDPL 1.2.2's DLL exports nothing, so MemoryModule can't resolve it and the plugin won't load). The state file has
+  the DLL names and the warning; the Mods list hint says "Contains code (...): it runs inside the game." plus the warning.
+  tools\test-mods\make-test-mods.ps1 builds two test plugin mods: test_plugin.dll prints a line when loaded (PDPL's
+  stdout is pdnet's pipe, so it lands in pdpl.log / pdnet.log), test_plugin_core.dll also imports
+  plugin_get_module_handle from pd_loader_core.dll. Tested with pdlaunch -syncmods: both listed with their DLLs, only the
+  core one warned. Not yet tried in the game.
 - 2026-11-19: Mod loader step 7, mods on lobbies (Conceptual 47). PDPL can't change mods while the game runs, so a lobby with
   other mods is set up for the next start. Host: mods::LobbyTag (src\mods.cpp, from mods-state.txt: mods on, loaded, not
   "online": "local") goes in the lobby as PD_MODS (`id:<first 12 hex of the archive's sha256>[:<release tag>]`, comma-

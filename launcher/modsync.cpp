@@ -30,6 +30,8 @@ namespace modsync
             uint64_t size = 0, mtime = 0;
             std::string id, name, version, author, description, online = "match", problem;
             std::string sha, tag; // sha256 of the archive (lobbies compare it), the release tag (catalog mods)
+            std::vector<std::string> pluginFiles; // plugins/*.dll|exe (step 8)
+            std::string warning;                  // shown in the Mods list, doesn't stop the mod (step 8)
             std::vector<std::string> after, before, touches, files; // files: lowercase game paths
             bool plugins = false, enabled = true, read = false;
         };
@@ -553,6 +555,44 @@ namespace modsync
             return false;
         }
 
+        // ---- plugins (step 8) ----
+
+        // The DLL names a PE file imports (its import directory), lowercase; empty if it isn't a readable PE.
+        std::vector<std::string> PeImports(const std::string& pe)
+        {
+            std::vector<std::string> out;
+            auto u16 = [&](size_t at) -> uint32_t { return at + 2 <= pe.size() ? static_cast<uint8_t>(pe[at]) | static_cast<uint8_t>(pe[at + 1]) << 8 : 0; };
+            auto u32 = [&](size_t at) -> uint32_t { return at + 4 <= pe.size() ? u16(at) | u16(at + 2) << 16 : 0; };
+            if (pe.size() < 0x40 || u16(0) != 0x5A4D) return out; // "MZ"
+            size_t nt = u32(0x3C);
+            if (u32(nt) != 0x00004550) return out; // "PE\0\0"
+            size_t file = nt + 4, optional = file + 20;
+            uint32_t sections = u16(file + 2), optionalSize = u16(file + 16), magic = u16(optional);
+            size_t dirs = optional + (magic == 0x20B ? 112 : 96);
+            uint32_t importRva = u32(dirs + 8); // directory 1: imports
+            size_t table = optional + optionalSize;
+            auto offsetOf = [&](uint32_t rva) -> size_t
+            {
+                for (uint32_t i = 0; i < sections; ++i)
+                {
+                    size_t s = table + i * 40;
+                    uint32_t va = u32(s + 12), vsize = u32(s + 8), raw = u32(s + 16), ptr = u32(s + 20);
+                    if (rva >= va && rva < va + (std::max)(vsize, raw)) return ptr + (rva - va);
+                }
+                return std::string::npos;
+            };
+            size_t desc = importRva ? offsetOf(importRva) : std::string::npos;
+            for (int n = 0; desc != std::string::npos && desc + 20 <= pe.size() && n < 256; ++n, desc += 20)
+            {
+                uint32_t nameRva = u32(desc + 12);
+                if (!nameRva) break;
+                size_t name = offsetOf(nameRva);
+                if (name == std::string::npos || name >= pe.size()) continue;
+                out.push_back(Lower(std::string(pe.c_str() + name, strnlen(pe.c_str() + name, (std::min<size_t>)(pe.size() - name, 260)))));
+            }
+            return out;
+        }
+
         // ---- the catalog and downloads (step 5) ----
 
         struct CatalogEntry { std::string id, repo; bool plugin = false; };
@@ -951,6 +991,24 @@ namespace modsync
             m.plugins = plugins;
             // A downloaded mod with DLLs needs the catalog's "plugin" flag (someone read its source): without it, it's never
             // put in PDPL's folder.
+            // Plugins (step 8): PDPL loads plugins/*.dll from every archive it mounts, at game start. A plugin that imports
+            // functions from pd_loader_core.dll can't load with PDPL 1.2.2, whose DLL exports nothing: warned in the list.
+            if (m.plugins && !m.path.empty())
+                for (const auto& p : m.files)
+                {
+                    if (p.rfind("plugins/", 0) != 0) continue;
+                    std::wstring ext = Extension(Wide(p));
+                    if (ext != L".dll" && ext != L".exe") continue;
+                    m.pluginFiles.push_back(p.substr(8));
+                    std::string pe;
+                    if (!ExtractGameFile(m, p, pe)) continue;
+                    auto imports = PeImports(pe);
+                    if (std::find(imports.begin(), imports.end(), "pd_loader_core.dll") != imports.end())
+                    {
+                        m.warning = p.substr(8) + " uses pd_loader_core.dll's functions, which PDPL 1.2.2 doesn't export: it won't load";
+                        log(L"mods: %S: %S", m.id.c_str(), m.warning.c_str());
+                    }
+                }
             if (m.source == Source::Catalog && m.plugins && !(inCatalog.count(m.id) && inCatalog[m.id]->plugin))
                 m.problem = "has plugins (needs the catalog's plugin flag)";
             // The release tag of a catalog mod's file (lobbies name it, so a joiner can download the same release).
@@ -1113,14 +1171,14 @@ namespace modsync
         char when[32];
         sprintf_s(when, "%04u-%02u-%02u %02u:%02u", t.wYear, t.wMonth, t.wDay, t.wHour, t.wMinute);
         std::string state = std::string("# pdlaunch, ") + when + ": mods in priority order (first wins); tab-separated\n";
-        state += "# mod id on|off source name version author online touches plugins files problem path load_after load_before description sha256(12) tag\n";
+        state += "# mod id on|off source name version author online touches plugins files problem path load_after load_before description sha256(12) tag plugin_files warning\n";
         if (lobbyStart) state += "lobbystart\t1\n"; // this start uses a lobby's mods (the Mods list says so)
         state += "loose\t" + std::to_string(loose) + "\n";
         for (const auto& m : mods)
             state += "mod\t" + m.id + "\t" + (m.enabled ? "on" : "off") + "\t" + Utf8(SourceName(m.source)) + "\t" + Field(m.name) + "\t" +
                      Field(m.version) + "\t" + Field(m.author) + "\t" + m.online + "\t" + Join(m.touches, ',') + "\t" + (m.plugins ? "1" : "0") + "\t" +
                      std::to_string(m.files.size()) + "\t" + Field(m.problem) + "\t" + Field(Utf8(m.path)) + "\t" + Join(m.after, ',') + "\t" + Join(m.before, ',') + "\t" + Field(m.description) + "\t" +
-                     m.sha.substr(0, 12) + "\t" + Field(m.tag) + "\n";
+                     m.sha.substr(0, 12) + "\t" + Field(m.tag) + "\t" + Field(Join(m.pluginFiles, ';')) + "\t" + Field(m.warning) + "\n";
         state += conflicts;
         if (!WriteText(pdnetDir + L"\\mods-state.txt", state)) log(L"mods: couldn't write mods-state.txt");
 

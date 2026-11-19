@@ -2048,7 +2048,7 @@ namespace pdnet::gamepatches
         constexpr int kModRows = 10;
         struct ModRow
         {
-            std::string id, source, name, version, author, online, problem, description;
+            std::string id, source, name, version, author, online, problem, description, pluginFiles, warning;
             std::vector<std::string> touches, after, before;
             bool on = true, plugins = false;
             int files = 0;
@@ -2111,6 +2111,8 @@ namespace pdnet::gamepatches
                     if (f.size() > 13) m.after = SplitList(f[13]);
                     if (f.size() > 14) m.before = SplitList(f[14]);
                     if (f.size() > 15) m.description = f[15];
+                    if (f.size() > 18) m.pluginFiles = f[18]; // plugin DLLs (step 8), ';'-separated
+                    if (f.size() > 19) m.warning = f[19];
                     g_mods.push_back(std::move(m));
                 }
             }
@@ -2178,6 +2180,8 @@ namespace pdnet::gamepatches
                 std::string hint = notDownloaded ? "From the mod catalog: " + m.name + "." : m.description.empty() ? m.name : m.description;
                 if (!m.author.empty()) hint += " By " + m.author + ".";
                 hint += ModOverlapText(static_cast<int>(i));
+                if (!m.pluginFiles.empty()) hint += " Contains code (" + m.pluginFiles + "): it runs inside the game.";
+                if (!m.warning.empty()) hint += " (" + m.warning + ")";
                 if (notDownloaded) hint += m.on ? " Downloads at the next game start." : " Turn it on and it downloads at the next game start.";
                 if (notDownloaded && m.problem != "not downloaded") hint += " (" + m.problem.substr(16) + ")"; // after "not downloaded: "
                 else if (!notDownloaded && !m.problem.empty()) hint += " (" + m.problem + ")";
