@@ -17,6 +17,7 @@ namespace pdnet::p2p
     void Expect(const std::string&) {}
     uint16_t OpenLink(const std::string&, bool) { return 0; }
     void CloseLink(const std::string&) {}
+    void SendLook(int, float) {}
 }
 
 #else
@@ -38,7 +39,7 @@ namespace pdnet::p2p
     namespace
     {
         using namespace eossdk;
-        constexpr uint8_t kControl = 0, kGame = 1, kPing = 2;
+        constexpr uint8_t kControl = 0, kGame = 1, kPing = 2, kLook = 3;
 
         struct Outgoing
         {
@@ -509,6 +510,17 @@ namespace pdnet::p2p
                     continue;
                 }
 
+                if (channel == kLook)
+                {
+                    if (bytes == 7 && memcmp(buf, "PDLK", 4) == 0 && buf[4] < 4)
+                    {
+                        int16_t v;
+                        memcpy(&v, buf + 5, 2);
+                        film::Look(buf[4], v / 30000.0f);
+                    }
+                    continue;
+                }
+
                 net::Message m;
                 if (!net::Decode(buf, bytes, m))
                 {
@@ -743,6 +755,18 @@ namespace pdnet::p2p
             Log(L"p2p: starting (game datagrams via EOS P2P; links on %s)", net::IpToString(net::InterfaceIp()).c_str());
             std::thread([] { Sleep(3000); SelfTest(); }).detach(); // after the game has opened its port
         });
+    }
+
+    void SendLook(int slot, float tilt)
+    {
+        int16_t v = static_cast<int16_t>((std::max)(-1.0f, (std::min)(1.0f, tilt)) * 30000.0f);
+        std::vector<uint8_t> data{ 'P', 'D', 'L', 'K', static_cast<uint8_t>(slot), static_cast<uint8_t>(v & 0xff), static_cast<uint8_t>((v >> 8) & 0xff) };
+        std::vector<std::string> peers;
+        {
+            std::lock_guard guard(g_lock);
+            for (auto& [peer, link] : g_links) peers.push_back(peer);
+        }
+        for (auto& peer : peers) Queue({ peer, kLook, data });
     }
 
     void SendControl(const std::string& peer, net::MsgType type, uint32_t nonce, const std::vector<uint8_t>& body)

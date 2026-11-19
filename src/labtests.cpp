@@ -154,6 +154,8 @@ namespace pdnet::labtests
         // number while its data changes).
         struct LastPlayed { bool any = false; uint32_t number = 0; std::vector<uint8_t> data; };
         LastPlayed g_filmLast[4][26];
+        // Each battle slot's filmed camera tilt (film::Look records, sine of the up/down look), NAN until the film has one.
+        float g_filmTilt[4]{ NAN, NAN, NAN, NAN };
 
         bool LocalDown()
         {
@@ -205,6 +207,12 @@ namespace pdnet::labtests
             Log(L"deadcam: free camera");
         }
 
+        // The player's own Options > Controller choices (the user, 2026-11-16): "Right/Left" (option 0, byte 0x14052dfb0)
+        // and "Up/Down" (option 1, 0x14052dfb1), 0 = NORMAL, 1 = REVERSE, read by the Options script through menu command 66
+        // (FUN_14024b700). The dead camera's and the Theatre's look input follows them (today's directions are NORMAL).
+        float LookX(float v) { return Var<uint8_t>(0x14052dfb0) == 1 ? -v : v; }
+        float LookY(float v) { return Var<uint8_t>(0x14052dfb1) == 1 ? -v : v; }
+
         void MoveFreeCam()
         {
             ULONGLONG now = GetTickCount64();
@@ -241,7 +249,7 @@ namespace pdnet::labtests
                 if (keys['F']) up -= 1;
             }
             auto dead = [](float v) { return std::fabs(v) < 0.2f ? 0.0f : v; };
-            lx = dead(lx); ly = dead(ly); rx = dead(rx); ry = dead(ry);
+            lx = dead(lx); ly = dead(ly); rx = LookX(dead(rx)); ry = LookY(dead(ry));
             if (pan) { up += ly; ly = 0; } // pan: forward / back moves up / down
             float kSpeed = 150.0f;
             constexpr float kTurn = 2.0f;
@@ -284,8 +292,8 @@ namespace pdnet::labtests
             if (reset) { g_orbitYaw = g_orbitPitch = 0; return; }
             auto dead = [](float v) { return std::fabs(v) < 0.2f ? 0.0f : v; };
             constexpr float kTurn = 2.0f;
-            g_orbitYaw += dead(rx) * kTurn * dt;
-            g_orbitPitch = (std::max)(-0.6f, (std::min)(0.9f, g_orbitPitch + dead(ry) * kTurn * dt));
+            g_orbitYaw += LookX(dead(rx)) * kTurn * dt;
+            g_orbitPitch = (std::max)(-0.6f, (std::min)(0.9f, g_orbitPitch + LookY(dead(ry)) * kTurn * dt));
         }
 
         void UpdateDeadCamera()
@@ -748,6 +756,8 @@ namespace pdnet::labtests
             g_haveShape = true;
         }
 
+        constexpr float kRestTilt = -0.15f; // the game camera's look y at rest (player object +0x12da4, see film.cpp)
+
         // The view from behind `object`, along its facing, smoothed so it doesn't snap.
         bool BehindView(uint8_t* object, Vec& eye, Vec& look)
         {
@@ -768,9 +778,18 @@ namespace pdnet::labtests
             }
             float reach = std::sqrt(g_behind * g_behind + g_height * g_height);
             float rise = std::atan2(g_height, g_behind) + (g_deadOn ? g_orbitPitch : 0.0f);
+            // In a film, the filmed player's own up/down look (film::Look): its angle away from the camera's resting tilt
+            // (about -0.15) lowers the eye and raises where it looks when they looked up, and the other way round, smoothed.
+            static float tiltSmooth = 0;
+            float tilt = 0;
+            for (int s = 0; s < 4; ++s)
+                if (FilmActive() && PlayerObject(s) == object && !std::isnan(g_filmTilt[s]))
+                    tilt = std::asin((std::max)(-1.0f, (std::min)(1.0f, g_filmTilt[s]))) - std::asin(kRestTilt);
+            tiltSmooth = tiltSmooth * 0.8f + tilt * 0.2f;
+            rise = (std::max)(-0.5f, (std::min)(1.4f, rise - tiltSmooth));
             Vec position = Field<Vec>(object, kPosition);
             eye = Add(position, Vec{ -d.x * reach * std::cos(rise), reach * std::sin(rise), -d.z * reach * std::cos(rise) });
-            look = Add(position, Vec{ d.x * g_ahead, g_lookHeight, d.z * g_ahead });
+            look = Add(position, Vec{ d.x * g_ahead, g_lookHeight + reach * std::sin(tiltSmooth), d.z * g_ahead });
             return Finite(eye) && Finite(look);
         }
 
@@ -1029,6 +1048,7 @@ namespace pdnet::labtests
             memset(g_filmPlayed, 0, sizeof(g_filmPlayed));
             memset(g_filmStreamOff, 0, sizeof(g_filmStreamOff));
             for (auto& slot : g_filmLast) for (LastPlayed& l : slot) l = LastPlayed{};
+            for (float& t : g_filmTilt) t = NAN;
             // Nametags: the film's names (DAT_1404bca30, 0x41 per slot).
             char* names = reinterpret_cast<char*>(At(0x1404bca30));
             for (int s = 0; s < 4; ++s)
@@ -1049,6 +1069,11 @@ namespace pdnet::labtests
                 film::Event& e = g_filmEvents[g_filmAt++];
                 int slot = g_filmSlot[e.slot];
                 if (slot < 0 || !PlayerObject(slot)) continue;
+                if (e.stream == film::kLookStream && e.data.size() == 2)
+                {
+                    g_filmTilt[slot] = *reinterpret_cast<const int16_t*>(e.data.data()) / 30000.0f;
+                    continue;
+                }
                 if (e.stream >= 26) continue;
                 // ReadyStart (22) is the pre-battle handshake: this battle has already started. DmgEffect (20) is played
                 // again: its crash in Conceptual 29 came from data read 4 bytes off.

@@ -17,6 +17,12 @@ namespace pdnet::film
     // creates one. Each film records it, with its lobby session number and its match number in that lobby.
     void SetLobby(const std::string& lobbyId);
 
+    // A player's camera tilt (the up/down look, sine of the angle, -1 down .. 1 up), which the game's own traffic doesn't
+    // carry: this PC's own, read by the watcher, and other players' from p2p.cpp (pdnet sends it alongside the game).
+    void Look(int slot, float tilt);
+    // Film events with this stream number are Look records: data = the tilt as an int16 (tilt * 30000).
+    constexpr uint8_t kLookStream = 200;
+
     // The saved films, newest first (at most `max`), as the Theatre list shows them. Unreadable files are left out.
     struct Info
     {

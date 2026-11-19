@@ -98,6 +98,12 @@ Ideas, not planned (notes in the change log and reference notes):
 
 ## November 2026
 
+Camera: your own inversion, and the tilt in films (2026-11-19, Experimental 178, not yet tried):
+- The dead camera and the Theatre's free camera and orbit follow Options > Controller "Right/Left" and "Up/Down" (option 0 byte 0x14052dfb0, option 1 0x14052dfb1, 1 = REVERSE; LookX / LookY in labtests.cpp).
+- The Theatre player view only turned left and right: films had only the facing. The camera's up/down look is player object +0x12da4 (the y of the look direction in the camera's turn at +0x12d90; -1 down, 1 up, about -0.15 at rest), found live by tilting in Test Arsenal. The game never sends it (PlayerPos +0x1c / +0x1e, object +0x13b34 / +0x13b48, stayed 0xffff).
+- So pdnet sends it: during an online match the film watcher reads this PC's tilt (film::LocalTilt) and, when it changes or every 0.5 s, sends it to every linked player on new P2P channel 3 ("PDLK", slot, i16 tilt * 30000; p2p::SendLook) and writes it into this PC's film (record 7). Received tilts go into the film too. Older builds drop channel 3 (it doesn't decode as a control message). Only films recorded from 178 on, between players on 178 or newer, have it.
+- Playback: film::Load gives record 7 as stream 200 (film::kLookStream); FilmFrame keeps each slot's tilt and BehindView lowers the eye and raises the look by its angle from rest (smoothed).
+
 Polish from the user's list (2026-11-16, Experimental 177, not yet tried):
 - Online Settings > Name: while a name is typed, HookedGameKey no longer passes keys to the game's own key handler (the window's KeyDown being marked handled didn't stop it), and pdlaunch's keys stay held back as before; Enter / Esc still finish through CharacterReceived. FinishTyping also cut at 32: now 16.
 - Dead camera: starts once the player has been down for 3 s (kDeadCamDelayMs in UpdateDeadCamera), so the defeat plays out first; a film or Test Arsenal's "pretend down" stays instant.

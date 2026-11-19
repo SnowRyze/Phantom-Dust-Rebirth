@@ -1,8 +1,10 @@
 #include "pch.h"
 #include "film.h"
 #include "gamepatches.h"
+#include "p2p.h"
 #include "log.h"
 #include <algorithm>
+#include <cmath>
 #include <cstddef>
 #include <cstdio>
 #include <map>
@@ -23,6 +25,7 @@
 //     3 peer: payload = its EOS product user id (the peer number is this record's own).
 //     4 match state: payload = i32 (0x1404bc950).
 //     5 snapshot of the match setup (Snapshot below), when the match first reaches state 6.
+//     7 camera tilt (since Experimental 178): peer = the player's slot, payload = i16 tilt * 30000 (Look).
 //     255 end: payload = u32 records, u64 packet bytes, u32 dropped records.
 // Disk: a background thread writes the buffer about once a second (no flush each time); the buffer is capped, and records past
 // the cap are dropped and counted, never waiting on the disk. The newest 100 films are kept.
@@ -37,7 +40,7 @@ namespace pdnet::film
         constexpr uint32_t kFormat = 1;
         constexpr size_t kBufferCap = 8 * 1024 * 1024;
         constexpr size_t kKeepFilms = 100; // the user, 2026-11-14 (was 25)
-        enum : uint8_t { kIn = 1, kOut = 2, kPeer = 3, kState = 4, kSnapshot = 5, kOrder = 6, kEnd = 255 };
+        enum : uint8_t { kIn = 1, kOut = 2, kPeer = 3, kState = 4, kSnapshot = 5, kOrder = 6, kLook = 7, kEnd = 255 };
 
         // Record 6 (at the start of each film since Conceptual 38): its place in the recording order and its lobby. This
         // PC's clock jumped about an hour back and forth on 2026-11-16, so names and times alone put films out of order.
@@ -66,6 +69,24 @@ namespace pdnet::film
         std::wstring FilmsDir() { return LocalStatePath() + L"\\pdnet\\films"; }
 
         template <typename T> void Put(std::vector<uint8_t>& b, T v) { const uint8_t* p = reinterpret_cast<const uint8_t*>(&v); b.insert(b.end(), p, p + sizeof(T)); }
+
+        // This PC's player's camera tilt: the y of its look direction (player object +0x12d90 is the camera's turn, rows
+        // right / up / forward; forward +0x12da0, its y +0x12da4: -1 looking straight down, 1 up; about -0.15 at rest). Found
+        // live 2026-11-19 by tilting the camera in Test Arsenal; the game's PlayerPos doesn't send it (its +0x1c / +0x1e,
+        // object +0x13b34 / +0x13b48, stayed 0xffff). False if there is no player object.
+        bool LocalTilt(float& tilt)
+        {
+            __try
+            {
+                int slot = Var<int32_t>(0x1404bbe00);
+                if (slot < 0 || slot >= 4) return false;
+                uint8_t* object = reinterpret_cast<uint8_t**>(At(0x1404bc9d8))[slot];
+                if (!object) return false;
+                tilt = *reinterpret_cast<volatile float*>(object + 0x12da4);
+                return tilt >= -1.0f && tilt <= 1.0f;
+            }
+            __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+        }
 
         // With g_lock held.
         void AddRecord(uint8_t type, uint8_t peer, const void* payload, size_t bytes)
@@ -377,6 +398,14 @@ namespace pdnet::film
         return distinct == 2 ? "Tag Team" : "Battle Royale";
     }
 
+    void Look(int slot, float tilt)
+    {
+        if (!g_recording || slot < 0 || slot >= 4) return;
+        int16_t v = static_cast<int16_t>((std::max)(-1.0f, (std::min)(1.0f, tilt)) * 30000.0f);
+        std::lock_guard guard(g_lock);
+        AddRecord(kLook, static_cast<uint8_t>(slot), &v, sizeof(v));
+    }
+
     void Packet(bool out, const std::string& peer, const uint8_t* data, size_t bytes)
     {
         if (!g_recording) return;
@@ -522,6 +551,16 @@ namespace pdnet::film
             if (o + 12 + length > d.size()) break;
             const uint8_t* p = &d[o + 12];
             o += 12 + length;
+            if (type == kLook && length == 2 && d[o - 12 - length + 1] < 4)
+            {
+                Event e;
+                e.ms = ms;
+                e.slot = d[o - 12 - length + 1];
+                e.stream = kLookStream;
+                e.data.assign(p, p + 2);
+                events.push_back(std::move(e));
+                continue;
+            }
             if (type != kIn && type != kOut) continue;
             // 7-byte mesh header (type 0x40 = game data, u32 length), 8-byte message header (kind 8), then the block.
             if (length < 15 + 24 || p[2] != 0x40 || *reinterpret_cast<const uint32_t*>(p + 3) != length) continue;
@@ -615,6 +654,23 @@ namespace pdnet::film
                         snapshot = true;
                         Log(L"film: match setup recorded (type %d, rule %d, stage %d, layout %d, this PC slot %d%s)", s.gameType, s.rule, s.stage, s.layout,
                             s.localSlot, s.test ? L", Test Arsenal" : L"");
+                    }
+                    // This PC's camera tilt, for every player's film (the game doesn't send it): to the other players and
+                    // into this PC's own film, when it changes (at most 20 a second) and at least every half second.
+                    if (state == 6 && !gamepatches::TestBattle())
+                    {
+                        static float sent = 2.0f;
+                        static ULONGLONG sentAt = 0;
+                        float tilt;
+                        ULONGLONG now = GetTickCount64();
+                        if (LocalTilt(tilt) && (std::fabs(tilt - sent) > 0.01f || now - sentAt >= 500))
+                        {
+                            int slot = Var<int32_t>(0x1404bbe00);
+                            p2p::SendLook(slot, tilt);
+                            Look(slot, tilt);
+                            sent = tilt;
+                            sentAt = now;
+                        }
                     }
                     if (!match && g_recording) CloseFilm();
                     last = state;
