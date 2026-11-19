@@ -98,6 +98,10 @@ Ideas, not planned (notes in the change log and reference notes):
 
 ## November 2026
 
+Theatre: capsules in the wrong places (2026-11-19, Experimental 180, the user's report, not yet tried). The film's stage and layout were right (film 32: stage 3, layout 1 recorded and loaded). The capsule spots are not: FUN_140148780 sets the 12 spots (DAT_140585c90 + (slot * 3 + i) * 0x48, a vector; 3 per player) at the battle's start from the stage's spot table and one variant value read from slot 0's player object +0x18 (value >> 2 into DAT_14052dd63, (value & 3) % DAT_14052dd62 picks the row), and each capsule takes its spot when it appears (FUN_14026ff20). The Theatre's battle had its own value. CapsuleData (stream 8, FUN_14014fbe0) carries only which skill and when, and only in game modes 4 / 5.
+- Films now record the 12 spots (snapshot version 3, Snapshot::capsules; film::Info::haveCapsules / capsules), and FilmFrame puts them back each frame (RestoreFilmCapsules). Films from before 180 can't be fixed this way.
+- Seen on the way, not fixed: film 32's snapshot gave character 196618 (0x3000a) for slot 0 (DAT_1404bc420 + 8), so the Theatre battle got that character id.
+
 Theatre option: the players' camera tilt on / off (2026-11-19, Experimental 179, the user's request, not yet tried): X (pad) or the X key in a film switches whether the player cam follows the filmed player's recorded up/down look (g_filmTiltOn, on by default, kept from film to film; used in BehindView). The film's top line shows "(their camera tilt)" or "(level)" on the player cam, and the controls list has the key.
 
 Camera: your own inversion, and the tilt in films (2026-11-19, Experimental 178, not yet tried):

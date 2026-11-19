@@ -134,7 +134,7 @@ namespace pdnet::film
         };
         struct Snapshot
         {
-            uint32_t version = 2;
+            uint32_t version = 3;
             int32_t gameType, rule, stage, layout, localSlot, mode, test;
             SlotInfo slots[4];
             uint8_t localArsenal[100]; // this PC's arsenal for the match (save list + index at save +0x3b08)
@@ -143,6 +143,10 @@ namespace pdnet::film
             int16_t skills[4][30];     // each player's arsenal: its deck counts (DAT_140585fe8[slot], made by FUN_14014f830)
                                        // plus the cards in hand (status record +0x378 per slot, in use at +0x350); -1 unused
             float auraRate[4];         // the Aura refill rate the arsenal gives (DAT_1404bc958)
+            // Version 3 (Experimental 180): the 12 capsule spots, 3 per player (DAT_140585c90 + (slot * 3 + i) * 0x48, a
+            // vector). FUN_140148780 sets them at the battle's start from the stage's spot table and one variant value
+            // (slot 0's player object +0x18), and each capsule takes its spot when it appears (FUN_14026ff20).
+            float capsules[12][3];
         };
         constexpr size_t kSnapshotV1 = offsetof(Snapshot, character);
 #pragma pack(pop)
@@ -180,6 +184,7 @@ namespace pdnet::film
                 for (int i = 0; i < 4; ++i)
                 {
                     s.character[i] = *reinterpret_cast<int32_t*>(At(0x1404bc420) + i * 0x48 + 8);
+                    for (int k = 0; k < 3; ++k) memcpy(s.capsules[i * 3 + k], At(0x140585c90) + (i * 3 + k) * 0x48, 12);
                     memcpy(&s.auraRate[i], rates + i, 4);
                     for (int k = 0; k < 30; ++k) s.skills[i][k] = -1;
                     int n = 0;
@@ -503,6 +508,8 @@ namespace pdnet::film
                         info.team[i] = s.slots[i].team;
                         info.character[i] = s.version >= 2 ? s.character[i] : -1;
                     }
+                    info.haveCapsules = s.version >= 3 && length >= sizeof(Snapshot);
+                    if (info.haveCapsules) memcpy(info.capsules, s.capsules, sizeof(info.capsules));
                     info.gameType = s.gameType;
                     info.stage = s.stage;
                     for (const SlotInfo& slot : s.slots)

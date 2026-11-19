@@ -1064,9 +1064,18 @@ namespace pdnet::labtests
                 g_filmEvents.empty() ? 0.0 : (g_filmEvents.back().ms - g_filmBase) / 60000.0, g_filmSlot[0], g_filmSlot[1], g_filmSlot[2], g_filmSlot[3]);
         }
 
+        // The film's capsule spots (film::Info::capsules): this battle's own came from its own stage variant, so capsules
+        // appeared in the wrong places (the user, 2026-11-19). Put back each frame of the film, before any capsule appears.
+        void RestoreFilmCapsules()
+        {
+            if (!g_filmInfo.haveCapsules) return;
+            for (int k = 0; k < 12; ++k) memcpy(At(0x140585c90) + k * 0x48, g_filmInfo.capsules[k], 12);
+        }
+
         void FilmFrame()
         {
             if (!g_filmPlaying) return;
+            RestoreFilmCapsules();
             uint64_t elapsed = g_stepHooked ? static_cast<uint64_t>(g_filmClock) : GetTickCount64() - g_filmStart;
             int frame = FrameNow();
             while (g_filmAt < g_filmEvents.size() && g_filmEvents[g_filmAt].ms - g_filmBase <= elapsed)

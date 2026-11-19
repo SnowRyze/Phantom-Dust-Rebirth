@@ -47,6 +47,9 @@ namespace pdnet::film
         int16_t skills[4][30];
         bool haveSkills[4]{};
         std::string name[4];  // each slot's player name, when recorded
+        // The match's capsule spots (3 per player, x y z), recorded since Experimental 180 (snapshot version 3).
+        bool haveCapsules = false;
+        float capsules[12][3]{};
         Info() { for (auto& deck : skills) for (int16_t& id : deck) id = -1; }
     };
     std::vector<Info> List(size_t max);
