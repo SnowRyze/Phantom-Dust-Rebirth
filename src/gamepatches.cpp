@@ -4925,6 +4925,37 @@ namespace pdnet::gamepatches
             __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
         }
 
+        // Skill data from a mod (Conceptual, mod loader step 6). PDPL hands the game a mod's gsdata_<lang>.dat at start-up,
+        // but the stored online copy then goes over it (see above), so the mod is lost. pdlaunch puts the gsdata file the
+        // game would get from the mods in LocalState\pdnet\mod-skills\ at every start (launcher\modsync.cpp), and
+        // SkillDataGuard writes it into the block once the stored copy is in: only the bytes where the mod's file differs
+        // from the game folder's, so values the mod didn't change keep the stored copy's (Skill Update 1.40) numbers. The
+        // result is the guard's modded state, so it's kept like a modpack. Only while PDPL is in the game: without it
+        // (mods=off, safe mode) a file left from an earlier start must not apply.
+        std::vector<uint8_t> ModSkillData(std::string& from)
+        {
+            std::vector<uint8_t> data;
+            if (!GetModuleHandleW(L"pd_loader_core.dll")) return data;
+            bool japanese = *reinterpret_cast<int32_t*>(At(0x1403df644)) == 2;
+            std::wstring base = LocalStatePath() + L"\\pdnet\\mod-skills\\" + (japanese ? L"gsdata_ja" : L"gsdata_en");
+            if (FILE* f = nullptr; !_wfopen_s(&f, (base + L".dat").c_str(), L"rb") && f)
+            {
+                data.resize(kSkillDataSize + 1);
+                data.resize(fread(data.data(), 1, data.size(), f));
+                fclose(f);
+            }
+            if (data.empty()) return data;
+            if (data.size() != kSkillDataSize)
+            {
+                Log(L"gamepatch: skill data from mods: %s.dat is %zu bytes, not %zu - not used", base.c_str(), data.size(), kSkillDataSize);
+                data.clear();
+                return data;
+            }
+            std::ifstream in(base + L".txt");
+            std::getline(in, from);
+            return data;
+        }
+
         void SkillDataGuard()
         {
             std::thread([]
@@ -4932,6 +4963,7 @@ namespace pdnet::gamepatches
                 uint8_t* block = At(0x1404c5240);
                 std::vector<uint8_t> file = SkillDataFile(), stock, modded, now(kSkillDataSize);
                 bool stockHasStored = false; // the stored copy is in `stock`
+                bool modTried = false;       // a mod's skill data has been looked for (once the stored copy is in)
                 int lastMenu = -1;
                 for (;;)
                 {
@@ -4951,6 +4983,26 @@ namespace pdnet::gamepatches
                         // The game's one copy landed on a modpack loaded before it (the first main menu or join).
                         if (CopyStoredSkillData(stock.data())) Log(L"gamepatch: modpack guard: the game applied its stored copy over the modpack");
                         stockHasStored = true;
+                    }
+                    if (!modTried && applied && stockHasStored)
+                    {
+                        modTried = true;
+                        std::string from;
+                        std::vector<uint8_t> mod = ModSkillData(from);
+                        if (!mod.empty())
+                        {
+                            // The mod's own changes: where it differs from the game folder's file. If that file couldn't be
+                            // read, or reads the same as the mod (it would if PDPL handed pdnet the mod's), the whole file.
+                            bool diff = !file.empty() && memcmp(file.data(), mod.data(), kSkillDataSize) != 0;
+                            size_t written = 0;
+                            for (size_t i = 0; i < kSkillDataSize; ++i)
+                                if ((!diff || mod[i] != file[i]) && block[i] != mod[i]) { block[i] = mod[i]; ++written; }
+                            memcpy(now.data(), block, kSkillDataSize);
+                            modded = now;
+                            Log(L"gamepatch: skill data from mod %S: %zu bytes written over the stored copy (%s)", from.c_str(), written,
+                                diff ? L"the mod's changes to the game's file" : L"the whole file");
+                            continue;
+                        }
                     }
                     if (modded.empty())
                     {

@@ -512,6 +512,34 @@ namespace modsync
             return false;
         }
 
+        // A whole file, as it is (ReadText drops a UTF-8 byte order mark).
+        std::string ReadBytes(const std::wstring& p)
+        {
+            std::string data;
+            if (FILE* f = nullptr; !_wfopen_s(&f, p.c_str(), L"rb") && f)
+            {
+                char buf[65536];
+                for (size_t n; (n = fread(buf, 1, sizeof(buf), f)) > 0;) data.append(buf, n);
+                fclose(f);
+            }
+            return data;
+        }
+
+        // One game file out of a mod's archive. The cache keeps paths lowercase, so the archive is listed again for the
+        // entry's real name (tar matches names exactly).
+        bool ExtractGameFile(const Mod& m, const std::string& gamePath, std::string& out)
+        {
+            for (bool sevenZip : { m.ext == L".7z", true })
+            {
+                if (sevenZip && SevenZip().empty()) continue;
+                std::vector<std::string> entries;
+                if (!ListEntries(m.path, sevenZip, entries)) continue;
+                for (const auto& raw : entries)
+                    if (GamePath(raw) == gamePath) return ReadEntry(m.path, sevenZip, raw, out) && !out.empty();
+            }
+            return false;
+        }
+
         // ---- the catalog and downloads (step 5) ----
 
         const Net* g_net = nullptr;
@@ -936,6 +964,41 @@ namespace modsync
                 for (const auto& f : fewer) n += more.count(f);
                 if (n) conflicts += "conflict\t" + on[a]->id + "\t" + on[b]->id + "\t" + std::to_string(n) + "\n";
             }
+
+        // ---- skill data (step 6) ----
+        // PDPL hands the game a mod's gsdata_<lang>.dat, but the game then copies its stored online copy over that data in
+        // memory, so pdnet writes the mod's into memory again (gamepatches.cpp, SkillDataGuard). pdnet can't read archives,
+        // so the file the game would get (loose files in PDPL's folder first, then the highest mod that has it) is put in
+        // LocalState\pdnet\mod-skills\gsdata_<lang>.dat, with gsdata_<lang>.txt naming where it came from.
+        {
+            std::wstring skillDir = pdnetDir + L"\\mod-skills";
+            CreateDirectoryW(skillDir.c_str(), nullptr);
+            for (const auto& f : List(skillDir))
+                if (!f.dir) DeleteFileW((skillDir + L"\\" + f.name).c_str());
+            for (const char* lang : { "en", "ja" })
+            {
+                std::string gamePath = std::string("assets/data/gstorage/gsdata_") + lang + ".dat", data, from;
+                std::wstring loose = pdplDir + L"\\Assets\\Data\\gstorage\\gsdata_" + Wide(lang) + L".dat";
+                if (Exists(loose))
+                {
+                    data = ReadBytes(loose);
+                    from = "loose files in PDPL's mods folder";
+                }
+                else
+                    for (const auto& m : mods)
+                    {
+                        bool mounted = m.enabled && !m.path.empty() && (m.problem.empty() || m.problem.rfind("has plugins", 0) != 0);
+                        if (!mounted || std::find(m.files.begin(), m.files.end(), gamePath) == m.files.end()) continue;
+                        if (ExtractGameFile(m, gamePath, data)) from = m.id;
+                        else log(L"mods: %S: couldn't read its gsdata_%S.dat", m.id.c_str(), lang);
+                        break;
+                    }
+                if (from.empty()) continue;
+                WriteText(skillDir + L"\\gsdata_" + Wide(lang) + L".dat", data);
+                WriteText(skillDir + L"\\gsdata_" + Wide(lang) + L".txt", from);
+                log(L"mods: skill data (gsdata_%S.dat, %zu bytes) from %S", lang, data.size(), from.c_str());
+            }
+        }
 
         // ---- the state file for pdnet's Mods menu ----
         size_t loose = LooseFiles(pdplDir, true);

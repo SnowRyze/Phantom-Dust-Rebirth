@@ -32,6 +32,10 @@ screen (safe mode), and logs the mod list.
 SHA-256): sections 1 (catalog), 6.2 and 7.2 as planned, except that downloads happen at the next start rather than in the
 game: the Mods list turns a catalog mod on, pdlaunch downloads it before PDPL loads. Failed lookups are cached 6 hours too.
 
+**Step 6 as built (2026-11-19):** section 8.5, except that pdnet reads the mod's gsdata from LocalState\pdnet\mod-skills\
+(pdlaunch extracts it at every sync; PDPL's 1.2.2 DLL has no exports to read it through) and writes only the bytes where it
+differs from the game folder's file, so untouched values keep the stored copy's numbers.
+
 **Torphedo's answers (2026-11-19):**
 - The console only appears when the game is sideloaded, and hiding the window would be easy. Rebirth supports unpacked
   (sideloaded) copies, so pdnet handles it itself (section 4.3); no change in PDPL needed.

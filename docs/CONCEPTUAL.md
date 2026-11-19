@@ -150,7 +150,7 @@ Rebirth's metadata only, and `touches` is worked out from the paths at every sca
 7. Lobbies.
 8. Catalog plugins.
 
-Status (2026-11-19): 1, 2, 4 and 5 built (Conceptual 41-45); 3's live part waits on PDPL exports (safe mode is in). None tried in the game yet: the user tests everything at once with the list below.
+Status (2026-11-19): 1, 2, 4, 5 and 6 built (Conceptual 41-46); 3's live part waits on PDPL exports (safe mode is in). None tried in the game yet: the user tests everything at once with the list below.
 
 ### To test (all at once, newest kit)
 Folders: PDPL's = `%LOCALAPPDATA%\Packages\Microsoft.MSEsper_8wekyb3d8bbwe\RoamingState\mods`; Rebirth's =
@@ -199,7 +199,24 @@ settings.ini pointing at a test catalog)
     crash, other mods fine.
 24. No internet: the catalog from the last start is used; downloaded mods keep working.
 
+**Skill data from mods (step 6)** (a mod with `Assets/Data/gstorage/gsdata_en.dat`, e.g. made with PD Helper's Skill Editor)
+25. pdlaunch.log `mods: skill data (gsdata_en.dat, 278532 bytes) from <id>`; pdnet.log `skill data from mod <id>: N bytes
+    written over the stored copy (the mod's changes to the game's file)`.
+26. The mod's change (a skill's cost or damage) shows in the Arsenal editor and in a Test Arsenal battle.
+27. It's still there after a match, after the lobby and after going back to the title screen (the guard keeps it).
+28. Turn the mod off in the Mods list and restart: the skill is back to normal.
+29. A PD Helper modpack (ModLoader) on top still works as before.
+30. Skills the mod didn't change keep the Skill Update 1.40 values (compare one with a mod-less game).
+
 ## Log
+- 2026-11-19: Mod loader step 6, skill data from mods (Conceptual 46): PDPL hands the game a mod's gsdata_<lang>.dat, but the
+  game's stored online copy goes over the block (0x1404c5240) once, on the first main menu / join, so the mod is lost.
+  pdlaunch now extracts the gsdata the game would get (loose files in PDPL's folder, else the highest mod that has it)
+  to LocalState\pdnet\mod-skills\gsdata_<lang>.dat (+ .txt naming the mod) at every sync. SkillDataGuard, once the stored
+  copy is in, writes the bytes where that file differs from the game folder's file (the whole file if those read the
+  same), so untouched values keep the 1.40 numbers, and keeps the result as its modded state. Only while PDPL is in the
+  game. Tested the extraction with pdlaunch -syncmods (full-size file with odd path capitals, priority, mod off = folder
+  emptied); the in-memory part is not yet tried in the game.
 - 2026-11-19: Mod loader step 5, catalog and downloads (Conceptual 45), all in pdlaunch at game start (launcher\modsync.cpp):
   the catalog mods\mods.txt (`<id> <owner/repo> [plugin]`; empty for now) from mod_list_url (default: this repo's Conceptual
   branch on raw.githubusercontent.com), cached in pdnet\modstore\catalog.txt. Catalog mods are off until turned on in the Mods
