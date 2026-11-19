@@ -1298,6 +1298,7 @@ namespace pdnet::labtests
                 g_wasInBattle = true;
                 g_pressCamera = g_pressRecord = g_pressPlay = false; // presses from before this battle
                 LogPlayers(L"battle started");
+                gamepatches::MatchStarted(); // lobby Custom Settings: the Aura refill multiplier
                 if (g_filmQueued) StartFilmPlayback();
             }
             // Shows this hook keeps running in the battle, and whether the game's frame counter moves.

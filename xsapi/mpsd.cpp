@@ -166,6 +166,7 @@ namespace pdnet::mpsd
             a["PD_JOIN"] = std::to_string(Ticks(m.joinTime));
             a["PD_BODYTAGS"] = GetConfig().nametagsOnBodies ? "1" : "0"; // used by everyone when this PC is the game host
             if (std::string v = gamepatches::VariantAttribute(); !v.empty()) a["PD_VARIANT"] = v; // the Advanced list's pick
+            a["PD_MATCH"] = gamepatches::MatchSettingsAttribute();         // Custom Settings, the same way
             return a;
         }
 
@@ -183,6 +184,9 @@ namespace pdnet::mpsd
                 if (Attr(m.attributes, "PD_XUID") != host) continue;
                 std::string tags = Attr(m.attributes, "PD_BODYTAGS");
                 if (!tags.empty()) gamepatches::SetNametagsOnBodies(tags == "1", m.userId == lobbies::LocalUserId() ? L"this PC hosts the lobby" : L"the lobby host's setting");
+                // Custom Settings: the host's; a host without them (older pdnet) plays the defaults.
+                bool mine = m.userId == lobbies::LocalUserId();
+                gamepatches::SetHostMatchSettings(mine ? gamepatches::MatchSettingsAttribute() : Attr(m.attributes, "PD_MATCH"), mine);
                 return;
             }
         }
@@ -1056,6 +1060,22 @@ namespace pdnet::mpsd
 
 namespace pdnet::scores
 {
+    void PublishMatchSettings()
+    {
+        std::thread([]
+        {
+            for (auto& s : mpsd::SessionStore::Instance().All())
+            {
+                if (!s || !s->shared || s->templateName != L"SearchableGame" || !s->FindMember(xsapi::LocalXuid())) continue;
+                std::string lobbyId = mpsd::U8(mpsd::LobbyIdFor(s->Key()));
+                lobbies::Changes member;
+                member.set["PD_MATCH"] = gamepatches::MatchSettingsAttribute();
+                bool ok = lobbies::Update(lobbyId, lobbies::Changes{}, member);
+                Log(L"xsapi-pdnet: Custom Settings %S sent to lobby %S%s", member.set["PD_MATCH"].c_str(), lobbyId.c_str(), ok ? L"" : L" - FAILED");
+            }
+        }).detach();
+    }
+
     int RatedMatch()
     {
         for (auto& s : mpsd::SessionStore::Instance().All())

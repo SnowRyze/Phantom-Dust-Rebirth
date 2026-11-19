@@ -17,6 +17,10 @@
 
 namespace pdnet::scores
 {
+    // Lobby Custom Settings: sends this PC's PD_MATCH member attribute to the game lobby it is in
+    // now (xsapi/mpsd.cpp), on a worker thread. Nothing when not in a lobby.
+    void PublishMatchSettings();
+
     struct Record
     {
         uint32_t rank = 0;   // 1 = top
