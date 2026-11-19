@@ -281,24 +281,38 @@ directly with one address per script argument, a PowerShell wrapper passing arra
   0x17d8 and the resource buffer starts at 0x2000, so about 34 more sprite records fit before it has to move (texture
   offsets are relative to the buffer, so moving it is safe).
 - **Prebake, concretely:** pdlaunch, from the enabled map mods (category=Map / a stNN-less .alr + .dat pair, with
-  mod-info.ini or pdmod.json), in active-mod order, slot k = stage index 30 + k, map number 40 + k:
+  mod-info.ini or pdmod.json), in active-mod order, slot k = the k-th free number (30, 32-38, 40, ...; entry index = map number, see Checks):
   (1) stageset_en.dat / _ja.dat: the game's 30 entries + one per slot (name and short name from the mod, internal
   name `st<NN>-<id>`, layouts = the number of CP00 sections in the mod's .dat, flag 1);
   (2) Assets/Data/Map/st<NN>.alr / .dat = the mod's files;
   (3) Menu/MNet.alr: the game's, with its previews (preview.png, 254 or 256 x 112) drawn into placeholder textures 3+
   (uncompressed BGRA, 256 x 1024, decoded with WIC) and sprite records 84 + k appended (count byte updated);
   all of it as one generated archive or loose files in PDPL's folder, rebuilt only when the slot list changes;
-  (4) LocalState\pdnet\map-slots.txt for pdnet: slot, stage index, map number, sprite, mod id.
+  (4) LocalState\pdnet\map-slots.txt for pdnet: slot, stage index (= map number), sprite, mod id.
   pdnet, in menu 47: add an item (command 59, 100 + index) per slot after the script's last one; answer command 87
   kind 57 (unlocked) with 1 for slots; draw sprite 84 + k (command 18 at 48, 261) instead of the script's while the
   cursor is on slot k. Live later: the same generator run by pdnet, with PDPL mounting the result.
-- Still to check before building: the script's pick handler for items it didn't add (item 100 + index -> g4 #576); the
-  loading screen's picture per map (LdCg##.alr, 128x256, keyed by map number?) and music per map; that nothing reads
-  the map number into a fixed-size table (map numbers 40+).- Prebake pieces: a generated stageset_en.dat (and _ja) with entries 30+ (map numbers from 40 up, flag 1), each map
+- **Checks (Ghidra, 2026-11-21):** the current map number (0x140527bc8, set by the pick and by the host's settings
+  message) is copied at match start (FUN_140187680) to 0x1403e0304, which the stage loader (FUN_1401d1950 ->
+  FUN_1401d1a60) uses for the Map folder files and **the loading screen uses as a stage table index** (short name of
+  entry [map number]): so a custom stage's **map number must equal its entry index**. The loader treats map numbers
+  ending in **1** (mode flag 2, as st01 Edgar's Dream) and **9** (mode flag 1, plus a value from 0x1402f83b8) specially:
+  custom numbers skip them. Per-map names built from the number: Map\st%02deff (effects, optional), st%02dcam.alr (intro
+  camera; st24 has none, so optional), com\st%02d (AI navigation: only AI battles), st%02d_area%02d_%02d.ssb (story).
+  The exe's one "bgm" string only sets the sound folder: no music table by map number (music comes with the stage).
+  LdCg isn't in the exe (not chosen by map number).
+- **Plan changes:** custom slots are entry = map number in 30-64 minus numbers ending in 1 or 9 (30, 32-38, 40, 42-48,
+  50, 52-58, 60, 62-64: **28 slots**), with blank flag-0 filler entries for the skipped numbers so the entry index stays
+  the map number. pdnet also wraps the pick (g4 #576) so the cursor's custom item gives its entry, whatever the script's
+  A handler passes. Test Arsenal on a custom map has no com\stNN (AI navigation): try it, else serve a base arena's.
+- Prebake pieces (first draft; numbering superseded by the plan changes above): a generated stageset_en.dat (and _ja) with entries 30+ (map numbers from 40 up, flag 1), each map
   mod's .alr / .dat served as Assets/Data/Map/st40.alr / .dat, previews added to an MNet sheet, and pdnet answering
   the unlocked query. Still to check: the picker's preview choice (next: a run with menu_debug=on through the picker),
   and anything else keyed by map number (BGM, AI navigation com/stNN, lighting, intro camera stNNcam.alr: not needed).
 ## Log
+- 2026-11-21: New map slot checks (Ghidra): the loading screen indexes the stage table by map number, so custom map number
+  = entry index; numbers ending in 1 or 9 are special in the loader, leaving 28 slots (30-64); no map-number tables for
+  music; pdnet will wrap the pick too. Plan updated in "New map slots".
 - 2026-11-21: Menu sprites decoded (Ghidra): sprite lists live in an .alr's second root chunk (textures, then 60-byte sprites
   with uv rectangles); MNet's map previews are sprites 49-65, and textures 3-8 are 32x32 placeholders that can hold
   custom previews. Prebake plan written out in "New map slots".
