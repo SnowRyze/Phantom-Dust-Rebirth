@@ -8,6 +8,8 @@
 #include "Multiplayer.MultiplayerSubscriptionLostEventArgs.h"
 #include "Multiplayer.MultiplayerSearchHandleDetails.h"
 #include "../../src/mods.h" // Conceptual: each result's mods, for SESSION INFO
+#include "../../src/p2p.h"
+#include "../../src/gamepatches.h"
 #include <algorithm>
 #include <regex>
 #include "../repeatable.h"
@@ -248,6 +250,9 @@ namespace winrt::Microsoft::Xbox::Services::Multiplayer::implementation
             ::pdnet::Log(L"xsapi-pdnet: Quick Join's search skipped (its menu item opens the Mods list now)");
             co_return winrt::single_threaded_vector<Microsoft::Xbox::Services::Multiplayer::MultiplayerSearchHandleDetails>().GetView();
         }
+        // Looking for a lobby: whatever this PC still has open from earlier lobbies goes (the user, 2026-11-22). Nui's join
+        // hung because Fisher King's game, still holding their connection from a lobby a minute before, never answered.
+        if (::pdnet::gamepatches::LobbyBrowserOpen()) ::pdnet::p2p::DropAll("looking for a lobby");
         // Cross Play plays no part: every player is on pdnet, so the game's "numbers/cross ..." clause (from its hidden
         // Cross Play option, which can end up set differently on two PCs) is dropped.
         filter = std::regex_replace(filter, std::wregex(L"( and )?numbers/cross [a-z]+ -?[0-9]+( and )?"), L"$1$2");

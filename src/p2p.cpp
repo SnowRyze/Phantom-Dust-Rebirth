@@ -4,6 +4,7 @@
 #include "config.h"
 #include "eos.h"
 #include "log.h"
+#include <algorithm>
 
 #ifdef PDNET_NO_EOS
 
@@ -19,6 +20,7 @@ namespace pdnet::p2p
     void CloseLink(const std::string&) {}
     void SendLook(int, float) {}
     bool HasLink(const std::string&) { return false; }
+    void DropAll(const char*) {}
 }
 
 #else
@@ -101,6 +103,7 @@ namespace pdnet::p2p
         // Players whose direct connection gets no answer, to reconnect over Epic's relays (NoAnswer; under g_outLock).
         std::vector<std::string> g_reroute;
         bool g_relayWanted = false; // relays on without remaking a connection (NoAnswer, the higher-id PC; under g_outLock)
+        std::vector<std::string> g_drop; // peers whose EOS connection DropAll closes (under g_outLock)
         bool g_relayForced = false; // EOS thread only
 
         std::mutex g_dispatchLock;
@@ -411,10 +414,11 @@ namespace pdnet::p2p
 
             // Send everything queued (after accepting the players Expect named).
             std::deque<Outgoing> out;
-            std::vector<std::string> accept, reroute;
+            std::vector<std::string> accept, reroute, drop;
             bool relayWanted = false;
             {
                 std::lock_guard guard(g_outLock);
+                drop.swap(g_drop);
                 out.swap(g_out);
                 accept.swap(g_accept);
                 reroute.swap(g_reroute);
@@ -426,6 +430,16 @@ namespace pdnet::p2p
                 EOS_EResult r = api.EOS_P2P_SetRelayControl(p2p, &rc);
                 g_relayForced = r == EOS_EResult::EOS_Success;
                 Log(L"p2p: relays forced for the rest of this game run%s", g_relayForced ? L"" : (L" - failed: " + Result(api, r)).c_str());
+            }
+            for (auto& peer : drop)
+            {
+                EOS_P2P_CloseConnectionOptions c{ EOS_P2P_CLOSECONNECTION_API_LATEST, me, api.EOS_ProductUserId_FromString(peer.c_str()), Socket() };
+                EOS_EResult r = api.EOS_P2P_CloseConnection(p2p, &c);
+                {
+                    std::lock_guard guard(g_lock);
+                    g_paths.erase(peer);
+                }
+                Log(L"p2p: connection to %S closed (%s)", peer.substr(0, 8).c_str(), r == EOS_EResult::EOS_Success ? L"looking for a lobby" : Result(api, r).c_str());
             }
             for (auto& peer : reroute)
             {
@@ -764,6 +778,32 @@ namespace pdnet::p2p
         for (auto& [id, link] : g_links)
             if (_stricmp(id.c_str(), peer.c_str()) == 0) return true;
         return false;
+    }
+
+    void DropAll(const char* why)
+    {
+        std::vector<std::string> links, peers;
+        {
+            std::lock_guard guard(g_lock);
+            for (auto& [peer, link] : g_links) links.push_back(peer);
+            for (auto& [peer, path] : g_paths) peers.push_back(peer);
+            for (auto& [peer, list] : g_early) peers.push_back(peer);
+        }
+        for (auto& peer : links)
+        {
+            CloseLink(peer);
+            peers.push_back(peer);
+        }
+        std::sort(peers.begin(), peers.end());
+        peers.erase(std::unique(peers.begin(), peers.end()), peers.end());
+        if (peers.empty()) return;
+        {
+            std::lock_guard guard(g_outLock);
+            g_drop.insert(g_drop.end(), peers.begin(), peers.end());
+            g_accept.clear();
+            g_reroute.clear();
+        }
+        Log(L"p2p: %zu old connection(s) closed (%S)", peers.size(), why);
     }
 
     void SendLook(int slot, float tilt)

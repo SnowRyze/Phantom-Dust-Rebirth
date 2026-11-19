@@ -48,4 +48,8 @@ namespace pdnet::p2p
     // A link to `peer` (EOS product user id, any case) is open: the peer hasn't left, even if its packets have stopped
     // for a while (EOS restores interrupted connections).
     bool HasLink(const std::string& peer);
+
+    // Closes every link and EOS connection this PC still has (the user, 2026-11-22: when a player looks for a lobby, the
+    // connections of earlier lobbies go; a peer's game holding an old connection never answered a new join request).
+    void DropAll(const char* why);
 }
