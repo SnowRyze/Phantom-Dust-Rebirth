@@ -67,11 +67,14 @@ Other docs: [`EOS_PLAN.md`](EOS_PLAN.md), [`MODDING_PLAN.md`](MODDING_PLAN.md), 
 - Players need as little setup as possible: no Epic accounts, no port forwarding or router changes.
 - Short, practical explanations; one-command scripts for anything the user has to run.
 
-## Status (2026-11-12)
+## Status (2026-11-19)
 
-Newest builds: **Experimental 170**, **Stable 14** (Experimental 170).
+Newest builds: **Experimental 184**, **Stable 15** (Experimental 184).
 
 Not yet confirmed in the game (each has its change log note):
+- Cross lag after a short link outage: quiet peers kept while their link is open (183). Every player needs 183 or newer.
+- Theatre: the players' camera tilt and its X toggle (178 / 179), capsule spots (180), characters (181), a film no longer carrying into the next match (182).
+- Dead camera: your own inversion options (178), only the watcher turns it in real matches (184).
 - The multiplayer menu's new order with Importer (Experimental 174).
 - B button: skipping start-up logos and cut-scene movies, leaving a hung match load after 30 s (120).
 
@@ -97,6 +100,8 @@ Ideas, not planned (notes in the change log and reference notes):
 # Change log (newest first)
 
 ## November 2026
+
+Stable 15 (2026-11-19): Experimental 184 promoted at the user's request (build.bat promote 184; tag stable-15 = master 19b8103). The release has PhantomDust-Rebirth-Stable-15-PC.zip and pdnet-update-184.zip ("DO NOT DOWNLOAD" label); the Flatpak workflow builds the Linux file for it. Since Stable 14: the dead camera and the Theatre (pull request 13, 173-182), Theatre films of online matches with tilt, capsule spots and characters, the multiplayer menu order with Importer (174), 16-character names (171), the skill preview diagnostics (172 / 173), the cross lag fix (183) and the dead camera turned only by the watcher (184).
 
 Dead camera in real matches: only the watcher turns it (2026-11-19, Experimental 184, the user's request, not yet tried). BehindView followed the watched player's facing every frame, so their turning swung the watcher's view while the watcher orbited ("fighting the camera"). In a real match (g_deadOn and not FilmActive) the facing is now taken once, when following starts, on a switch of player, or on the orbit reset (R3 / T), via g_retakeTurn, and held; after that only OrbitInput turns it. The followed player's up/down tilt never applies in real matches (only in films, with the X toggle). The Theatre's player cam still follows the filmed player's facing.
 

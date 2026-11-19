@@ -11,16 +11,17 @@ folder that stays put and double-click `Setup.bat`.
 
 ## Features
 
-Everything here is in the current Stable (Stable 14). *(Not yet confirmed)* means it hasn't been checked in a real match
+Everything here is in the current Stable (Stable 15). *(Not yet confirmed)* means it hasn't been checked in a real match
 yet. Newer work goes into Experimental builds first.
 
 **Playing online**
 - Lobbies, matches, voice chat and scoreboards through Epic Online Services: no Xbox Live, no Epic account, no port
   forwarding.
 - Works with the Microsoft Store version and with unpacked copies, and on Linux (wine-uwp, or the Flatpak).
-- Your own player name, kept when the game is reinstalled. Saves are kept on your PC.
+- Your own player name (up to 16 characters), kept when the game is reinstalled. Saves are kept on your PC.
 - Joins that survive slow or lost connection notices, PCs with wrong clocks, and short connection drops (matches pause
-  instead of freezing). Epic's relay is used automatically when two PCs can't reach each other directly.
+  instead of freezing, and wait up to 20 s for a player whose connection goes quiet instead of dropping them *(not yet
+  confirmed)*). Epic's relay is used automatically when two PCs can't reach each other directly.
 - Empty lobbies hidden; lobby join and leave crashes fixed.
 - Setup lets the game through the Windows Firewall, and pdnet checks the network at start-up and logs what blocks it.
 - Lobby announcements in Discord (opened, who joined, full, closed).
@@ -42,6 +43,13 @@ yet. Newer work goes into Experimental builds first.
 - A player who leaves the match loses their nametag.
 - AI players in the debug menu's battles get nametags too.
 
+**Watching**
+- Dead camera: once you're down for 3 s, watch the players still standing (in Tag Team only your partner) or fly a
+  free camera. You turn it yourself, with your own Up/Down and Right/Left settings *(not yet confirmed)*.
+- Theatre (Theater in the multiplayer menu): every online match is saved as a film to watch again, with pause, slow
+  motion, fast forward, the player cam or a flying cam, and each player's own camera tilt (X turns it on or off)
+  *(newest parts not yet confirmed)*.
+
 **Arsenal Lab**
 - Arsenal cases follow the arsenal: 1, 2 or 3 schools, up to 3, so the case type and Aura rate always match the skills
   in it. The Limit shown follows the schools while you edit.
@@ -55,7 +63,7 @@ yet. Newer work goes into Experimental builds first.
 - "Rebirth" title artwork and the build version on the main menu.
 - Community (Discord) button in place of Help & Support; How to Play opens phantomdust.online.
 - "Xbox Live" reads "Online"; the multiplayer menu has Online Settings (name, voice, nametags, Discord posts, partner
-  aim), and the Online Store is gone.
+  aim), Theater and Importer, and the Online Store is gone.
 - Options: Send Log (sends your logs to the developers), Updates (Stable, Experimental or Off), and in Sound, Aura
   Particle Beeps and Skill Preview Sound.
 - Character select shows each colour's name instead of COLOR 1-4.
