@@ -117,7 +117,7 @@ namespace pdnet
                 auto eq = line.find('=');
                 if (eq == std::string::npos) continue;
                 std::string key = Trim(line.substr(0, eq)), value = Trim(line.substr(eq + 1));
-                if (key == "menu_debug") c.menuDebug = _stricmp(value.c_str(), "on") == 0;
+                if (key == "menu_debug") c.menuDebug = _stricmp(value.c_str(), "on") == 0 ? 44 : atoi(value.c_str()) > 0 ? atoi(value.c_str()) : 0;
                 else if (key == "voice_chat") c.voiceChat = _stricmp(value.c_str(), "off") != 0;
                 else if (key == "voice_listen") c.voiceListen = _stricmp(value.c_str(), "off") != 0;
                 else if (key == "voice_mode") c.voiceClassic = _stricmp(value.c_str(), "classic") == 0;

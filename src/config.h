@@ -18,7 +18,7 @@ namespace pdnet
         uint16_t controlPort = 43211;       // pdnet control channel (connect handshake, pings)
         uint32_t qosProbes = 5;
         bool testPeer = false;              // test_peer=on: in-process fake second player (debug, see testpeer.h)
-        bool menuDebug = false;             // menu_debug=on: log the lobby script's commands (debug, see gamepatches.cpp)
+        int menuDebug = 0;                  // menu_debug=on: log the lobby's (44) script commands; menu_debug=<menu number>: that menu's (debug, see gamepatches.cpp)
         bool lobbyArsenalEditor = true;     // lobby_arsenal_editor=on: the lobby's invite button opens the Arsenal editor (see gamepatches.h)
         bool ratedLobbies = true;           // rated_lobbies=on: the lobby's Rating option is Unrated / Rated; only Rated matches change ratings (see gamepatches.cpp)
         bool scoreboard = true;             // scoreboard=on: the Scoreboard shows global EOS leaderboards (rating, wins per mode) (see scores.h)

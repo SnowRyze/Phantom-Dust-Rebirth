@@ -1151,22 +1151,24 @@ namespace pdnet::gamepatches
         // session table 0x1403f1150 x196) the first time it's called and whenever its result or first argument
         // changes - to see what the lobby script checks (e.g. what greys out an option).
 
+        // menu_debug: the configured menu's script commands (menu_debug=on: the lobby, 44), each command with its first
+        // four arguments (8-byte slots, as the script passes them) and its result, once per distinct call (many run every
+        // frame), at most 5000 lines.
         void LogLobbyCommand(uint32_t id, int64_t result, const int32_t* args)
         {
             static std::atomic<int> logged{ 0 };
             uint32_t table = id >> 16, index = id & 0xffff;
-            if (table > 1 || index > 255 || CurrentMenu(MenuManager()) != kLobbyMenu || logged > 5000) return;
-            int32_t arg = 0;
-            if (args && !IsBadReadPtr(args, 4)) arg = args[0];
-            // Each command + argument + result once: some are called every frame with alternating arguments.
+            if (table > 1 || index > 255 || CurrentMenu(MenuManager()) != GetConfig().menuDebug || logged > 5000) return;
+            int64_t a[4] = {};
+            if (args && !IsBadReadPtr(args, sizeof(a))) memcpy(a, args, sizeof(a));
             static std::mutex lock;
-            static std::set<std::tuple<uint32_t, int32_t, int64_t>> seen;
+            static std::set<std::tuple<uint32_t, int64_t, int64_t, int64_t, int64_t, int64_t>> seen;
             {
                 std::lock_guard guard(lock);
-                if (!seen.emplace(id, arg, result).second) return;
+                if (!seen.emplace(id, a[0], a[1], a[2], a[3], result).second) return;
             }
             ++logged;
-            Log(L"menu-debug: %s cmd %u(arg %d) -> %lld", table ? L"session" : L"menu", index, arg, result);
+            Log(L"menu-debug: %s cmd %u(%lld, %lld, %lld, %lld) -> %lld", table ? L"session" : L"menu", index, a[0], a[1], a[2], a[3], result);
         }
 
         void MenuDebug()
@@ -1203,7 +1205,7 @@ namespace pdnet::gamepatches
                 VirtualProtect(table, count * 8, old, &old);
                 FlushInstructionCache(GetCurrentProcess(), stubs, count * 64);
             }
-            Log(L"gamepatch: menu_debug - logging the lobby script's commands");
+            Log(L"gamepatch: menu_debug - logging menu %d's script commands", GetConfig().menuDebug);
         }
 
         // Lobby Gamertag option. livelobby.ssb greys out Options > Gamertag (and Kick Player) unless its
@@ -4274,7 +4276,6 @@ namespace pdnet::gamepatches
             g_pushMenu = push;
             Log(L"gamepatch: lobby Arsenal editor ready (the lobby's invite button opens it)");
             RenameStrings(); // again whenever a menu opens, in case the strings were loaded later
-            if (GetConfig().menuDebug) MenuDebug();
         }
     }
 
@@ -5736,6 +5737,9 @@ namespace pdnet::gamepatches
             SignalPastTitle(); // pdlaunch's start-up volume lasts until then
             bool arsenal = GetConfig().lobbyArsenalEditor; // the Arsenal Lab button for clients too
             if (GetConfig().lobbyGamertagOption || micLabel || arsenal) LobbyScriptPatches(GetConfig().lobbyGamertagOption, micLabel, arsenal);
+            // menu_debug wraps every entry of the menu and session command tables, so it goes in last (10 s after this), on
+            // top of pdnet's own hooks: installed first, it made every later hook find "not the code this pdnet expects".
+            if (GetConfig().menuDebug) std::thread([] { Sleep(10000); MenuDebug(); }).detach();
         });
     }
 

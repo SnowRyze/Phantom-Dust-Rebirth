@@ -262,6 +262,12 @@ directly with one address per script argument, a PowerShell wrapper passing arra
   the unlocked query. Still to check: the picker's preview choice (next: a run with menu_debug=on through the picker),
   and anything else keyed by map number (BGM, AI navigation com/stNN, lighting, intro camera stNNcam.alr: not needed).
 ## Log
+- 2026-11-21: menu_debug fixed (Conceptual 51). Turning menu_debug=on for the map picker research broke every pdnet menu
+  feature (the user: "everything menu related is broken"): MenuDebug replaced all 136 + 196 menu / session command table
+  entries early, so each later WrapCommand found unexpected code and skipped (Mods name, Settings save, Lab rows, Sound,
+  Send Log). Removed from settings.ini at once. Now: installed last, 10 s after Apply, wrapping pdnet's hooks;
+  menu_debug=<menu number> logs that menu (on = the lobby, 44, as before), with each command's first four arguments.
+  Next: a run with menu_debug=47 through the map picker, for how it picks preview strips.
 - 2026-11-21: GitHub's sha256 for mod downloads (Conceptual 50; the user asked, so modders only upload a zip). GitHub's API
   gives every release asset a "digest": "sha256:<hex>" worked out on upload. pdlaunch's release lookup (LookUpRelease) and
   the Mod Admin app's check now take a release's first .zip / .7z that has a sha256: a "sha256 <file> <hex>" line in the
