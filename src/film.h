@@ -68,4 +68,7 @@ namespace pdnet::film
     };
     // Reads and decodes a film (bounds-checked): its stream records in time order, and its details. False if unreadable.
     bool Load(const std::wstring& file, std::vector<Event>& events, Info& info);
+
+    // Deletes a saved film (the Theater's delete, the player's choice). False if it couldn't be deleted or is being recorded.
+    bool Delete(const std::wstring& file);
 }

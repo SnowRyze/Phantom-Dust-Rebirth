@@ -545,6 +545,15 @@ namespace pdnet::film
         return films;
     }
 
+    bool Delete(const std::wstring& file)
+    {
+        if (file.empty() || file.find_first_of(L"\\/:") != std::wstring::npos) return false; // a name in the films folder only
+        if (g_recording && file == g_name) return false;
+        bool ok = DeleteFileW((FilmsDir() + L"\\" + file).c_str()) != 0;
+        Log(L"film: %s deleted by the player%s", file.c_str(), ok ? L"" : L" - FAILED");
+        return ok;
+    }
+
     bool Load(const std::wstring& file, std::vector<Event>& events, Info& info)
     {
         events.clear();

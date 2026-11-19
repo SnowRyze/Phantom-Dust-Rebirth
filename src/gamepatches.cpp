@@ -1992,10 +1992,14 @@ namespace pdnet::gamepatches
                 else strcpy_s(label, f.when.empty() ? "Film" : f.when.c_str());
                 if (f.lobbySession) sprintf_s(lobby, " %s, lobby %.8s.", f.when.c_str(), f.lobby.empty() ? "offline" : f.lobby.c_str() + (f.lobby.size() > 10 ? 2 : 0));
                 _snprintf_s(g_filmRow[r], _TRUNCATE, "\a160w%s\f\a1#\a230c%s %s\f\a0#", label, type, length);
-                _snprintf_s(g_filmHint[r], _TRUNCATE, "%s on stage %d: %s.%s%s", type, f.stage, f.players.empty() ? "players not recorded" : f.players.c_str(), lobby, page);
+                _snprintf_s(g_filmHint[r], _TRUNCATE, "%s on stage %d: %s.%s Y / Delete: delete it.%s", type, f.stage, f.players.empty() ? "players not recorded" : f.players.c_str(), lobby, page);
             }
         }
 
+        // Deleting a film (the user, 2026-11-21): Y (or the Delete key) on a film's row asks on that row ("Delete this
+        // film?"), Y / Delete again within 5 s deletes it (film::Delete); moving to another row, or waiting, keeps it.
+        int g_deleteRow = -1;
+        ULONGLONG g_deleteAskedAt = 0;
         void RefreshFilmRows()
         {
             g_films = film::List(kTheatreFilms);
@@ -2441,6 +2445,53 @@ namespace pdnet::gamepatches
             ShowButtonBar(on ? kConfirmBar : kNormalBar);
         }
 
+        int TheatreCursorRow()
+        {
+            int64_t manager = MenuManager();
+            int window = manager ? *reinterpret_cast<int16_t*>(manager + 0x10402) : -1;
+            return window >= 0 && window < 16 ? WindowAt(manager, window)[0x12 / 2] : -1;
+        }
+
+        void TheatreDelete()
+        {
+            static bool held = false;
+            uint8_t keys[256];
+            bool press = AnyPadHolds(0x20) || (KeysHeld(keys) && keys[VK_DELETE]); // Y, Delete
+            bool fresh = press && !held;
+            held = press;
+            int row = TheatreCursorRow();
+            if (g_deleteRow >= 0 && (row != g_deleteRow || GetTickCount64() - g_deleteAskedAt > 5000))
+            {
+                g_deleteRow = -1;
+                FillFilmPage(); // the row's own text back
+            }
+            if (!fresh) return;
+            size_t pick = static_cast<size_t>(g_filmPage) * kTheatreRows + row;
+            if (row < 0 || row >= kTheatreRows || pick >= g_films.size()) return;
+            int64_t sound[2] = { 37, 0 };
+            if (g_deleteRow != row)
+            {
+                g_deleteRow = row;
+                g_deleteAskedAt = GetTickCount64();
+                strcpy_s(g_filmRow[row], "\a160wDelete this film?\f\a1#\a230cY again\f\a0#");
+                strcpy_s(g_filmHint[row], "Press Y (or Delete) again to delete this film for good. Move to another row to keep it.");
+                reinterpret_cast<InputFn>(At(0x140261750))(sound);
+                return;
+            }
+            g_deleteRow = -1;
+            std::wstring file = g_films[pick].file;
+            if (film::Delete(file))
+            {
+                g_films.erase(g_films.begin() + static_cast<std::ptrdiff_t>(pick));
+                if (g_filmPage >= FilmPages()) g_filmPage = FilmPages() - 1;
+                sound[0] = 0;
+            }
+            else sound[0] = 1;
+            reinterpret_cast<InputFn>(At(0x140261750))(sound);
+            for (int r = 0; r < kTheatreRows; ++r) { g_filmRow[r][0] = 0; g_filmHint[r][0] = 0; }
+            FillFilmPage();
+        }
+
         int64_t HookedButtons(int64_t* args)
         {
             int64_t buttons = g_buttons(args);
@@ -2460,6 +2511,7 @@ namespace pdnet::gamepatches
                 }
                 held[0] = next;
                 held[1] = previous;
+                TheatreDelete();
                 // A: the film on the highlighted row. The window's cursor is its +0x12 (FUN_14024b000 moves it), the screen's
                 // window the manager's +0x10402; pdnet's rows are the window's only rows, so the cursor is the row. A is kept
                 // from the script (it would run the row's old action).
