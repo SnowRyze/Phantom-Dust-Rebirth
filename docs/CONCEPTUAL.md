@@ -235,6 +235,32 @@ test catalog)
 42. A catalog mod with DLLs but no `plugin` flag in the catalog: the list says "has plugins (needs the catalog's plugin
     flag)" and it isn't loaded. With the flag (Mod Admin, Plugin on): it loads.
 
+## New map slots (research, 2026-11-21; plan: prebake at game start, live later)
+The user wants map mods (e.g. Nuion's Aquarium: Aquarium.alr / .dat, mod-info.ini, a 256x112 preview.png) to appear as
+new maps in the multiplayer map picker, not replace a stage. Decided: prebake at game start (pdlaunch generates the
+pieces from the map mods that are on; slots handed out in active-mod order, so PCs with the same mods agree), built so
+pdnet can do the same live once PDPL exports its functions. Found with Ghidra (C:\Users\ryhol\tools: Ghidra 12.1.4,
+JDK 21, project ghidra-projects\PhantomDust.gpr; the Blender add-on's handoff\ghidra scripts; call analyzeHeadless.bat
+directly with one address per script argument, a PowerShell wrapper passing arrays broke the scripts):
+- **The stage list is a data file:** `Assets\Data\setup\stageset\stageset_<lang>.dat` (u32 size, u32 count, u32 text
+  offset, u32 0, then count x 0x14: three u32 text offsets (full name, short name, internal name), s16 map number
+  (stNN), s16 layout count, s16 multiplayer flag, s16 0). 30 entries: 0 dummy, 1 Edgar's Dream (flag 0), 2-8 and
+  12-17, 22-26 the arenas (flag 1), 24 Panorama Boss (flag 0), the rest dummies.
+- FUN_14017d830 copies it (file at DAT_140590190) into the stage table at 0x140509ba0: 0x28 per entry (+0x00 name,
+  +0x08 short name, +0x10 internal name, +0x18 map number, +0x1c layouts, +0x20 flag), count at 0x14050a5d0. **Room
+  for 65 entries** (the count sits right after 65 x 0x28): 35 new maps at most.
+- The map picker's pick (g4 #576, FUN_140213c00) stores the entry index (0x14051775c), its map number (0x140527bc8)
+  and a random layout below the layout count (0x140527c54). The loading screen draws the short name (FUN_1401c98e0).
+- Menu queries 0x32-0x3b (FUN_14024c500, jump table 0x14024c5d8): 0x32 count, 0x33 name, 0x34 short name, 0x35
+  internal name, 0x36 map number, 0x37 layouts, 0x38 multiplayer flag, 0x39 **unlocked bit** = bit (index + 27) of
+  0x4616a4 while that is below 56 (so indices 29 and up always read locked), 0x3b sets it. A new slot needs pdnet to
+  answer 0x39 with 1 for it.
+- Story mission pictures are Menu\Mpt###.alr (256x256 DXT5); the multiplayer previews are 254x112 strips on MNet.alr's
+  mnet0410 (7) and mnet0420 (4, room for about 2 more), DXT1. How the picker picks a strip is still to be found.
+- Prebake pieces: a generated stageset_en.dat (and _ja) with entries 30+ (map numbers from 40 up, flag 1), each map
+  mod's .alr / .dat served as Assets/Data/Map/st40.alr / .dat, previews added to an MNet sheet, and pdnet answering
+  the unlocked query. Still to check: the picker's preview choice (next: a run with menu_debug=on through the picker),
+  and anything else keyed by map number (BGM, AI navigation com/stNN, lighting, intro camera stNNcam.alr: not needed).
 ## Log
 - 2026-11-21: GitHub's sha256 for mod downloads (Conceptual 50; the user asked, so modders only upload a zip). GitHub's API
   gives every release asset a "digest": "sha256:<hex>" worked out on upload. pdlaunch's release lookup (LookUpRelease) and
