@@ -535,6 +535,9 @@ namespace pdnet::film
             {
                 lastMs = *reinterpret_cast<const uint32_t*>(&tail[4]);
                 info.packets = *reinterpret_cast<const uint32_t*>(&tail[12]);
+                // No match traffic at all: a film of the Lab's skill preview or an offline battle (made before Experimental
+                // 187), nothing to play: left out of the Theater list.
+                if (*reinterpret_cast<const uint64_t*>(&tail[16]) == 0) continue;
             }
             info.minutes = lastMs / 60000.0;
             films.push_back(std::move(info));
@@ -653,7 +656,11 @@ namespace pdnet::film
                     Sleep(50);
                     int state = Var<int32_t>(0x1404bc950);
                     bool match = state != 0 && state != 13;
-                    if (match && !g_recording && !gamepatches::TestBattle()) { snapshot = false; OpenFilm(); } // not Test Arsenal / playback
+                    // Only online matches (game mode 0x1404bc9d4: 4 host, 5 joiner). The Lab's skill preview runs a town session
+                    // (mode 0) and debug-menu battles are offline: both made empty films (the user, 2026-11-21).
+                    int mode = Var<int32_t>(0x1404bc9d4);
+                    bool online = mode == 4 || mode == 5;
+                    if (match && online && !g_recording && !gamepatches::TestBattle()) { snapshot = false; OpenFilm(); } // not Test Arsenal / playback
                     if (g_recording && state != last)
                     {
                         std::lock_guard guard(g_lock);

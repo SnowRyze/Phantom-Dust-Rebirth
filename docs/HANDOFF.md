@@ -100,6 +100,8 @@ Ideas, not planned (notes in the change log and reference notes):
 
 ## November 2026
 
+Films only of online matches (2026-11-21, Experimental 187, a player's report: "if u go to lab and it shows u the skills used ... it creates a replay for theater mode"). The film watcher opened a film for any game state other than 0 / 13, so the Lab's skill preview (pdnet's town session, game mode 0) and debug-menu battles made films with no match traffic (e.g. "film-00007 ... 0 KB of packets" in Jason's log). Films now open only in game modes 4 (host) / 5 (joiner) (0x1404bc9d4), and film::List leaves out closed films whose packet bytes are 0, so the empty ones already saved no longer show in the Theater.
+
 Theatre films with Advanced picks (2026-11-21, Experimental 186, the user's request; not yet tried). An Advanced pick plays as its slot's carrier (kCarriers: 19 Mechano, 21 Euroto, 22 Hedono, 26 Belono) with files pdnet builds (variants.cpp), so a film held only the carrier value and its battle loaded the carrier without the variant: the Theatre crashed. Now:
 - Films record each slot's PD_VARIANT text (snapshot version 4, Snapshot::variant; gamepatches::FilmVariant reads g_variants). Logged: "film: slot N plays an Advanced pick: '...'".
 - StartFilmBattle calls ApplyFilmVariants: every variant off first (this PC's own or a lobby's), then each recorded pick turned on for its slot (ActivateVariant + PrebuildVariant, as for another player's pick), its carrier value used for the battle (slots 2-3 through g_filmCharacterOverride in HookedTestStart). Logged: "theatre: slot N plays the Advanced pick ...", then the pick table.
