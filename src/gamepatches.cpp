@@ -3307,6 +3307,34 @@ namespace pdnet::gamepatches
             return g_stagePick(args);
         }
 
+        // The match load (FUN_1401d85f0) queues the map's files from a table of names by map number (0x1403f2b60, 0x18 per
+        // entry: name, list flag, 0; entries 2N and 2N + 1 are stNN.alr / stNN.dat for N up to 34, blank where a number
+        // has no map, then the ambience banks MapSE*.bin from entry 70 and st09_xx from 82) through FUN_14021ab70 (list,
+        // entry, buffer). A slot's entries are blank or other files (map 30: entry 60 is empty, so the file loader read
+        // a null name and crashed, Conceptual 52), so while the map number (0x140530264) is a slot its two entries are
+        // swapped for pdnet's own. The game keeps the entry pointer (0x140533050), so they're never freed.
+        struct MapFileEntry { const char* name; int32_t flag; int32_t pad; uint64_t zero; };
+        MapFileEntry g_mapFiles[65][2] = {};
+        char g_mapFileNames[65][2][12] = {};
+        using QueueMapFileFn = void (*)(int64_t list, uint64_t* entry, uint64_t buffer);
+        QueueMapFileFn g_queueMapFile = nullptr;
+        void HookedQueueMapFile(int64_t list, uint64_t* entry, uint64_t buffer)
+        {
+            int map = *reinterpret_cast<int32_t*>(At(0x140530264));
+            if (map >= 30 && map < 65 && g_mapFiles[map][0].name)
+            {
+                auto table = reinterpret_cast<uint64_t*>(At(0x1403f2b60));
+                for (int f = 0; f < 2; ++f)
+                    if (entry == table + (map * 2 + f) * 3)
+                    {
+                        static int logged = 0;
+                        if (logged++ < 8) Log(L"gamepatch: map load: map %d's %S from the new map slot", map, g_mapFiles[map][f].name);
+                        entry = reinterpret_cast<uint64_t*>(&g_mapFiles[map][f]);
+                    }
+            }
+            g_queueMapFile(list, entry, buffer);
+        }
+
         void MapSlots()
         {
             memset(g_mapRowSlot, -1, sizeof(g_mapRowSlot));
@@ -3330,6 +3358,16 @@ namespace pdnet::gamepatches
             bool hooks = WrapCommand<MenuCommandFn>(0x1403eefe0 + 87 * 8, 0x140208340, &HookedStageQuery, g_stageQuery, L"map picker stage query") &&
                          WrapCommand<MenuCommandFn>(0x1403eefe0 + 18 * 8, 0x140207730, &HookedDrawSheetSprite, g_drawSheetSprite, L"map picker preview") &&
                          WrapCommand<SessionCommandFn>(0x1403f1150 + 40 * 8, 0x140213c00, &HookedStagePick, g_stagePick, L"map picker pick");
+            for (const MapSlot& s : g_mapSlots)
+                for (int f = 0; f < 2; ++f)
+                {
+                    sprintf_s(g_mapFileNames[s.entry][f], "st%02d.%s", s.entry, f ? "dat" : "alr");
+                    g_mapFiles[s.entry][f].name = g_mapFileNames[s.entry][f];
+                }
+            // mov [rsp+8], rbx / mov eax, [rdx+8] (the next instruction is RIP-relative)
+            std::vector<uint8_t> start = { 0x48, 0x89, 0x5C, 0x24, 0x08, 0x8B, 0x42, 0x08 };
+            g_queueMapFile = reinterpret_cast<QueueMapFileFn>(InlineHookBytes(0x14021ab70, start, start, reinterpret_cast<void*>(&HookedQueueMapFile), L"map load files"));
+            hooks = hooks && g_queueMapFile;
             Log(L"gamepatch: map picker: %zu new map(s) from map-slots.txt, stage table has %d entries%s", g_mapSlots.size(), count, hooks ? L"" : L" - NOT all hooks in");
         }
 

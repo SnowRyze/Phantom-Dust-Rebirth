@@ -364,7 +364,7 @@ namespace mapslots
         {
             std::vector<int> n;
             for (int i = 30; i <= 64; ++i)
-                if (i % 10 != 1 && i % 10 != 9) n.push_back(i);
+                if (i % 10 != 1 && i % 10 != 9 && i != 32) n.push_back(i); // st32 is the game's own (in its map file table)
             return n;
         }();
         return numbers;

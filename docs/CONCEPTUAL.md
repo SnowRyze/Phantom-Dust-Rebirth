@@ -329,7 +329,14 @@ directly with one address per script argument, a PowerShell wrapper passing arra
   (gamepatches.cpp, MapSlots): rows after id 108 in menu 47 (menu command 59 = add row: id, text only), 87 kind 0x39
   answers 1, menu command 18 at (3, *, 48, 261) swaps the sprite while window field 9 (the cursor) is on a slot row, and
   **the pick is session command 40** (table 0x1403f1150 + 40 * 8 = FUN_140213c00: args[0] = entry), swapped to the
-  cursor's slot entry. Not yet seen in game.
+  cursor's slot entry. Conceptual 52 in game: the row showed (after row 16), the pick gave map 30 (the script passed
+  0), the lobby hosted stage=30; the battle load crashed (PDUWP+0x28aff6, the file loader reading a null name).
+- **The map file table (Ghidra, Conceptual 53):** the match load (FUN_1401d85f0) doesn't build stNN names: it queues
+  entries 2N and 2N + 1 of a name table at 0x1403f2b60 (0x18 each: name, list flag, 0) through FUN_14021ab70. stNN.alr /
+  .dat exist there for 0-9, 12-17, 22-26 and **32** (a game map, st32.alr is in Assets\Data\Map), blanks elsewhere up to
+  entry 69, then MapSE*.bin ambience (70-78, read as 0x45 + map % 10 by FUN_14021a6a0) and st09_xx. pdnet now hooks
+  FUN_14021ab70 and, while the map number (0x140530264) is a slot, swaps its two entries for its own "stNN.alr/.dat".
+  Slot 32 is skipped (27 slots). Ambience/DSP for a slot is location map % 10 = 0: no MapSE bank, DSP table entry 0.
 - **Plan changes:** custom slots are entry = map number in 30-64 minus numbers ending in 1 or 9 (30, 32-38, 40, 42-48,
   50, 52-58, 60, 62-64: **28 slots**), with blank flag-0 filler entries for the skipped numbers so the entry index stays
   the map number. pdnet also wraps the pick (g4 #576) so the cursor's custom item gives its entry, whatever the script's
@@ -339,6 +346,9 @@ directly with one address per script argument, a PowerShell wrapper passing arra
   the unlocked query. Still to check: the picker's preview choice (next: a run with menu_debug=on through the picker),
   and anything else keyed by map number (BGM, AI navigation com/stNN, lighting, intro camera stNNcam.alr: not needed).
 ## Log
+- 2026-11-21: Conceptual 52 test: new map row, pick and hosting worked; the battle load crashed. Cause: the map files come
+  from a name table by map number (blank for 30). Fixed in Conceptual 53 (pdnet swaps in the slot's names); slot 32 skipped
+  (the game's own st32). Retest checks 46-49.
 - 2026-11-21: New map slots built (Conceptual 52): pdlaunch generates the stage lists, map files and MNet previews from
   the map mods that are on; pdnet adds their rows to the map picker, unlocks them, swaps the preview and the pick.
   Tested outside the game with -syncmods and Aquarium (slot 30, sprite 84, preview decoded). Checks 43-51 to test.
