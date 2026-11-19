@@ -2461,6 +2461,7 @@ namespace pdnet::gamepatches
             if (keep && !name.empty())
             {
                 EditableConfig().displayName = name.substr(0, 16);
+                SetLogName(EditableConfig().displayName);
                 g_settingsDirty = true;
                 Log(L"gamepatch: settings: name typed: '%s' (A saves)", EditableConfig().displayName.c_str());
             }

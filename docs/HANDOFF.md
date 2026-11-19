@@ -100,6 +100,13 @@ Ideas, not planned (notes in the change log and reference notes):
 
 ## November 2026
 
+Logs without PC names (2026-11-22, Experimental 199, the user's rule: no PC user names in logs, the in-game name instead; not yet seen in a player's log). src/logscrub.h (header only) replaces the user folder's name after Users / home in paths (Windows and Wine; not Public, Default, All Users) and every whole-word copy of the computer name with the in-game name (display_name: the kit's pdnet.ini, then LocalState settings.ini; "player" if none):
+- pdnet.log: every line (Log; name read on the first line, then SetLogName from config loading and Online Settings' name change).
+- pdlaunch.log: every line (pdlaunch's Log; modsync's lines go through it).
+- Options > Send Log: files named pdnet-log-<in-game name>-<date>.txt (was the computer name), and all three logs cleaned again before upload (lines from older builds, PDPL's own log).
+- Collect-Log.bat: copies named after the in-game name and cleaned the same way.
+The cleaner was checked by reading (each loop always advances); a compiled test couldn't be linked here.
+
 Mods list / Theater: the highlighted row (2026-11-22, Experimental 198, eat's report "could only use the button on the top slot"; not yet tried). eat's log: every A in the Mods list toggled map-aquarium (row 0), and map-construct only came on after auto sort put it first. pdnet read the cursor (+0x12, FUN_14024b000 moves it within 0 .. +0x16 - 1) of the window manager +0x10402 names, which on the Settings screen can be the hints' window (same row count, cursor stays 0). ListCursorRow(rows) now takes, of the 16 windows with that many rows (+0x16), the one with the highest cursor (the screen's window if none), for the Mods list (g_modRows) and the Theater (g_filmRows: picking and deleting films had the same reading). Logged "menu: list cursor row N (window W of R rows)" the first few times it isn't 0.
 
 pdlaunch hands over after its own update (2026-11-22, Experimental 197, the user's request; not yet tried). The start that installs an update runs the old pdlaunch.exe to the end (the new pdnet.dll is loaded, but the old launcher's work: toaf's 159 -> 194 start loaded no PDPL). Now, when the update replaced pdlaunch.exe (g_launcherReplaced), the old one starts the new one with "-p <pid> -tid <tid> -handover" right after the update, before anything is loaded into the still-suspended game, and exits; the new one skips the update check and does the rest ("game started ... - handed over by the previous pdlaunch after its update"). If it can't be started, the old one carries on. Only kits whose pdlaunch has this (197 on) hand over; older kits still need one more start after updating.

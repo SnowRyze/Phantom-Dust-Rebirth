@@ -1,5 +1,7 @@
 #include "pch.h"
 #include "log.h"
+#include "logscrub.h"
+#include <vector>
 #include <cstdarg>
 #include <cstdio>
 #include <share.h>
@@ -39,6 +41,32 @@ namespace pdnet
         return path;
     }
 
+    namespace
+    {
+        std::mutex g_nameLock;
+        std::wstring g_logName, g_computer;
+
+        // The kit's pdnet.ini (next to pdnet.dll) and the in-game Settings' settings.ini.
+        std::wstring FirstLogName()
+        {
+            HMODULE self = nullptr;
+            GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT, reinterpret_cast<LPCWSTR>(&FirstLogName), &self);
+            wchar_t module[MAX_PATH] = {};
+            GetModuleFileNameW(self, module, MAX_PATH);
+            std::wstring kit = module;
+            kit = kit.substr(0, kit.find_last_of(L'\\') + 1);
+            std::vector<std::wstring> files{ kit + L"pdnet.ini" };
+            if (!LocalStatePath().empty()) files.push_back(LocalStatePath() + L"\\pdnet\\settings.ini");
+            return logscrub::ReadName(files);
+        }
+    }
+
+    void SetLogName(const std::wstring& name)
+    {
+        std::lock_guard guard(g_nameLock);
+        g_logName = name.empty() ? L"player" : name.substr(0, 16);
+    }
+
     void Log(const wchar_t* fmt, ...)
     {
         static std::mutex lock;
@@ -52,8 +80,16 @@ namespace pdnet
 
         SYSTEMTIME t;
         GetLocalTime(&t);
-        wchar_t line[2200];
-        swprintf_s(line, L"%02u:%02u:%02u.%03u [%5lu] %s\n", t.wHour, t.wMinute, t.wSecond, t.wMilliseconds, GetCurrentThreadId(), body);
+        wchar_t stamped[2200];
+        swprintf_s(stamped, L"%02u:%02u:%02u.%03u [%5lu] %s\n", t.wHour, t.wMinute, t.wSecond, t.wMilliseconds, GetCurrentThreadId(), body);
+        std::wstring text = stamped;
+        {
+            std::lock_guard guard(g_nameLock);
+            if (g_logName.empty()) g_logName = FirstLogName();
+            if (g_computer.empty()) g_computer = logscrub::ComputerName();
+            logscrub::Scrub(text, g_logName, g_computer); // no Windows user or computer name in the log (the user, 2026-11-22)
+        }
+        const wchar_t* line = text.c_str();
 
         OutputDebugStringW(L"[pdnet] ");
         OutputDebugStringW(line);
