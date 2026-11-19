@@ -26,7 +26,7 @@ namespace mapslots
     // The slot numbers in order (30, 33-38, 40, ...): 27 of them.
     const std::vector<int>& SlotNumbers();
 
-    // Writes (or removes, with no maps) the generated files. gameDir: the game folder (holds Assets\Data); pdplDir:
+    // Writes (or removes, with no maps) the generated files. Slots are handed out by mod id (the same on every PC with the same maps). gameDir: the game folder (holds Assets\Data); pdplDir:
     // RoamingState\mods; pdnetDir: LocalState\pdnet. Maps beyond the 27 slots are left out (logged).
     void Generate(const std::wstring& gameDir, const std::wstring& pdplDir, const std::wstring& pdnetDir,
                   const std::vector<MapMod>& maps, LogFn log);
