@@ -98,6 +98,8 @@ Ideas, not planned (notes in the change log and reference notes):
 
 ## November 2026
 
+Theatre option: the players' camera tilt on / off (2026-11-19, Experimental 179, the user's request, not yet tried): X (pad) or the X key in a film switches whether the player cam follows the filmed player's recorded up/down look (g_filmTiltOn, on by default, kept from film to film; used in BehindView). The film's top line shows "(their camera tilt)" or "(level)" on the player cam, and the controls list has the key.
+
 Camera: your own inversion, and the tilt in films (2026-11-19, Experimental 178, not yet tried):
 - The dead camera and the Theatre's free camera and orbit follow Options > Controller "Right/Left" and "Up/Down" (option 0 byte 0x14052dfb0, option 1 0x14052dfb1, 1 = REVERSE; LookX / LookY in labtests.cpp).
 - The Theatre player view only turned left and right: films had only the facing. The camera's up/down look is player object +0x12da4 (the y of the look direction in the camera's turn at +0x12d90; -1 down, 1 up, about -0.15 at rest), found live by tilting in Test Arsenal. The game never sends it (PlayerPos +0x1c / +0x1e, object +0x13b34 / +0x13b48, stayed 0xffff).

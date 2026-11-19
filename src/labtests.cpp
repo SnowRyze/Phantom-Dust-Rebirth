@@ -156,6 +156,9 @@ namespace pdnet::labtests
         LastPlayed g_filmLast[4][26];
         // Each battle slot's filmed camera tilt (film::Look records, sine of the up/down look), NAN until the film has one.
         float g_filmTilt[4]{ NAN, NAN, NAN, NAN };
+        // Theatre option (X / X key, the user 2026-11-19): the player cam follows the filmed player's own up/down look. Kept
+        // from film to film.
+        bool g_filmTiltOn = true;
 
         bool LocalDown()
         {
@@ -553,7 +556,8 @@ namespace pdnet::labtests
             char who[80] = "";
             if (g_deadOn && !g_freeCam && g_deadTarget >= 0)
                 sprintf_s(who, ": %.64s", reinterpret_cast<const char*>(At(0x1404bca30) + g_deadTarget * 0x41));
-            sprintf_s(line, "FILM %s / %s   %s   %s%s", now, length, speed, camera, who);
+            sprintf_s(line, "FILM %s / %s   %s   %s%s%s", now, length, speed, camera, who,
+                g_deadOn && !g_freeCam ? (g_filmTiltOn ? "   (their camera tilt)" : "   (level)") : "");
             int x = 24, y = 300;
             ScreenText(x, y, line, 0xffffd060);
             static const char* kLines[] = {
@@ -562,6 +566,7 @@ namespace pdnet::labtests
                 "D-pad L R / Q E: switch players    Right stick / arrows: look",
                 "Left stick / WASD: move            RB LB / R F: up / down",
                 "RT / C (hold): fast forward        L3 / Ctrl (hold): pan",
+                "X / X key: player cam tilts with the player on / off",
                 "D-pad Down / F2: hide / show this text",
             };
             for (const char* text : kLines) ScreenText(x, y += 14, text, 0xffffffff);
@@ -783,7 +788,7 @@ namespace pdnet::labtests
             static float tiltSmooth = 0;
             float tilt = 0;
             for (int s = 0; s < 4; ++s)
-                if (FilmActive() && PlayerObject(s) == object && !std::isnan(g_filmTilt[s]))
+                if (FilmActive() && g_filmTiltOn && PlayerObject(s) == object && !std::isnan(g_filmTilt[s]))
                     tilt = std::asin((std::max)(-1.0f, (std::min)(1.0f, g_filmTilt[s]))) - std::asin(kRestTilt);
             tiltSmooth = tiltSmooth * 0.8f + tilt * 0.2f;
             rise = (std::max)(-0.5f, (std::min)(1.4f, rise - tiltSmooth));
@@ -1137,19 +1142,21 @@ namespace pdnet::labtests
         // the speed from LT / Z held (slow motion) or RT / C held (fast forward).
         void FilmPresses()
         {
-            static bool held[3] = {};
+            static bool held[4] = {};
             uint8_t keys[256];
             bool haveKeys = KeysHeld(keys);
             bool view = AnyPadHolds(0x2); // View + D-pad is the Lab tests'
-            bool now[3] = {
+            bool now[4] = {
                 AnyPadHolds(0x4) || (haveKeys && keys[VK_SPACE]),            // A
                 AnyPadHolds(0x8) || (haveKeys && keys['H']),                 // B
                 (!view && AnyPadHolds(0x80)) || (haveKeys && keys[VK_F2]),   // D-pad Down
+                AnyPadHolds(0x10) || (haveKeys && keys['X']),                // X
             };
             if (now[0] && !held[0]) { g_filmPaused = !g_filmPaused; Log(L"theatre: %s", g_filmPaused ? L"paused" : L"playing"); }
             if (now[1] && !held[1]) g_hudHidden = !g_hudHidden;
             if (now[2] && !held[2]) g_controlsShown = !g_controlsShown;
-            for (int i = 0; i < 3; ++i) held[i] = now[i];
+            if (now[3] && !held[3]) { g_filmTiltOn = !g_filmTiltOn; Log(L"theatre: players' camera tilt %s", g_filmTiltOn ? L"on" : L"off"); }
+            for (int i = 0; i < 4; ++i) held[i] = now[i];
             float lt = 0, rt = 0;
             PadTriggers(lt, rt);
             float rate = 1.0f;
