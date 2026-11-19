@@ -346,6 +346,9 @@ directly with one address per script argument, a PowerShell wrapper passing arra
   the unlocked query. Still to check: the picker's preview choice (next: a run with menu_debug=on through the picker),
   and anything else keyed by map number (BGM, AI navigation com/stNN, lighting, intro camera stNNcam.alr: not needed).
 ## Log
+- 2026-11-21: The user confirmed on 53: the Aquarium preview shows in the map picker (check 45), the map loads (in Test
+  Arsenal), and turning the mod off removes its generated files (check 51). Still open: 46-48 (a lobby match on a new map,
+  a second PC joining), 50 (Japanese).
 - 2026-11-21: Conceptual 53 test: Test Arsenal on Aquarium (map 30) loads and plays (3.5 minutes, no crash); pdnet.log shows
   both files swapped in (map load: st30.alr / st30.dat). Check 49 passes (AI navigation missing didn't matter). Still open: 45
   (preview), 46-48 (a lobby match on it, a second PC), 50, 51.
