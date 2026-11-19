@@ -6277,6 +6277,14 @@ namespace pdnet::gamepatches
             }).detach();
         }
 
+        // The name the lobby shows in a slot (session command 23's table, 0x140527ac0 + slot * 64); empty if unknown.
+        std::string LobbySlotName(int slot)
+        {
+            char text[64];
+            if (slot < 0 || slot > 3 || !CopyString(reinterpret_cast<const char*>(At(0x140527ac0) + slot * 64), text, sizeof(text))) return "";
+            return text;
+        }
+
         // Another member's PD_VARIANT changed (or they left: `text` empty).
         void ApplyMemberVariant(const std::string& user, const std::string& name, const std::string& text)
         {
@@ -6305,8 +6313,33 @@ namespace pdnet::gamepatches
                 g_anyRetry = true;
                 return;
             }
+            // A slot another member's variant holds is theirs unless the lobby shows this member's name in it (2026-11-23,
+            // Snow's report: a rejoining player's PD_VARIANT still named their slot from the last lobby, it replaced the
+            // player now in that slot, and when the rejoined player picked again that slot went back to the bare carrier,
+            // so on other PCs two players played as the carrier monsters all evening). Otherwise this claim waits.
+            for (auto& [other, otherSlot] : g_memberSlot)
+            {
+                if (other == user || otherSlot != slot) continue;
+                std::string owner = LobbySlotName(slot);
+                if (!owner.empty() && _stricmp(owner.c_str(), name.c_str()) == 0)
+                {
+                    Log(L"variants: online: the lobby shows %S in slot %d - the variant another member had there (%S) waits for their own slot", name.c_str(), slot, other.c_str());
+                    g_memberRetry[other] = "(another member)";
+                    g_anyRetry = true;
+                    g_memberSlot.erase(other);
+                    break;
+                }
+                Log(L"variants: online: %S says slot %d, which another member's variant holds (the lobby shows '%S' there) - tried again later", name.c_str(), slot, owner.c_str());
+                g_memberRetry[user] = name;
+                g_anyRetry = true;
+                return;
+            }
             g_memberRetry.erase(user);
-            if (oldSlot >= 0 && oldSlot != slot && oldSlot != mySlot) ClearVariant(oldSlot); // they moved slots
+            if (oldSlot >= 0 && oldSlot != slot && oldSlot != mySlot) // they moved slots
+            {
+                ClearVariant(oldSlot);
+                g_anyRetry = g_anyRetry || !g_memberRetry.empty(); // a claim that waited for that slot gets its turn
+            }
             int value = ActivateVariant(slot, pick);
             g_memberSlot[user] = slot;
             Log(L"variants: online: %S (%S) picked %S for slot %d -> carrier value %X%s", name.c_str(), user.c_str(), text.c_str(), slot, value,
@@ -8031,10 +8064,15 @@ namespace pdnet::gamepatches
         int mySlot = *reinterpret_cast<int32_t*>(At(0x140527bc4));
         for (auto& [user, slot] : g_memberSlot)
             if (slot != mySlot) ClearVariant(slot);
-        Log(L"variants: online: left lobby %S - the other players' variants are off (%zu)", lobbyId.c_str(), g_memberSlot.size());
+        Log(L"variants: online: left lobby %S - the other players' variants are off (%zu)%s", lobbyId.c_str(), g_memberSlot.size(),
+            g_myVariant.empty() ? L"" : L"; this PC's PD_VARIANT forgotten (its slot was that lobby's)");
         g_memberSlot.clear();
         g_memberVariant.clear();
+        g_memberRetry.clear();
         g_variantLobby.clear();
+        // This PC's own pick named its slot in that lobby: sent again on joining the next one, it took another player's
+        // slot on the other PCs (2026-11-23). The next lobby gets this PC's pick when it picks there.
+        g_myVariant.clear();
     }
 
     int SavedRating()
