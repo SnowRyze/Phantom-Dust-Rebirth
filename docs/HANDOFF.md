@@ -100,6 +100,8 @@ Ideas, not planned (notes in the change log and reference notes):
 
 ## November 2026
 
+Theater button bar: page keys (2026-11-21, Experimental 190, the user's request): "LB / RB Page" added as plain text after Select (no LB / RB icon code is known in the bar's codes). Not yet seen on screen.
+
 Theater button bar (2026-11-21, Experimental 189, the user's request): the bar now shows the Y icon with Delete (kTheatreBar: Select, A Watch, Y Delete, B Back; the Y icon is the bar code the character select uses for Y Advanced).
 
 Theater: delete a film (2026-11-21, Experimental 188, the user's request; not yet tried). On the Theater list, Y (pad) or the Delete key on a film's row asks on that row ("Delete this film? Y again"); Y / Delete again within 5 s deletes the file (film::Delete, logged "film: ... deleted by the player"); moving to another row or waiting puts the row back. The list then closes up (page kept in range). Each film's hint says "Y / Delete: delete it." TheatreDelete runs from HookedButtons' Theater part.
