@@ -163,6 +163,7 @@ namespace pdnet::mpsd
             a["PD_INIT"] = m.initializeRequested ? "1" : "0";
             a["PD_JOIN"] = std::to_string(Ticks(m.joinTime));
             a["PD_BODYTAGS"] = GetConfig().nametagsOnBodies ? "1" : "0"; // used by everyone when this PC is the game host
+            if (std::string v = gamepatches::VariantAttribute(); !v.empty()) a["PD_VARIANT"] = v; // the Advanced list's pick
             return a;
         }
 
@@ -172,6 +173,9 @@ namespace pdnet::mpsd
         {
             std::string host = Attr(l.attributes, "PD_HOST");
             if (!l.joined || host.empty()) return;
+            std::vector<gamepatches::LobbyVariant> variants; // the Advanced list's picks (every member's PD_VARIANT)
+            for (auto& m : l.members) variants.push_back({ m.userId, Attr(m.attributes, "PD_NAME"), Attr(m.attributes, "PD_VARIANT") });
+            gamepatches::LobbyVariants(l.id, variants);
             for (auto& m : l.members)
             {
                 if (Attr(m.attributes, "PD_XUID") != host) continue;
@@ -830,6 +834,7 @@ namespace pdnet::mpsd
                 else lobbies::Leave(lobbyId);
                 discord::LobbyLeft(lobbyId, alone);
                 gamepatches::UseOwnSettings();
+                gamepatches::LobbyVariantsLeft(lobbyId);
                 Log(L"xsapi-pdnet: left lobby %S (%s/%s)%s", lobbyId.c_str(), doc.templateName.c_str(), doc.sessionName.c_str(), alone ? L", destroyed" : L"");
                 doc.shared = false;
                 m_myRequests.erase(key);
@@ -977,6 +982,7 @@ namespace pdnet::mpsd
                 doc.shared = false;
                 discord::LobbyLost(lobbyId);
                 gamepatches::UseOwnSettings();
+                gamepatches::LobbyVariantsLeft(lobbyId);
                 Log(L"xsapi-pdnet: lobby %S closed or this PC was removed; %s/%s is no longer shared", lobbyId.c_str(), doc.templateName.c_str(), doc.sessionName.c_str());
             }
             else

@@ -60,6 +60,8 @@ namespace pdnet
         bool auraBeeps = true;              // aura_beeps=on|off: the aura particles' beeping (Options > Sound shows it)
         bool previewSound = true;           // preview_sound=on|off: the skill preview's sounds online (Options > Sound shows it)
         bool moreControllers = true;        // more_controllers=on|off: PlayStation, Nintendo and other controllers, read by pdlaunch with SDL3 (see gamepads.cpp)
+        std::string variantTest;            // variant_test=c,colour,dodge,set: play your Test Arsenal character as that Advanced-list variant (testing, see variants.h)
+        bool charselPortraits = true;       // charsel_portraits=on|off: the monsters' portraits on the character select, and its Advanced list (Y) (kit\pdnet\charsel-portraits.bin, see gamepatches.cpp)
         bool soundLog = false;              // sound_log=on: log each game sound (bank, cue, caller) the first time it plays (debug, see gamepatches.cpp)
     };
 
