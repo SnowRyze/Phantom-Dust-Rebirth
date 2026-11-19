@@ -25,6 +25,11 @@ namespace pdnet::gamepatches
         constexpr uint64_t kGhidraBase = 0x140000000;
 
         std::atomic<bool> g_theatre{ false }; // the Settings screen (menu 68) is showing the Theatre's film list (Conceptual)
+        // Lobby Custom Settings (Conceptual): the Settings screen is showing them (opened from the lobby's Options menu).
+        std::atomic<bool> g_customMatch{ false }, g_openingCustom{ false };
+        std::mutex g_matchLock;
+        MatchSettings g_hostMatch;            // the lobby host's values (when not this PC)
+        std::atomic<bool> g_matchMine{ true }; // this PC hosts (or there's no host value): its own values are used
         std::atomic<uint8_t> g_bodyTags{ 0 }; // nametags on dead bodies wanted (the lobby host's setting)
         // What the game's nametag code reads (routines below), kept current by NametagColours: dead bodies keep their
         // tag only in Tag Team, and each other player's tag colour by match slot (ally / enemy, both ARGB twice).
@@ -652,6 +657,7 @@ namespace pdnet::gamepatches
         // livelobby (it opened arsenaledit directly until 2026-10-29; the Laboratory has Buy / Sell Arsenal Case now).
         // While it is open from there, leaving the Laboratory's menus for any other menu becomes a "back", so it returns
         // to the lobby with the lobby's state restored, like the lobby's own Change Arsenal.
+        constexpr int kSettingsMenuId = 68; // Settings (liveoption), also shown as the Theatre and as Custom Settings
         constexpr int kLobbyMenu = 44, kLabMenu = 45, kStockMenu = 63, kEditorMenu = 64, kCaseBuyMenu = 30, kCaseSellMenu = 31;
         bool InLabMenus(int menu) { return menu == kLabMenu || menu == kStockMenu || menu == kEditorMenu || menu == kCaseBuyMenu || menu == kCaseSellMenu; }
         // Lab > Test Arsenal (OpenTestArsenal) runs the scoreboard battle: livedbtl 74 (arsenal choice, then the battle),
@@ -929,6 +935,7 @@ namespace pdnet::gamepatches
             }
             if (menu == 68)
             {
+                g_customMatch = g_openingCustom.exchange(false);
                 g_theatre = theatre;
                 g_settingsOpenedAt = GetTickCount64();
             }
@@ -987,6 +994,7 @@ namespace pdnet::gamepatches
             int64_t manager = MenuManager();
             int current = CurrentMenu(manager);
             Log(L"menu: back (from %d)", current);
+            if (current == kSettingsMenuId && g_customMatch.exchange(false)) Log(L"gamepatch: Custom Settings: back to the lobby");
             int step = g_testPicking;
             if (step != kPickingNone && current == (step == kPickingStage ? kStageMenu : step == kPickingCharacter || step == kPickingOpponentCharacter ? kCharacterMenu : kArsenalPickMenu))
             {
@@ -1549,6 +1557,14 @@ namespace pdnet::gamepatches
                 char text[80];
                 if (CopyString(reinterpret_cast<const char*>(args[0]), text, sizeof(text)))
                 {
+                    // The lobby's Options > Gamertag (no profile cards on PC) is Custom Settings (Conceptual branch).
+                    if (strcmp(text, "$GAMERTAG") == 0 && CurrentMenu(MenuManager()) == kLobbyMenu)
+                    {
+                        int64_t renamed[8];
+                        memcpy(renamed, args, sizeof(renamed));
+                        renamed[0] = reinterpret_cast<int64_t>("Custom Settings");
+                        return g_addItem(renamed);
+                    }
                     // Only the scoreboard menu adds $LEADERBOARD_ items.
                     if (GetConfig().scoreboard && strncmp(text, "$LEADERBOARD_", 13) == 0 && atoi(text + 13) % 3 != 0) return 0; // Friends / Favorites
                     if (g_testPicking == kPickingOpponentArsenal && strcmp(text, "Select an arsenal.") == 0) // livearsel, the AI's pick in Test Arsenal
@@ -1690,12 +1706,18 @@ namespace pdnet::gamepatches
                 Log(L"gamepatch: rating change %lld not applied (battle against an AI)", change);
                 return g_applyRating(a, 0, c, d, e, f);
             }
-            if (rated != 1)
+            if (rated == 1 && MatchSettingsInUse().Custom())
+            {
+                Log(L"gamepatch: rating change %lld not applied (Custom Settings: Unrated)", change);
+                change = 0;
+                rated = 2; // logged already
+            }
+            if (rated != 1 && rated != 2)
             {
                 Log(L"gamepatch: rating change %lld not applied (%s match)", change, rated == 0 ? L"Unrated" : L"unknown -> Unrated");
                 change = 0;
             }
-            else Log(L"gamepatch: rating change %lld (Rated match)", change);
+            else if (rated == 1) Log(L"gamepatch: rating change %lld (Rated match)", change);
             int64_t result = g_applyRating(a, change, c, d, e, f);
             if (atEnd && gamepatches::MultiplayerProfile())
             {
@@ -2193,6 +2215,93 @@ namespace pdnet::gamepatches
             return cancel ? kLogoReturnBig : counted;
         }
 
+        // Starting health and Aura: FUN_14024e790 sets up each player's status record with FUN_14024d020(record, object,
+        // 1, health, Aura, ...) (call at 0x14024e901), health and Aura from gsdata's rule table (+0x33040 + rule * 0x10).
+        // In an online match (game mode 4 or 5) the lobby's Custom Settings go there instead.
+        using StatusInitFn = void (*)(uint8_t*, uint8_t*, int, int, int, int);
+        void HookedPlayerStatus(uint8_t* record, uint8_t* object, int main, int health, int aura, int sixth)
+        {
+            MatchSettings m = MatchSettingsInUse();
+            if (main == 1 && !TestBattle() && *reinterpret_cast<volatile int32_t*>(At(0x1404bc9d4)) >= 4 && m.Custom())
+            {
+                Log(L"gamepatch: Custom Settings: a player starts with health %d (was %d), Aura %d (was %d)", m.health, health, m.aura, aura);
+                health = m.health;
+                aura = m.aura;
+            }
+            reinterpret_cast<StatusInitFn>(At(0x14024d020))(record, object, main, health, aura, sixth);
+        }
+
+        // ---- Lobby Custom Settings (Conceptual branch) ----
+        // The Settings screen shows three rows: Starting Health, Starting Aura, Aura Refill. Left / right changes them when
+        // this PC hosts the lobby (saved in pdnet.ini at once and sent to the lobby); for the others they show the host's.
+        constexpr int kCustomRows = 3;
+        constexpr int kHealthSteps[] = { 5, 10, 15, 20, 25, 30, 35, 40, 50, 60, 70, 80, 90, 99 };
+        constexpr int kRefillSteps[] = { 5, 10, 15, 20 };
+        char g_customRow[kCustomRows][96], g_customHint[kCustomRows][128];
+        const char* kCustomBar = "\a8#Select \a7#Change \a580r\a3#Back";
+        const char* kCustomViewBar = "\a8#Select \a580r\a3#Back";
+
+        MatchSettings OwnMatch()
+        {
+            const Config& c = GetConfig();
+            return { c.matchHealth, c.matchAura, c.matchRefill };
+        }
+
+        void RefreshCustomRows()
+        {
+            MatchSettings m = MatchSettingsInUse();
+            char refill[16];
+            sprintf_s(refill, "x%d.%d", m.refill / 10, m.refill % 10);
+            char value[3][16];
+            sprintf_s(value[0], "%d", m.health);
+            sprintf_s(value[1], "%d", m.aura);
+            strcpy_s(value[2], refill);
+            const char* labels[kCustomRows] = { "Starting Health", "Starting Aura", "Aura Refill" };
+            for (int r = 0; r < kCustomRows; ++r) sprintf_s(g_customRow[r], "\a160w%s\f\a1#\a230c%s\f\a0#", labels[r], value[r]);
+            bool mine = g_matchMine;
+            const char* who = mine ? "" : " Set by the lobby host.";
+            sprintf_s(g_customHint[0], "Health every player starts with (default 20).%s%s", who, m.Custom() ? " Unrated." : "");
+            sprintf_s(g_customHint[1], "Aura every player starts with (default 0).%s%s", who, m.Custom() ? " Unrated." : "");
+            sprintf_s(g_customHint[2], "Aura refill speed, on top of the arsenal case's (default x1.0).%s%s", who, m.Custom() ? " Unrated." : "");
+        }
+
+        int StepIn(const int* steps, size_t n, int now, int direction)
+        {
+            size_t i = 0;
+            while (i + 1 < n && steps[i] < now) ++i;
+            if (steps[i] != now && direction < 0 && i > 0) return steps[i - 1]; // between steps: down to the one below
+            int j = static_cast<int>(i) + direction;
+            return steps[(std::clamp)(j, 0, static_cast<int>(n) - 1)];
+        }
+
+        void ChangeCustom(int row, int direction)
+        {
+            if (!g_matchMine) { Log(L"gamepatch: Custom Settings: only the lobby host changes them"); return; }
+            Config& c = EditableConfig();
+            if (row == 0) c.matchHealth = StepIn(kHealthSteps, std::size(kHealthSteps), c.matchHealth, direction);
+            else if (row == 1) c.matchAura = (std::clamp)(c.matchAura + direction, 0, 10);
+            else if (row == 2) c.matchRefill = StepIn(kRefillSteps, std::size(kRefillSteps), c.matchRefill, direction);
+            else return;
+            SaveSettings({ { "match_health", std::to_string(c.matchHealth) }, { "match_aura", std::to_string(c.matchAura) },
+                           { "match_refill", std::to_string(c.matchRefill) } });
+            RefreshCustomRows();
+            Log(L"gamepatch: Custom Settings: health %d, Aura %d, refill x%.1f%s", c.matchHealth, c.matchAura, c.matchRefill / 10.0,
+                OwnMatch().Custom() ? L" (Unrated)" : L" (defaults)");
+            scores::PublishMatchSettings();
+        }
+
+        // The lobby (menu 44): A on its Options window (window 4) third row, Custom Settings, opens the Settings screen as
+        // Custom Settings (as the Arsenal editor opens from the lobby: the red hand is on, so the match can't start).
+        constexpr int kLobbyOptionsWindow = 4, kCustomSettingsRow = 2;
+        void OpenCustomSettings(int64_t manager)
+        {
+            Log(L"gamepatch: Custom Settings opened from the lobby (%s)", g_matchMine ? L"this PC hosts: it can change them" : L"the host's, to look at");
+            SetLobbyAvailable(false);
+            g_openingCustom = true;
+            *At(0x1404bbc34) = 0; // as the script's own "open menu" command does
+            g_pushMenu(manager, kSettingsMenuId, 0);
+        }
+
         int64_t HookedOptionChanged(int32_t* args)
         {
             if (args && CurrentMenu(MenuManager()) == kStartMenu) return LogoWait(args);
@@ -2210,6 +2319,18 @@ namespace pdnet::gamepatches
                     int64_t sound[2] = { 0, 0 };
                     reinterpret_cast<InputFn>(At(0x140261750))(sound); // the menu's select sound
                     Log(L"theatre: film %s chosen (%S, %S) - playback isn't built yet", g_films[pick].file.c_str(), g_films[pick].when.c_str(), g_films[pick].players.c_str());
+                }
+                return 0;
+            }
+            if (g_customMatch)
+            {
+                static ULONGLONG last = 0;
+                if (row >= 0 && row < kCustomRows && GetTickCount64() - last > 120)
+                {
+                    last = GetTickCount64();
+                    int64_t sound[2] = { 37, 0 };
+                    reinterpret_cast<InputFn>(At(0x140261750))(sound);
+                    ChangeCustom(row, (buttons & 0x00040004) ? -1 : 1);
                 }
                 return 0;
             }
@@ -2423,6 +2544,24 @@ namespace pdnet::gamepatches
         int64_t HookedButtons(int64_t* args)
         {
             int64_t buttons = g_buttons(args);
+            if ((buttons & 0x1010) && (!args || args[0] == 0) && g_pushMenu && CurrentMenu(MenuManager()) == kLobbyMenu)
+            {
+                int64_t manager = MenuManager();
+                int window = *reinterpret_cast<int16_t*>(manager + 0x10402);
+                int16_t* w = window == kLobbyOptionsWindow ? WindowAt(manager, window) : nullptr;
+                static ULONGLONG lastOpen = 0;
+                // The Options window has 6 or more rows (the player list 4): its cursor is +0x12, its row count +0x16.
+                if (w && w[0x12 / 2] == kCustomSettingsRow && w[0x16 / 2] >= 5 && GetTickCount64() - lastOpen > 500)
+                {
+                    lastOpen = GetTickCount64();
+                    int64_t sound[2] = { 0, 0 };
+                    reinterpret_cast<InputFn>(At(0x140261750))(sound);
+                    OpenCustomSettings(manager);
+                    return buttons & ~0x1010ll;
+                }
+                if (w && w[0x12 / 2] == kCustomSettingsRow && w[0x16 / 2] >= 5) return buttons & ~0x1010ll;
+            }
+            if (InSettings() && g_customMatch) return buttons & ~0x1010ll; // A: nothing (changes are kept as made)
             if (InSettings() && g_theatre && (!args || args[0] == 0))
             {
                 static bool held[2] = {};
@@ -2489,7 +2628,7 @@ namespace pdnet::gamepatches
         // The button bar (menu command 88 with 2, text): the Options screen's "Change / Back" gets "A Save".
         int64_t HookedButtonBar(int64_t* args)
         {
-            const char* kSave = g_theatre ? kTheatreBar : g_confirmingSave ? kConfirmBar : kNormalBar;
+            const char* kSave = g_customMatch ? (g_matchMine ? kCustomBar : kCustomViewBar) : g_theatre ? kTheatreBar : g_confirmingSave ? kConfirmBar : kNormalBar;
             char text[64];
             if (args && args[0] == 1 && CopyString(reinterpret_cast<const char*>(args[1]), text, sizeof(text)) && strcmp(text, "LOADING") == 0 &&
                 CurrentMenu(MenuManager()) == kLobbyMenu && !g_matchLoadingSince)
@@ -2509,6 +2648,17 @@ namespace pdnet::gamepatches
         {
             bool rows = strcmp(added, "\a160wVoice Chat\f\a1#\a230c%s\f\a0#") == 0, hints = strcmp(added, "Set your voice chat status.") == 0;
             if (!rows && !hints) return false;
+            if (g_customMatch)
+            {
+                RefreshCustomRows();
+                for (int r = 0; r < kCustomRows; ++r)
+                {
+                    int64_t item[8] = { reinterpret_cast<int64_t>(rows ? g_customRow[r] : g_customHint[r]) };
+                    g_addItem(item);
+                }
+                if (rows) Log(L"gamepatch: Custom Settings: %d rows", kCustomRows);
+                return true;
+            }
             if (g_theatre)
             {
                 if (rows) RefreshFilmRows();
@@ -2540,9 +2690,11 @@ namespace pdnet::gamepatches
         {
             if (menu != kSettingsMenu) return;
             int texts = RelabelScript(script, kSettingsTexts, std::size(kSettingsTexts)), patched = PatchSettingsScript(script);
-            static constexpr Relabel kToTheatre[] = { { "ONLINE SETTINGS", "THEATRE" } }, kToSettings[] = { { "THEATRE", "ONLINE SETTINGS" } };
+            static constexpr Relabel kToTheatre[] = { { "ONLINE SETTINGS", "THEATRE" } }, kToCustom[] = { { "ONLINE SETTINGS", "CUSTOM SETTINGS" } },
+                kToSettings[] = { { "THEATRE", "ONLINE SETTINGS" }, { "CUSTOM SETTINGS", "ONLINE SETTINGS" } };
+            RelabelScript(script, kToSettings, std::size(kToSettings));
             if (g_theatre) RelabelScript(script, kToTheatre, 1);
-            else RelabelScript(script, kToSettings, 1);
+            else if (g_customMatch) RelabelScript(script, kToCustom, 1);
             if (fresh) Log(L"gamepatch: Settings menu (was Xbox Live Options): %d text(s), A button %s", texts, patched ? L"changes settings" : L"left as it is (script not as expected)");
         }
 
@@ -5104,6 +5256,7 @@ namespace pdnet::gamepatches
         std::call_once(once, []
         {
             labtests::Install(); // Conceptual branch only
+            Log(L"gamepatch: Custom Settings: starting health and Aura %s", HookCall(0x14024e901, 0x14024d020, reinterpret_cast<void*>(&HookedPlayerStatus)) ? L"hooked" : L"NOT hooked");
             film::Start();       // Conceptual branch only: Theatre films
             {
                 bool player = HookCall(0x1402148da, 0x14014f830, reinterpret_cast<void*>(&HookedDeck));
@@ -5259,4 +5412,46 @@ namespace pdnet::gamepatches
     }
 
     void UseOwnSettings() { SetNametagsOnBodies(GetConfig().nametagsOnBodies, L"this PC's pdnet.ini"); }
+
+    std::string MatchSettingsAttribute()
+    {
+        const Config& c = GetConfig();
+        return std::to_string(c.matchHealth) + "," + std::to_string(c.matchAura) + "," + std::to_string(c.matchRefill);
+    }
+
+    void SetHostMatchSettings(const std::string& attribute, bool mine)
+    {
+        MatchSettings s;
+        int h = 20, a = 0, r = 10;
+        if (sscanf_s(attribute.c_str(), "%d,%d,%d", &h, &a, &r) == 3) s = { (std::clamp)(h, 5, 99), (std::clamp)(a, 0, 10), (std::clamp)(r, 5, 20) };
+        bool changed;
+        {
+            std::lock_guard guard(g_matchLock);
+            changed = mine != g_matchMine || s.health != g_hostMatch.health || s.aura != g_hostMatch.aura || s.refill != g_hostMatch.refill;
+            g_hostMatch = s;
+            g_matchMine = mine;
+        }
+        if (changed)
+        {
+            MatchSettings m = MatchSettingsInUse();
+            Log(L"gamepatch: Custom Settings in use: health %d, Aura %d, refill x%.1f (%s)%s", m.health, m.aura, m.refill / 10.0,
+                mine ? L"this PC hosts the lobby" : L"the lobby host's", m.Custom() ? L" - Unrated" : L"");
+        }
+    }
+
+    MatchSettings MatchSettingsInUse()
+    {
+        if (g_matchMine) return OwnMatch();
+        std::lock_guard guard(g_matchLock);
+        return g_hostMatch;
+    }
+
+    void MatchStarted()
+    {
+        MatchSettings m = MatchSettingsInUse();
+        if (TestBattle() || *reinterpret_cast<volatile int32_t*>(At(0x1404bc9d4)) < 4 || m.refill == 10) return; // online matches only (game mode 4, 5)
+        float* rates = reinterpret_cast<float*>(At(0x1404bc958));
+        for (int s = 0; s < 4; ++s) rates[s] *= m.refill / 10.0f;
+        Log(L"gamepatch: Custom Settings: Aura refill x%.1f on every player (%.2f %.2f %.2f %.2f)", m.refill / 10.0, rates[0], rates[1], rates[2], rates[3]);
+    }
 }

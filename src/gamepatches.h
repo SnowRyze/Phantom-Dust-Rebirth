@@ -23,6 +23,21 @@ namespace pdnet::gamepatches
     void SetNametagsOnBodies(bool on, const wchar_t* why);
     void UseOwnSettings();
 
+    // Lobby Custom Settings (Conceptual branch; the lobby Options menu's Gamertag row): starting health, starting Aura
+    // and an Aura refill multiplier (x10) that the lobby host sets for everyone. xsapi/mpsd.cpp publishes this PC's as
+    // the member attribute PD_MATCH ("health,aura,refill") and hands every PC the host's (SetHostMatchSettings; `mine`:
+    // this PC hosts, or there is no host value). Any value off its default makes the match Unrated.
+    struct MatchSettings
+    {
+        int health = 20, aura = 0, refill = 10;
+        bool Custom() const { return health != 20 || aura != 0 || refill != 10; }
+    };
+    std::string MatchSettingsAttribute(); // this PC's own, as PD_MATCH
+    void SetHostMatchSettings(const std::string& attribute, bool mine);
+    MatchSettings MatchSettingsInUse();
+    // A battle has started (labtests' camera hook): the Aura refill multiplier goes on every player's rate.
+    void MatchStarted();
+
     // The lobby's invite button (no Xbox Live invites any more) opens the Arsenal editor; leaving it returns to the
     // lobby. Returns false when not in the lobby menu (or the menu hooks aren't installed).
     bool OpenLobbyArsenalEditor();

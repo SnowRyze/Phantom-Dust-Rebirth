@@ -161,6 +161,19 @@ Rebirth's metadata only, and `touches` is worked out from the paths at every sca
 - 2026-11-16: mod loader code plan written (docs\MOD_LOADER_CODE.md). No code yet.
 - 2026-11-16: Mod loader and mod menu: plan written (above); pdnet loads mods itself, not PDPL (the user's call). Read-only, no kit built.
 (Newest first: what was tried, what happened.)
+- 2026-11-19: Lobby Custom Settings, first version (not tried in the game). The user's choices: the lobby Options
+  menu's Gamertag row becomes Custom Settings; health 5-99 (default 20), starting Aura 0-10 (0), Aura refill x0.5 / x1 /
+  x1.5 / x2 (x1); anything off the defaults makes the match Unrated (until a Tournament scoreboard exists).
+  - Menu: HookedAddItem renames "$GAMERTAG" in the lobby (menu 44). A on the lobby's Options window (window 4, 5+ rows)
+    row 2 is kept from the script and opens the Settings screen (68) as Custom Settings (g_openingCustom ->
+    g_customMatch in HookedPushMenu; the red hand on, as for the lobby's Arsenal editor). Three rows; left / right
+    change them when this PC hosts (saved as match_health / match_aura / match_refill, and sent to the lobby at once),
+    the others see the host's. Title CUSTOM SETTINGS, A does nothing, Back returns to the lobby.
+  - Lobby: member attribute PD_MATCH "health,aura,refill" (MemberAttributes, and scores::PublishMatchSettings on a
+    change); ApplyHostRules hands every PC the host's (SetHostMatchSettings). A host without it plays the defaults.
+  - Match: HookCall at 0x14024e901 (FUN_14024e790's FUN_14024d020 call) swaps in the health and Aura for each player's
+    main status record in online matches (game mode 4, 5); at battle start (labtests) DAT_1404bc958[0..3] *= refill.
+    The rating hook gives 0 when the settings in use aren't the defaults.
 - 2026-11-19: Lobby match settings, research (nothing built). Starting health and Aura: FUN_14024e790 sets up each
   player's status record with FUN_14024d020(record, object, 1, health, aura, ...), which writes health to +0xc, +0x10
   (max), +0x14 and Aura to +0x18 (int) and +0x1c (float). For a human player both come from gsdata's rule table:
