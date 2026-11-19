@@ -100,6 +100,8 @@ Ideas, not planned (notes in the change log and reference notes):
 
 ## November 2026
 
+Theater button bar (2026-11-21, Experimental 189, the user's request): the bar now shows the Y icon with Delete (kTheatreBar: Select, A Watch, Y Delete, B Back; the Y icon is the bar code the character select uses for Y Advanced).
+
 Theater: delete a film (2026-11-21, Experimental 188, the user's request; not yet tried). On the Theater list, Y (pad) or the Delete key on a film's row asks on that row ("Delete this film? Y again"); Y / Delete again within 5 s deletes the file (film::Delete, logged "film: ... deleted by the player"); moving to another row or waiting puts the row back. The list then closes up (page kept in range). Each film's hint says "Y / Delete: delete it." TheatreDelete runs from HookedButtons' Theater part.
 
 Films only of online matches (2026-11-21, Experimental 187, a player's report: "if u go to lab and it shows u the skills used ... it creates a replay for theater mode"). The film watcher opened a film for any game state other than 0 / 13, so the Lab's skill preview (pdnet's town session, game mode 0) and debug-menu battles made films with no match traffic (e.g. "film-00007 ... 0 KB of packets" in Jason's log). Films now open only in game modes 4 (host) / 5 (joiner) (0x1404bc9d4), and film::List leaves out closed films whose packet bytes are 0, so the empty ones already saved no longer show in the Theater.

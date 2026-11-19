@@ -1959,7 +1959,8 @@ namespace pdnet::gamepatches
         char g_filmRow[kTheatreRows][112];
         char g_filmHint[kTheatreRows][160];
         int g_filmRows = 0, g_filmPage = 0;
-        const char* kTheatreBar = "\a8#Select \a2#Watch \a580r\a3#Back";
+        // \a5# is the Y icon (the character select's "Y Advanced"), \a2# A, \a3# B.
+        const char* kTheatreBar = "\a8#Select \a2#Watch \a580r\a5#Delete \a3#Back";
 
         void StartFilmBattle(const film::Info& f); // (below)
         int FilmPages() { return g_films.empty() ? 1 : static_cast<int>((g_films.size() + kTheatreRows - 1) / kTheatreRows); }
