@@ -47,8 +47,8 @@ yet. Newer work goes into Experimental builds first.
 - Dead camera: once you're down for 3 s, watch the players still standing (in Tag Team only your partner) or fly a
   free camera. You turn it yourself, with your own Up/Down and Right/Left settings *(not yet confirmed)*.
 - Theatre (Theater in the multiplayer menu): every online match is saved as a film to watch again, with pause, slow
-  motion, fast forward, the player cam or a flying cam, and each player's own camera tilt (X turns it on or off)
-  *(newest parts not yet confirmed)*.
+  motion, fast forward, the player cam or a flying cam, and each player's own camera tilt (X turns it on or off).
+  Films can be deleted (Y twice) *(newest parts not yet confirmed)*.
 
 **Arsenal Lab**
 - Arsenal cases follow the arsenal: 1, 2 or 3 schools, up to 3, so the case type and Aura rate always match the skills
@@ -59,11 +59,27 @@ yet. Newer work goes into Experimental builds first.
   there no longer freezes it.
 - Max Credits & Skills in the shop: up to 5,000,000 credits and 80 of every skill, DLC included.
 
+**Character select** *(new in Stable 16, not yet confirmed)*
+- X switches between the players and the monsters, with a portrait for every monster.
+- Y opens the Advanced list: every player character plus Germano, Belono and the story's NPCs (Ai, Mikan, Mac,
+  Baroness and others), in pages (LB / RB or Q / E). After picking one you choose its colour, its movement (jump or
+  dodge) and its animation set; pdnet builds that character from the game's own files.
+- Advanced picks work online: each player's pick is shared through the lobby and built on every PC, with its own
+  lobby banner, and Theatre films keep them.
+
+**Mods** *(new in Stable 16, not yet confirmed)*
+- Mods load through Torphedo's PDPL mod loader, which comes with the kit.
+- The Mods list (in the multiplayer menu, where Quick Join was) turns mods on and off and sets their order. It shows
+  your own mods and the ones from Rebirth's mod catalog; catalog mods download and update at the next game start.
+- A lobby carries its host's mods: a player whose mods differ is told, and the game sets their next start to the
+  lobby's mods. Modded lobbies are Unrated.
+- Mods can change skill data, and map mods show up as new maps in the map picker, with their previews.
+
 **Menus**
 - "Rebirth" title artwork and the build version on the main menu.
 - Community (Discord) button in place of Help & Support; How to Play opens phantomdust.online.
 - "Xbox Live" reads "Online"; the multiplayer menu has Online Settings (name, voice, nametags, Discord posts, partner
-  aim), Theater, and the Online Store is gone.
+  aim), Theater, the Mods list, and the Online Store is gone.
 - Options: Send Log (sends your logs to the developers), Updates (Stable, Experimental or Off), and in Sound, Aura
   Particle Beeps and Skill Preview Sound.
 - Character select shows each colour's name instead of COLOR 1-4.
