@@ -257,11 +257,26 @@ directly with one address per script argument, a PowerShell wrapper passing arra
   answer 0x39 with 1 for it.
 - Story mission pictures are Menu\Mpt###.alr (256x256 DXT5); the multiplayer previews are 254x112 strips on MNet.alr's
   mnet0410 (7) and mnet0420 (4, room for about 2 more), DXT1. How the picker picks a strip is still to be found.
-- Prebake pieces: a generated stageset_en.dat (and _ja) with entries 30+ (map numbers from 40 up, flag 1), each map
+- **The map picker (livestagesel, menu 47; menu_debug=47 run, Conceptual 51):** menu command 87 is the stage query
+  command (87(kind, index), kinds as above: 54 map number, 56 flag, 57 unlocked, 51 name). The script walks a fixed
+  order, location by location with three variants each: 3 13 23, 2 12 22, 4 14 24, 5 15 25, 6 16 26, 7 17, 8; it keeps
+  the stages with the multiplayer flag and adds each with menu command 59(100 + index, name, list position, index).
+  **Indices 30 and up are never visited.** The preview is menu command 18(3 = the MNet sheet, sprite, 48, 261) when the
+  cursor moves (55 / 7): sprite 49-55 for stages 2-8, 56-61 for 12-17, 62-65 for 22, 23, 25, 26 (one per map, 17; so
+  previews are on more than the two strip sheets, mnet0400 too). Menu 18(3, 37, 24, 49) is the frame.
+- **What new slots need from pdnet, in menu 47:** (1) after the script's last command 59, add an item per custom stage
+  (30+, flag 1) the same way; (2) answer command 87 kind 57 (unlocked) with 1 for them; (3) when the cursor is on one,
+  draw its preview instead of the script's command 18 (how: sprites added to MNet's sprite list, or a texture of its
+  own; the sprite list's location is the next thing to find); (4) check the script's pick handler turns item 100 + index
+  into the pick (g4 #576) for any index. Lobbies: both PCs have the same stage list when their mods match (PD_MODS).
+  Also to check: anything else keyed by map number (BGM, AI navigation com/stNN for AI battles).- Prebake pieces: a generated stageset_en.dat (and _ja) with entries 30+ (map numbers from 40 up, flag 1), each map
   mod's .alr / .dat served as Assets/Data/Map/st40.alr / .dat, previews added to an MNet sheet, and pdnet answering
   the unlocked query. Still to check: the picker's preview choice (next: a run with menu_debug=on through the picker),
   and anything else keyed by map number (BGM, AI navigation com/stNN, lighting, intro camera stNNcam.alr: not needed).
 ## Log
+- 2026-11-21: Map picker run with menu_debug=47 (the user, Conceptual 51; menus fine this time): the picker lists stages
+  from a fixed location order (indices 30+ never visited), adds item 100 + index, and draws one MNet sprite per map
+  (49-65) as the preview. Notes in "New map slots". menu_debug removed from settings.ini again.
 - 2026-11-21: menu_debug fixed (Conceptual 51). Turning menu_debug=on for the map picker research broke every pdnet menu
   feature (the user: "everything menu related is broken"): MenuDebug replaced all 136 + 196 menu / session command table
   entries early, so each later WrapCommand found unexpected code and skipped (Mods name, Settings save, Lab rows, Sound,
