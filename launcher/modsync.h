@@ -4,7 +4,8 @@
 // at game start. So the enabled mods are copied there as "!rb000-<id>.zip", "!rb001-..." in priority order ("!" sorts
 // before letters and digits, so they come before the player's own archives), and the player's own archives that are
 // turned off wait in RoamingState\mods\disabled\. PDPL's 1.2.2 DLL exports nothing, so pdnet can't look inside archives
-// through it; pdlaunch runs outside the game's sandbox and reads them with Windows' tar.exe.
+// through it; pdlaunch runs outside the game's sandbox and reads them: .zip with Windows' tar.exe, .7z with 7-Zip when
+// it's installed (tar.exe can't read .7z). An archive it can't read still goes to PDPL, just without its details.
 #include <string>
 
 namespace modsync

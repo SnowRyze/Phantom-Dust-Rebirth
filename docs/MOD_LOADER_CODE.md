@@ -18,8 +18,9 @@ call its PhysicsFS functions: the live remount (sections 5.2-5.3, step 3) waits 
 
 **Step 2 as built (2026-11-19): in pdlaunch, not pdnet** (`launcher/modsync.cpp`). Without PDPL exports pdnet can't look
 inside archives, but pdlaunch runs outside the game's sandbox before PDPL loads, so it does sections 5.4-5.5 and 6.2-6.5
-itself at every start: scans the three folders, lists each archive and reads its `pdmod.json` with Windows' `tar.exe`
-(cached in `LocalState\pdnet\modinfo\`), applies `mods_order` / `mods_enabled`, copies the enabled Catalog / Local
+itself at every start: scans the three folders, lists each archive and reads its `pdmod.json` (`.zip` with Windows'
+`tar.exe`; `.7z` with 7-Zip when it's installed, found through its registry entry, since `tar.exe` can't read `.7z`;
+a `.7z` without 7-Zip still goes to PDPL, just without its details; cached in `LocalState\pdnet\modinfo\`), applies `mods_order` / `mods_enabled`, copies the enabled Catalog / Local
 mods into PDPL's folder as `!rb000-<id>.zip` ... (copies, not hard links: a copy gets the folder's permissions, so a mod
 the player moved instead of copied still works; a copy is only made again when the source's size or time changes),
 moves the player's own archives to and from `disabled\`, and writes `LocalState\pdnet\mods-state.txt` (every mod in

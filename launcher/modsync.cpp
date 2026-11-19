@@ -218,6 +218,61 @@ namespace modsync
             return std::wstring(system) + L"\\tar.exe";
         }
 
+        // 7-Zip's 7z.exe, if it's installed (its installer writes Software\7-Zip Path64 / Path), else "". Windows' tar.exe
+        // can't read .7z at all ("LZMA codec is unsupported"), so .7z mods need it for their details; PDPL reads them anyway.
+        const std::wstring& SevenZip()
+        {
+            static std::wstring exe = []
+            {
+                for (HKEY root : { HKEY_CURRENT_USER, HKEY_LOCAL_MACHINE })
+                    for (const wchar_t* value : { L"Path64", L"Path" })
+                    {
+                        wchar_t dir[MAX_PATH] = {};
+                        DWORD size = sizeof(dir);
+                        if (RegGetValueW(root, L"Software\\7-Zip", value, RRF_RT_REG_SZ | RRF_SUBKEY_WOW6464KEY, nullptr, dir, &size) != ERROR_SUCCESS) continue;
+                        std::wstring path = dir;
+                        if (!path.empty() && path.back() != L'\\') path += L'\\';
+                        if (Exists(path + L"7z.exe")) return path + L"7z.exe";
+                    }
+                wchar_t programs[MAX_PATH] = {};
+                if (GetEnvironmentVariableW(L"ProgramFiles", programs, MAX_PATH) && Exists(std::wstring(programs) + L"\\7-Zip\\7z.exe"))
+                    return std::wstring(programs) + L"\\7-Zip\\7z.exe";
+                return std::wstring();
+            }();
+            return exe;
+        }
+
+        // The archive's entries (folders left out), as the tool names them. False if the tool couldn't read it.
+        bool ListEntries(const std::wstring& archive, bool sevenZip, std::vector<std::string>& entries)
+        {
+            std::string out;
+            if (!sevenZip)
+            {
+                if (!RunCapture(L"\"" + Tar() + L"\" -tf \"" + archive + L"\"", 30000, out)) return false;
+                for (const auto& line : Split(out, '\n'))
+                    if (!line.empty() && line.back() != '/') entries.push_back(line);
+                return true;
+            }
+            // 7z l -slt: a block per entry, "Path = ..." first; folders have "Folder = +" (zip) or "Attributes = D..." (7z).
+            if (!RunCapture(L"\"" + SevenZip() + L"\" l -slt -ba -sccUTF-8 \"" + archive + L"\"", 30000, out)) return false;
+            std::string path;
+            bool folder = false;
+            auto flush = [&] { if (!path.empty() && !folder) entries.push_back(path); path.clear(); folder = false; };
+            for (const auto& line : Split(out, '\n'))
+            {
+                if (line.rfind("Path = ", 0) == 0) { flush(); path = line.substr(7); }
+                else if (line == "Folder = +" || line.rfind("Attributes = D", 0) == 0) folder = true;
+            }
+            flush();
+            return true;
+        }
+
+        bool ReadEntry(const std::wstring& archive, bool sevenZip, const std::string& entry, std::string& out)
+        {
+            if (!sevenZip) return RunCapture(L"\"" + Tar() + L"\" -xOf \"" + archive + L"\" \"" + Wide(entry) + L"\"", 30000, out);
+            return RunCapture(L"\"" + SevenZip() + L"\" e -so -sccUTF-8 \"" + archive + L"\" \"" + Wide(entry) + L"\"", 30000, out);
+        }
+
         // ---- pdmod.json: flat strings and string arrays are all it has ----
 
         size_t SkipBlank(const std::string& j, size_t i)
@@ -379,23 +434,32 @@ namespace modsync
             WriteText(file, t);
         }
 
-        // Lists the archive and reads its pdmod.json with tar.exe (Windows 10 1803 and later; reads .zip, and .7z as far as
-        // its libarchive can). Fills id (from pdmod.json; the caller settles it), name, ..., files.
+        // Lists the archive and reads its pdmod.json: .zip with Windows' tar.exe (Windows 10 1803 and later), .7z with
+        // 7-Zip if it's installed (and a .zip tar can't read). Fills id (from pdmod.json; the caller settles it), name, ...,
+        // files. Archives that can't be read aren't cached, so installing 7-Zip later fills them in.
         void Inspect(Mod& m, const std::wstring& cacheDir)
         {
             std::wstring cache = CachePath(cacheDir, m);
             if (LoadCache(cache, m)) return;
-            std::string listing;
-            if (!RunCapture(L"\"" + Tar() + L"\" -tf \"" + m.path + L"\"", 30000, listing))
+            std::vector<std::string> entries;
+            bool sevenZip = m.ext == L".7z";
+            bool listed = false;
+            if (!sevenZip) listed = ListEntries(m.path, false, entries);
+            if (!listed && !SevenZip().empty())
             {
-                m.problem = "couldn't be read (tar)";
-                g_log(L"mods: %s: tar couldn't list it - PDPL may still read it", m.file.c_str());
+                entries.clear();
+                sevenZip = true;
+                listed = ListEntries(m.path, true, entries);
+            }
+            if (!listed)
+            {
+                m.problem = m.ext == L".7z" && SevenZip().empty() ? "7z: install 7-Zip to see its details (PDPL still loads it)" : "couldn't be read";
+                g_log(L"mods: %s: %S", m.file.c_str(), m.problem.c_str());
                 return;
             }
             std::string manifestEntry;
-            for (const auto& raw : Split(listing, '\n'))
+            for (const auto& raw : entries)
             {
-                if (raw.empty() || raw.back() == '/') continue; // folders
                 std::string p = GamePath(raw);
                 if (p.empty() || p.find("..") != std::string::npos) continue;
                 if (p == "pdmod.json") manifestEntry = raw;
@@ -404,7 +468,7 @@ namespace modsync
             if (!manifestEntry.empty())
             {
                 std::string json;
-                if (RunCapture(L"\"" + Tar() + L"\" -xOf \"" + m.path + L"\" \"" + Wide(manifestEntry) + L"\"", 30000, json))
+                if (ReadEntry(m.path, sevenZip, manifestEntry, json))
                 {
                     m.id = JsonGetString(json, "id");
                     m.name = JsonGetString(json, "name");
@@ -420,7 +484,7 @@ namespace modsync
             }
             m.read = true;
             SaveCache(cache, m);
-            g_log(L"mods: %s: %zu files%s", m.file.c_str(), m.files.size(), manifestEntry.empty() ? L", no pdmod.json" : L"");
+            g_log(L"mods: %s: %zu files%s (read with %s)", m.file.c_str(), m.files.size(), manifestEntry.empty() ? L", no pdmod.json" : L"", sevenZip ? L"7-Zip" : L"tar");
         }
 
         // settings.ini key (the last line wins), and whether it was there at all.
@@ -477,7 +541,8 @@ namespace modsync
         std::wstring pdplDir = roaming + L"\\mods", disabledDir = pdplDir + L"\\disabled", localDir = pdnetDir + L"\\mods",
                      storeDir = pdnetDir + L"\\modstore", cacheDir = pdnetDir + L"\\modinfo";
         for (const auto& d : { pdnetDir, roaming, pdplDir, disabledDir, localDir, cacheDir }) CreateDirectoryW(d.c_str(), nullptr);
-        if (!Exists(Tar())) log(L"mods: %s not found - archives can't be read (names and conflicts unknown)", Tar().c_str());
+        if (!Exists(Tar())) log(L"mods: %s not found - .zip details can't be read (names and conflicts unknown)", Tar().c_str());
+        log(L"mods: .7z details: %s", SevenZip().empty() ? L"7-Zip isn't installed (PDPL still loads .7z mods)" : SevenZip().c_str());
 
         // ---- find the mods ----
         std::vector<Mod> mods;
@@ -612,7 +677,7 @@ namespace modsync
         std::vector<std::unordered_set<std::string>> sets;
         std::vector<const Mod*> on;
         for (const auto& m : mods)
-            if (m.enabled && (m.problem.empty() || m.problem.rfind("couldn't be read", 0) == 0))
+            if (m.enabled && (m.problem.empty() || m.problem.rfind("couldn't be read", 0) == 0 || m.problem.rfind("7z:", 0) == 0))
             {
                 on.push_back(&m);
                 std::unordered_set<std::string> s;

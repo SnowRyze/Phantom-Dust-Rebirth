@@ -151,6 +151,10 @@ Rebirth's metadata only, and `touches` is worked out from the paths at every sca
 8. Catalog plugins.
 
 ## Log
+- 2026-11-19: Mod loader .7z details (Conceptual 43): Windows' tar.exe can't read .7z ("LZMA codec is unsupported", LZMA2
+  and PPMd alike), so pdlaunch reads .7z with 7-Zip when it's installed (registry Software\7-Zip Path64 / Path, or
+  Program Files\7-Zip), and zips tar can't read too. Without 7-Zip a .7z still goes to PDPL, without name, files or
+  conflicts. Tested with pdlaunch -syncmods: two .7z mods read, ids kept unique, conflicts counted. Not yet tried in the game.
 - 2026-11-19: Mod loader step 2 (Conceptual 42): pdlaunch keeps PDPL's mods folder in step with the mod list at every
   start (launcher\modsync.cpp): mods from LocalState\pdnet\mods (Local), LocalState\pdnet\modstore\<id> (catalog, for
   later) and RoamingState\mods (the player's own); each archive listed and its pdmod.json read with tar.exe (cached in
