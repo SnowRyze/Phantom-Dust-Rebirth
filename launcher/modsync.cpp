@@ -1043,6 +1043,20 @@ namespace modsync
             m.inDisabled = inDisabled;
             if (!FileInfo(m.path, m.size, m.mtime)) return;
             Inspect(m, cacheDir);
+            // PDPL itself (its release zip, pdpl.zip, put in a mods folder by a player): it comes with the kit, so it isn't a
+            // mod. It showed in the Mods list (the user, 2026-11-22). Left out: not listed, not copied into PDPL's folder.
+            {
+                std::wstring lower = name;
+                for (auto& c : lower) c = static_cast<wchar_t>(towlower(c));
+                bool loader = lower.rfind(L"pdpl", 0) == 0 || lower.find(L"pd_loader") != std::wstring::npos;
+                for (const auto& f : m.files)
+                    if (f.size() >= 18 && f.compare(f.size() - 18, 18, "pd_loader_core.dll") == 0) loader = true;
+                if (loader)
+                {
+                    log(L"mods: %s is PDPL itself (the kit has it) - not a mod, left out", name.c_str());
+                    return;
+                }
+            }
             if (source == Source::Catalog) m.id = catalogId;
             if (m.id.empty())
             {

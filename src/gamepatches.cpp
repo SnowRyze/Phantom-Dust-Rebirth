@@ -7813,11 +7813,33 @@ namespace pdnet::gamepatches
         }
     }
 
+    namespace
+    {
+        // The game keeps running while its window is hidden (the user, 2026-11-22: alt-tabbed players hung others' joins
+        // and, after a while, got players dropped from the lobby). The game's main loop (FUN_1400087c0, the usual Store
+        // app loop) only updates the game while its "window visible" flag (+0x41, set from CoreWindow's VisibilityChanged)
+        // is on; hidden, it just waits for window events (ProcessEvents(ProcessOneAndAllPending)), so its network went
+        // quiet too. The jump at 0x140008881 (jnz: visible -> update) becomes a plain jump: it always updates.
+        void RunWhileHidden()
+        {
+            const std::vector<uint8_t> expected = { 0x80, 0x7b, 0x41, 0x00, 0x75, 0x57 }; // cmp byte [rbx+0x41], 0 / jnz +0x57
+            uint8_t* site = At(0x14000887d);
+            if (memcmp(site, expected.data(), expected.size()) != 0)
+            {
+                Log(L"gamepatch: running while hidden skipped - the game code is not what this pdnet expects");
+                return;
+            }
+            bool ok = Write(site + 4, { 0xeb });
+            Log(L"gamepatch: the game keeps running while its window is hidden (alt-tab, minimized)%s", ok ? L"" : L" - FAILED");
+        }
+    }
+
     void Apply()
     {
         static std::once_flag once;
         std::call_once(once, []
         {
+            RunWhileHidden();
             WatchPeerDrops();
             labtests::Install(); // the dead camera and Theatre playback
             film::Start();       // Theatre films: every online match is recorded
@@ -7976,6 +7998,13 @@ namespace pdnet::gamepatches
     }
 
     bool TestBattle() { return AiBattle(); }
+
+    bool LobbyBrowserOpen()
+    {
+        int64_t manager = MenuManager();
+        int menu = manager ? CurrentMenu(manager) : -1;
+        return menu == 38 || menu == 43;
+    }
 
     void ModLobbyRefused()
     {
