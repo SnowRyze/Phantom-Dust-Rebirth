@@ -63,7 +63,7 @@ yet. Newer work goes into Experimental builds first.
 - "Rebirth" title artwork and the build version on the main menu.
 - Community (Discord) button in place of Help & Support; How to Play opens phantomdust.online.
 - "Xbox Live" reads "Online"; the multiplayer menu has Online Settings (name, voice, nametags, Discord posts, partner
-  aim), Theater and Importer, and the Online Store is gone.
+  aim), Theater, and the Online Store is gone.
 - Options: Send Log (sends your logs to the developers), Updates (Stable, Experimental or Off), and in Sound, Aura
   Particle Beeps and Skill Preview Sound.
 - Character select shows each colour's name instead of COLOR 1-4.

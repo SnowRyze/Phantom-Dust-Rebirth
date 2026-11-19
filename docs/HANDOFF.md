@@ -75,7 +75,6 @@ Not yet confirmed in the game (each has its change log note):
 - Cross lag after a short link outage: quiet peers kept while their link is open (183). Every player needs 183 or newer.
 - Theatre: the players' camera tilt and its X toggle (178 / 179), capsule spots (180), characters (181), a film no longer carrying into the next match (182).
 - Dead camera: your own inversion options (178), only the watcher turns it in real matches (184).
-- The multiplayer menu's new order with Importer (Experimental 174).
 - B button: skipping start-up logos and cut-scene movies, leaving a hung match load after 30 s (120).
 
 Test steps for the older items (from the October "waiting for testers" list):
@@ -100,6 +99,8 @@ Ideas, not planned (notes in the change log and reference notes):
 # Change log (newest first)
 
 ## November 2026
+
+Multiplayer menu order reverted (2026-11-21, Experimental 185, the user's request): 174's MultiplayerOrder (Quick Join held back and added after Theater as "Importer", and the pick remap in CheckSendLogPick) is removed. The menu is the game's own order again with pdnet's renames: Quick Join, Lobby Browser, Create Match, Theater, Shop, Lab, Scoreboard, Online Settings.
 
 Stable 15 (2026-11-19): Experimental 184 promoted at the user's request (build.bat promote 184; tag stable-15 = master 19b8103). The release has PhantomDust-Rebirth-Stable-15-PC.zip and pdnet-update-184.zip ("DO NOT DOWNLOAD" label); the Flatpak workflow builds the Linux file for it. Since Stable 14: the dead camera and the Theatre (pull request 13, 173-182), Theatre films of online matches with tilt, capsule spots and characters, the multiplayer menu order with Importer (174), 16-character names (171), the skill preview diagnostics (172 / 173), the cross lag fix (183) and the dead camera turned only by the watcher (184).
 
