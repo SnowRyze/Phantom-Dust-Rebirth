@@ -107,6 +107,9 @@ namespace pdnet::labtests
         // Following: the view stays on the watched player, as a player's own camera does, but can be swung round them and
         // up / down (right stick, or Q E and R F); a click of the right stick (or C) puts it back behind them.
         float g_orbitYaw = 0, g_orbitPitch = 0;
+        // Dead camera in a real match (the user, 2026-11-19): only the watcher turns it. The way it faces is taken from the
+        // followed player once (when following starts, on a switch or a reset) and doesn't follow their turning after that.
+        bool g_retakeTurn = true;
         ULONGLONG g_orbitLast = 0;
 
         // Theatre film controls (the user's Halo 3 film-controls card, 2026-11-14), each with a key:
@@ -294,7 +297,7 @@ namespace pdnet::labtests
                     reset = reset || keys['C'];
                 }
             }
-            if (reset) { g_orbitYaw = g_orbitPitch = 0; return; }
+            if (reset) { g_orbitYaw = g_orbitPitch = 0; g_retakeTurn = true; return; }
             auto dead = [](float v) { return std::fabs(v) < 0.2f ? 0.0f : v; };
             constexpr float kTurn = 2.0f;
             g_orbitYaw += LookX(dead(rx)) * kTurn * dt;
@@ -322,6 +325,7 @@ namespace pdnet::labtests
                 g_deadNext = g_deadPrevious = g_deadFree = false;
                 g_deadTarget = down ? NextFollowable(LocalSlot(), 1) : -1;
                 g_orbitYaw = g_orbitPitch = 0;
+                g_retakeTurn = true;
                 if (down) Log(L"deadcam: on, following slot %d", g_deadTarget);
                 else Log(L"deadcam: off (%s)", fighting ? L"back in the fight" : L"the battle is over");
                 if (down && g_deadTarget < 0) StartFreeCam();
@@ -351,7 +355,7 @@ namespace pdnet::labtests
             if (!g_freeCam)
             {
                 int step = g_deadNext.exchange(false) ? 1 : g_deadPrevious.exchange(false) ? -1 : 0;
-                if (step) { g_deadTarget = NextFollowable(g_deadTarget, step); g_orbitYaw = g_orbitPitch = 0; Log(L"deadcam: following slot %d", g_deadTarget); }
+                if (step) { g_deadTarget = NextFollowable(g_deadTarget, step); g_orbitYaw = g_orbitPitch = 0; g_retakeTurn = true; Log(L"deadcam: following slot %d", g_deadTarget); }
                 if (g_deadTarget >= 0 && !Followable(g_deadTarget))
                 {
                     g_deadTarget = NextFollowable(g_deadTarget, 1);
@@ -772,6 +776,14 @@ namespace pdnet::labtests
             static uint8_t* last = nullptr;
             if (!FacingKnown() || !g_haveShape) return false;
             Vec f = FacingWay(BestWay(), FacingAngle(object));
+            static Vec held{};
+            static uint8_t* heldFor = nullptr;
+            if (g_deadOn && !FilmActive()) // a real match: the followed player's turning doesn't turn this camera
+            {
+                if (object != heldFor || g_retakeTurn || !Finite(held)) { held = f; heldFor = object; g_retakeTurn = false; }
+                f = held;
+            }
+            else heldFor = nullptr;
             if (object != last || !Finite(smooth)) smooth = f;
             last = object;
             smooth = Add(Scale(smooth, 0.85f), Scale(f, 0.15f));
