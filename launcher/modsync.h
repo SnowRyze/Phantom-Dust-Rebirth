@@ -33,8 +33,9 @@ namespace modsync
     // one per line: "<id> <github owner/repo> [plugin]" (# comments). It's fetched at every start (the copy in
     // modstore\catalog.txt is used when it can't be reached). Catalog mods are off until the player turns them on in the
     // Mods list; for each one that's on, the newest GitHub release is looked up (cached 6 hours in modstore\releases.txt:
-    // GitHub allows 60 lookups an hour), and its first .zip / .7z with a "sha256 <file> <hex>" line in the release notes
-    // is downloaded to modstore\<id>\<tag>.<ext> and checked; the newest 3 of each mod are kept. Catalog mods that aren't
+    // GitHub allows 60 lookups an hour), and its first .zip / .7z is downloaded to modstore\<id>\<tag>.<ext> and checked
+    // against GitHub's own sha256 of it (or a "sha256 <file> <hex>" line in the release notes, which wins); the newest 3
+    // of each mod are kept. Catalog mods that aren't
     // downloaded are listed in the state file too, without a path. net null: no catalog, no downloads.
     void Sync(const std::wstring& localState, LogFn log, const Net* net, const std::wstring& catalogUrl);
 }

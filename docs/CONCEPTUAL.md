@@ -191,14 +191,14 @@ Folders: PDPL's = `%LOCALAPPDATA%\Packages\Microsoft.MSEsper_8wekyb3d8bbwe\Roami
     `mods_enabled`), and the game uses them (a mod turned off is gone, its `!rb` file deleted).
 19. Settings, Theatre and Custom Settings (same screen) still work as before.
 
-**Catalog and downloads (step 5)** (add a mod with the Mod Admin app first, or set `mod_list_url=` in settings.ini to a
+**Catalog and downloads (step 5)** (add a mod with the Mod Admin app first; a release needs no sha256 line now, or set `mod_list_url=` in settings.ini to a
 test catalog)
 20. A catalog mod shows in the Mods list, off, right column "Download", hint "From the mod catalog ... Turn it on and it
     downloads at the next game start."
 21. Turn it on, leave, restart: pdlaunch.log `newest release ...`, `downloading ...`, `downloaded, N bytes, sha256 ok`; it's in
     the game and in the list with its real name.
 22. Game start isn't much slower with downloads (they happen while the game waits); a big mod on a slow line is the risk.
-23. A catalog entry whose release has no sha256 line, or a repo that doesn't exist: the list's hint gives the reason; no
+23. A catalog entry whose release has no .zip / .7z, or a repo that doesn't exist: the list's hint gives the reason; no
     crash, other mods fine.
 24. No internet: the catalog from the last start is used; downloaded mods keep working.
 
@@ -236,6 +236,12 @@ test catalog)
     flag)" and it isn't loaded. With the flag (Mod Admin, Plugin on): it loads.
 
 ## Log
+- 2026-11-21: GitHub's sha256 for mod downloads (Conceptual 50; the user asked, so modders only upload a zip). GitHub's API
+  gives every release asset a "digest": "sha256:<hex>" worked out on upload. pdlaunch's release lookup (LookUpRelease) and
+  the Mod Admin app's check now take a release's first .zip / .7z that has a sha256: a "sha256 <file> <hex>" line in the
+  notes if there is one (it wins), else GitHub's digest. Tested: Torphedo's PDPL 1.2.2 release (no notes line) is now
+  accepted by the admin app (sha256 from GitHub, 62a043e7...) and downloaded by pdlaunch -syncmods (275740 bytes, sha256
+  ok); the test mod with a notes line still uses the line. The admin app lives outside the repo (nothing to commit there).
 - 2026-11-19: Test session 1 fixes (Conceptual 49). The user's run on Conceptual 48 (this PC): PDPL's hook in after 15-16 ms,
   31 ms of CPU, title art fine, Mods list and toggles fine, mod-test downloaded (sha256 ok) and listed by name; but
   pdpl.log stayed empty and opening Mods still ran Quick Join's lobby search. (1) pdpl.log: a probe outside the game

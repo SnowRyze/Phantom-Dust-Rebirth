@@ -714,8 +714,13 @@ namespace modsync
             r = Release{};
             r.tag = JsonGetString(json, "tag_name");
             std::string body = JsonGetString(json, "body");
+            // The release's first .zip / .7z with a sha256 to check it against: a "sha256 <file> <hex>" line in the notes
+            // (the creator's own; it wins), else the "digest" GitHub works out for every file uploaded to a release
+            // ("sha256:<hex>", in the asset's entry before its browser_download_url). Creators need do nothing but upload.
+            auto isHex64 = [](const std::string& h) { return h.size() == 64 && h.find_first_not_of("0123456789abcdef") == std::string::npos; };
             const std::string key = "\"browser_download_url\"";
-            for (size_t at = json.find(key); at != std::string::npos && r.url.empty(); at = json.find(key, at + 1))
+            size_t previous = 0; // where the asset before this one ended
+            for (size_t at = json.find(key); at != std::string::npos && r.url.empty(); previous = at, at = json.find(key, at + 1))
             {
                 size_t i = SkipBlank(json, at + key.size());
                 if (i >= json.size() || json[i] != ':') continue;
@@ -724,17 +729,35 @@ namespace modsync
                 std::string name = PercentDecode(url.substr(url.find_last_of('/') + 1));
                 std::wstring ext = Extension(Wide(name));
                 if (ext != L".zip" && ext != L".7z") continue;
+                std::string hex, from;
                 std::string marker = "sha256 " + name + " ";
-                size_t s = body.find(marker);
-                if (s == std::string::npos) continue;
-                std::string hex = Lower(body.substr(s + marker.size(), 64));
-                if (hex.size() != 64 || hex.find_first_not_of("0123456789abcdef") != std::string::npos) continue;
+                if (size_t s = body.find(marker); s != std::string::npos && isHex64(Lower(body.substr(s + marker.size(), 64))))
+                {
+                    hex = Lower(body.substr(s + marker.size(), 64));
+                    from = "the release notes";
+                }
+                else
+                {
+                    std::string entry = json.substr(previous, at - previous); // this asset's fields
+                    size_t d = entry.rfind("\"digest\"");
+                    if (d != std::string::npos)
+                    {
+                        size_t v = SkipBlank(entry, d + 8);
+                        if (v < entry.size() && entry[v] == ':' && (v = SkipBlank(entry, v + 1)) < entry.size() && entry[v] == '"')
+                        {
+                            std::string digest = Lower(JsonString(entry, v));
+                            if (digest.rfind("sha256:", 0) == 0 && isHex64(digest.substr(7))) { hex = digest.substr(7); from = "GitHub"; }
+                        }
+                    }
+                }
+                if (hex.empty()) continue;
                 r.url = url;
                 r.asset = name;
                 r.sha = hex;
+                if (from == "GitHub") g_log(L"mods: %S %S: %S's sha256 from GitHub (no line in the release notes)", e.id.c_str(), r.tag.c_str(), name.c_str());
             }
             if (r.tag.empty()) { why = "no release found"; return false; }
-            if (r.url.empty()) { why = "its newest release has no .zip / .7z with a sha256 line in the notes"; return false; }
+            if (r.url.empty()) { why = "its newest release has no .zip / .7z (with a sha256: GitHub's, or a line in the notes)"; return false; }
             r.checked = Now();
             return true;
         }
