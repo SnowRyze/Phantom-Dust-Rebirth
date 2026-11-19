@@ -151,6 +151,14 @@ Rebirth's metadata only, and `touches` is worked out from the paths at every sca
 8. Catalog plugins.
 
 ## Log
+- 2026-11-19: Mod loader step 2 (Conceptual 42): pdlaunch keeps PDPL's mods folder in step with the mod list at every
+  start (launcher\modsync.cpp): mods from LocalState\pdnet\mods (Local), LocalState\pdnet\modstore\<id> (catalog, for
+  later) and RoamingState\mods (the player's own); each archive listed and its pdmod.json read with tar.exe (cached in
+  pdnet\modinfo); settings.ini mods_order / mods_enabled (new mods on); enabled Local mods copied in as !rb000-<id>.zip
+  ...; the player's own archives turned off go to mods\disabled; LocalState\pdnet\mods-state.txt lists the result and
+  conflicts. Safe mode: pdnet writes pdnet\mods-boot.txt when PDPL loads and deletes it past the title screen; pdlaunch
+  skips PDPL if it's there. Tested on this PC with pdlaunch -syncmods on a test folder (order, off, on, renames,
+  disabled\, conflicts): all as expected. Not yet tried in the game.
 - 2026-11-19: Mod loader step 1 (Conceptual 41): PDPL 1.2.2 (deps\pdpl\pd_loader_core.dll, sha256 checked by build.ps1)
   goes in the kit; pdlaunch loads it after pdnet while the game is suspended and waits for its CreateFile2 hook (E9 at
   KERNELBASE!CreateFile2, up to 5 s; skipped with mods=off or when pdnet\mods-boot.txt exists). pdnet's PdBeforePdpl first

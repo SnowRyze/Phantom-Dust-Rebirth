@@ -24,6 +24,7 @@
 #include <vector>
 #include <SDL3/SDL.h>  // types only: SDL3.dll is loaded at run time (ReadControllers)
 #include "padshare.h"
+#include "modsync.h"
 #include <bcrypt.h>
 #pragma comment(lib, "winhttp.lib")
 #pragma comment(lib, "advapi32.lib")
@@ -175,6 +176,7 @@ namespace
             Log(L"mods: the last start didn't reach the title screen - starting without mods (PDPL not loaded)");
             return;
         }
+        modsync::Sync(localState, Log); // PDPL's mods folder = the player's mod list (step 2), before PDPL reads it
         std::wstring dll = g_dir + L"pd_loader_core.dll", pdnet = g_dir + L"pdnet.dll";
         if (GetFileAttributesW(dll.c_str()) == INVALID_FILE_ATTRIBUTES)
         {
@@ -1236,6 +1238,13 @@ int wmain(int argc, wchar_t** argv)
     }
 
     if (argc == 2 && _wcsicmp(argv[1], L"-attach") == 0) return Attach();
+
+    // pdlaunch.exe -syncmods <LocalState folder>: only the mod folder sync (testing; modsync.h), logged to pdlaunch.log.
+    if (argc == 3 && _wcsicmp(argv[1], L"-syncmods") == 0)
+    {
+        modsync::Sync(argv[2], Log);
+        return 0;
+    }
 
     DWORD pid = 0, tid = 0;
     for (int i = 1; i + 1 < argc; ++i)

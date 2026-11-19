@@ -9,6 +9,7 @@
 #include "gamepads.h"
 #include "labtests.h"
 #include "film.h"
+#include "pdpl.h"
 #include <fstream>
 #include <winrt/Windows.ApplicationModel.Core.h>
 #include <winrt/Windows.UI.Core.h>
@@ -3587,6 +3588,7 @@ namespace pdnet::gamepatches
                             fprintf(f, "%d\n", menu);
                             fclose(f);
                         }
+                        pdpl::TitleReached(); // the mod loader's safe mode: this start got past the title screen
                     }
                     else DeleteFileW(path.c_str());
                     Log(L"gamepatch: %s (menu %d): start-up volume %s", past ? L"past the title screen" : L"back on the title screen", menu, past ? L"ends" : L"again");

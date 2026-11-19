@@ -16,6 +16,17 @@ asset `pdpl.zip`, sha256 `62a043e7...543e`), built from that same commit.
 call its PhysicsFS functions: the live remount (sections 5.2-5.3, step 3) waits on a PDPL build that exports them
 (request 1). Until then mods change at the next start only (the `!rbNN-` links, or `modlist.txt` if PDPL adds it).
 
+**Step 2 as built (2026-11-19): in pdlaunch, not pdnet** (`launcher/modsync.cpp`). Without PDPL exports pdnet can't look
+inside archives, but pdlaunch runs outside the game's sandbox before PDPL loads, so it does sections 5.4-5.5 and 6.2-6.5
+itself at every start: scans the three folders, lists each archive and reads its `pdmod.json` with Windows' `tar.exe`
+(cached in `LocalState\pdnet\modinfo\`), applies `mods_order` / `mods_enabled`, copies the enabled Catalog / Local
+mods into PDPL's folder as `!rb000-<id>.zip` ... (copies, not hard links: a copy gets the folder's permissions, so a mod
+the player moved instead of copied still works; a copy is only made again when the source's size or time changes),
+moves the player's own archives to and from `disabled\`, and writes `LocalState\pdnet\mods-state.txt` (every mod in
+priority order with its details, plus `conflict` lines) for pdnet's Mods menu (step 4). `pdlaunch.exe -syncmods
+<LocalState>` runs only this, for testing. pdnet writes `mods-boot.txt` when PDPL loads and deletes it past the title
+screen (safe mode), and logs the mod list.
+
 **Torphedo's answers (2026-11-19):**
 - The console only appears when the game is sideloaded, and hiding the window would be easy. Rebirth supports unpacked
   (sideloaded) copies, so pdnet handles it itself (section 4.3); no change in PDPL needed.

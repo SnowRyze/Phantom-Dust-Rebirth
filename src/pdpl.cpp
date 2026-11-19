@@ -121,6 +121,12 @@ namespace pdnet::pdpl
     void BeforeLoad()
     {
         if (g_prepared.exchange(true)) return;
+        CreateDirectoryW((LocalStatePath() + L"\\pdnet").c_str(), nullptr);
+        if (FILE* f = nullptr; !_wfopen_s(&f, (LocalStatePath() + L"\\pdnet\\mods-boot.txt").c_str(), L"w") && f)
+        {
+            fputs("PDPL loaded; deleted once the title screen is passed. Found at a game start: that start goes without mods.\n", f);
+            fclose(f);
+        }
         // A console of pdnet's own, hidden at once: PDPL's AllocConsole then fails (one console per process), so it
         // neither shows its window nor reopens its output to it. Where no console can be made (Microsoft Store copies),
         // PDPL's fails too and the pipes below are all it has.
@@ -138,6 +144,11 @@ namespace pdnet::pdpl
         Log(L"pdpl: ready for PDPL (%s, %s)", console ? L"hidden console" : L"no console", pipes ? L"its output goes to pdnet\\pdpl.log" : L"pipes NOT made - its output is lost");
     }
 
+    void TitleReached()
+    {
+        if (DeleteFileW((LocalStatePath() + L"\\pdnet\\mods-boot.txt").c_str())) Log(L"pdpl: title screen passed - mods-boot.txt deleted");
+    }
+
     void Report()
     {
         static std::once_flag once;
@@ -150,6 +161,23 @@ namespace pdnet::pdpl
                 return;
             }
             Log(L"pdpl: pd_loader_core.dll is in the game%s", g_prepared ? L"" : L" (without pdnet's console and pipes: an older pdlaunch?)");
+            // The mod list pdlaunch put in PDPL's mods folder this start (launcher\modsync.cpp).
+            if (FILE* f = nullptr; !_wfopen_s(&f, (LocalStatePath() + L"\\pdnet\\mods-state.txt").c_str(), L"rb") && f)
+            {
+                char line[2048];
+                int n = 0;
+                while (fgets(line, sizeof(line), f))
+                {
+                    if (strncmp(line, "mod\t", 4) != 0) continue;
+                    // mod id on|off source name version ...
+                    char id[128] = "", on[8] = "", source[16] = "", name[256] = "";
+                    sscanf_s(line + 4, "%127[^\t]\t%7[^\t]\t%15[^\t]\t%255[^\t]", id, static_cast<unsigned>(sizeof(id)), on, static_cast<unsigned>(sizeof(on)),
+                             source, static_cast<unsigned>(sizeof(source)), name, static_cast<unsigned>(sizeof(name)));
+                    Log(L"pdpl: mod %d: %S (%S, %S) %S", ++n, id, source, on, name);
+                }
+                fclose(f);
+                if (!n) Log(L"pdpl: no mods (mods-state.txt lists none)");
+            }
             std::thread([module]
             {
                 Sleep(60000);

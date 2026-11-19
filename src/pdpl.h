@@ -14,4 +14,8 @@ namespace pdnet::pdpl
     // From pdnet's set-up (injected mode): logs whether PDPL is in the game, and after 1 and 5 minutes how much CPU time
     // its threads have used (a busy loop would show as tens of seconds).
     void Report();
+
+    // Safe mode: BeforeLoad writes LocalState\pdnet\mods-boot.txt and this deletes it once the title screen is passed. If
+    // the game dies before that (a broken mod?), pdlaunch finds the file at the next start and leaves PDPL out once.
+    void TitleReached();
 }
