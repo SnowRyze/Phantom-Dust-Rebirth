@@ -1047,6 +1047,10 @@ namespace
 
     void ClearOldUpdate();
 
+    // An update just replaced pdlaunch.exe (CheckForUpdate): this start can hand over to the new one (wmain), so a newer
+    // launcher's work (PDPL, for one) happens on the start that installed it, not only from the next.
+    bool g_launcherReplaced = false;
+
     void CheckForUpdate()
     {
         ClearOldUpdate();
@@ -1221,6 +1225,8 @@ namespace
             std::wstring setup = fresh + L"\\Setup.bat", parentSetup = g_dir + L"..\\Setup.bat";
             if (GetFileAttributesW(setup.c_str()) != INVALID_FILE_ATTRIBUTES && GetFileAttributesW(parentSetup.c_str()) != INVALID_FILE_ATTRIBUTES) Replace(setup, parentSetup);
             Log(L"update: installed build %d (%zu files; the old files are deleted)", best, done.size());
+            for (auto& name : done)
+                if (_wcsicmp(name.c_str(), L"pdlaunch.exe") == 0) g_launcherReplaced = true;
         }
         DeleteTree(fresh);
         DeleteFileW(file.c_str());
@@ -1321,10 +1327,12 @@ int wmain(int argc, wchar_t** argv)
     }
 
     DWORD pid = 0, tid = 0;
-    for (int i = 1; i + 1 < argc; ++i)
+    bool handedOver = false; // started by the previous pdlaunch.exe right after it installed this one (below)
+    for (int i = 1; i < argc; ++i)
     {
-        if (_wcsicmp(argv[i], L"-p") == 0) pid = wcstoul(argv[i + 1], nullptr, 10);
-        if (_wcsicmp(argv[i], L"-tid") == 0) tid = wcstoul(argv[i + 1], nullptr, 10);
+        if (i + 1 < argc && _wcsicmp(argv[i], L"-p") == 0) pid = wcstoul(argv[i + 1], nullptr, 10);
+        if (i + 1 < argc && _wcsicmp(argv[i], L"-tid") == 0) tid = wcstoul(argv[i + 1], nullptr, 10);
+        if (_wcsicmp(argv[i], L"-handover") == 0) handedOver = true;
     }
     if (!pid || !tid)
     {
@@ -1356,12 +1364,29 @@ int wmain(int argc, wchar_t** argv)
         }
     }
 
-    Log(L"game started (pid %lu, main thread %lu)", pid, tid);
+    Log(handedOver ? L"game started (pid %lu, main thread %lu) - handed over by the previous pdlaunch after its update" : L"game started (pid %lu, main thread %lu)", pid, tid);
     KeepAttached();
     HANDLE game = OpenProcess(SYNCHRONIZE | PROCESS_QUERY_LIMITED_INFORMATION, FALSE, pid);
     std::wstring localState = game ? GameLocalState(game) : std::wstring();
     if (!localState.empty()) DeleteFileW(PastTitleFile(localState).c_str()); // from the last start: pdnet writes it again
-    CheckForUpdate(); // before anything loads pdnet.dll, SDL3.dll or the EOS SDK, which it may replace
+    if (!handedOver) CheckForUpdate(); // before anything loads pdnet.dll, SDL3.dll or the EOS SDK, which it may replace
+    // The update replaced pdlaunch.exe: the new one does the rest of this start (the game is still suspended; nothing is
+    // loaded into it yet). If it can't be started, this one carries on as before.
+    if (g_launcherReplaced && !handedOver)
+    {
+        std::wstring command = L"\"" + g_dir + L"pdlaunch.exe\" -p " + std::to_wstring(pid) + L" -tid " + std::to_wstring(tid) + L" -handover";
+        STARTUPINFOW si{ sizeof(si) };
+        PROCESS_INFORMATION pi{};
+        if (CreateProcessW(nullptr, command.data(), nullptr, nullptr, FALSE, 0, nullptr, g_dir.c_str(), &si, &pi))
+        {
+            CloseHandle(pi.hThread);
+            CloseHandle(pi.hProcess);
+            if (game) CloseHandle(game);
+            Log(L"update: handed this start over to the new pdlaunch.exe (pid %lu)", pi.dwProcessId);
+            return 0;
+        }
+        Log(L"update: the new pdlaunch.exe couldn't be started (%lu) - this one carries on", GetLastError());
+    }
     CheckClock(localState); // before pdnet starts EOS, which reads the offset
     KeepIdentity(localState, true); // before the game runs: the same player as always
     std::thread controllers(ReadControllers, pid, localState); // until the game exits
