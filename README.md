@@ -11,7 +11,7 @@ folder that stays put and double-click `Setup.bat`.
 
 ## Features
 
-Everything here is in the current Stable (Stable 15). *(Not yet confirmed)* means it hasn't been checked in a real match
+Everything here is in the current Stable (Stable 16). *(Not yet confirmed)* means it hasn't been checked in a real match
 yet. Newer work goes into Experimental builds first.
 
 **Playing online**

@@ -69,7 +69,7 @@ Other docs: [`EOS_PLAN.md`](EOS_PLAN.md), [`MODDING_PLAN.md`](MODDING_PLAN.md), 
 
 ## Status (2026-11-19)
 
-Newest builds: **Experimental 184**, **Stable 15** (Experimental 184).
+Newest builds: **Experimental 194**, **Stable 16** (Experimental 194).
 
 Not yet confirmed in the game (each has its change log note):
 - Cross lag after a short link outage: quiet peers kept while their link is open (183). Every player needs 183 or newer.
@@ -99,6 +99,8 @@ Ideas, not planned (notes in the change log and reference notes):
 # Change log (newest first)
 
 ## November 2026
+
+Stable 16 (2026-11-21): Experimental 194 at the user's request. It was first promoted from Experimental 190 by mistake (191-194 had come from other work); at the user's word the 190 release and its tag were deleted and 194 promoted under the same number (tag stable-16 = 06ade01, PhantomDust-Rebirth-Stable-16-PC.zip and pdnet-update-194.zip, "DO NOT DOWNLOAD" label; the old Stable 16 zip went to the Recycle Bin). Since Stable 15: the character select rework and Advanced list (pull request 15), the mod loader, mod catalog and Mods list, new map slots (Conceptual merge, 191), map previews sharing MNet.alr (192), catalog fixes (193 / 194), Theatre films with Advanced picks (186), films only of online matches (187), deleting films (188-190), the multiplayer menu order reverted (185).
 
 Catalog mods update within minutes, without GitHub's hourly limit (Experimental 194; the user asked for live updates, then for a 5-minute timer). The 6-hour release cache left new mod versions unseen for hours, and a shared GitHub account's token in the kits was ruled out (one pool for every player, extractable, revoked when abused or found by GitHub's secret scanning). Checked first: without a login, GitHub's API counts "304 not modified" answers too (57 -> 55 for two), so ETags alone save nothing; github.com/<repo>/releases/latest redirects to .../tag/<tag> and costs no API lookups. Now: (1) the catalog lines carry release=<tag> file=<url> sha256=<hex>, filled every 5 minutes by the GitHub Action "Mod catalog releases" (.github/workflows/mod-catalog.yml on master, as GitHub runs schedules only from the default branch; it checks out mod-catalog, runs tools/mod-catalog/refresh.py with the workflow's own token, and commits mods.txt only when something changed; per mod it reads the tag from the website and calls the API only for a new tag) and by the Mod Admin app (Add, Check all releases); pdlaunch uses them directly (no lookups; file must be that repo's release download, else the fields are ignored), and old kits ignore the extra words. (2) Lines without them: pdlaunch reads the newest tag from the website at every start (LatestReleaseTag) and calls the API only for a tag it hasn't seen (a failure from an answered lookup is kept under that tag). Checked: a catalog with the fields downloaded Aquarium 0.2 with no API lookup (60 left before and after) and refused a file from another repo; a known release with the website check used none either.
 
