@@ -1,15 +1,17 @@
 #include "pch.h"
 #include "film.h"
 #include "gamepatches.h"
+#include "p2p.h"
 #include "log.h"
 #include <algorithm>
+#include <cmath>
 #include <cstddef>
 #include <cstdio>
 #include <map>
 #include <mutex>
 #include <vector>
 
-// Conceptual branch only: Theatre films, step 1 (docs\CONCEPTUAL.md, "Theatre"). Records each match as a film of what drove it
+// Theatre films (made on the Conceptual branch; notes in its docs\CONCEPTUAL.md, "Theatre"). Records each match as a film of what drove it
 // (strategy B of the replay spec: the state the PCs exchange, not inputs): every game datagram this PC's game sends and
 // receives over EOS P2P (p2p.cpp), with the time and the game's frame counter, plus a snapshot of the match setup. Phantom Dust
 // has no server: each PC runs its own player and sends the others its updates (26 streams, see docs\CONCEPTUAL.md), so a film
@@ -23,6 +25,7 @@
 //     3 peer: payload = its EOS product user id (the peer number is this record's own).
 //     4 match state: payload = i32 (0x1404bc950).
 //     5 snapshot of the match setup (Snapshot below), when the match first reaches state 6.
+//     7 camera tilt (since Experimental 178): peer = the player's slot, payload = i16 tilt * 30000 (Look).
 //     255 end: payload = u32 records, u64 packet bytes, u32 dropped records.
 // Disk: a background thread writes the buffer about once a second (no flush each time); the buffer is capped, and records past
 // the cap are dropped and counted, never waiting on the disk. The newest 100 films are kept.
@@ -37,7 +40,7 @@ namespace pdnet::film
         constexpr uint32_t kFormat = 1;
         constexpr size_t kBufferCap = 8 * 1024 * 1024;
         constexpr size_t kKeepFilms = 100; // the user, 2026-11-14 (was 25)
-        enum : uint8_t { kIn = 1, kOut = 2, kPeer = 3, kState = 4, kSnapshot = 5, kOrder = 6, kEnd = 255 };
+        enum : uint8_t { kIn = 1, kOut = 2, kPeer = 3, kState = 4, kSnapshot = 5, kOrder = 6, kLook = 7, kEnd = 255 };
 
         // Record 6 (at the start of each film since Conceptual 38): its place in the recording order and its lobby. This
         // PC's clock jumped about an hour back and forth on 2026-11-16, so names and times alone put films out of order.
@@ -66,6 +69,24 @@ namespace pdnet::film
         std::wstring FilmsDir() { return LocalStatePath() + L"\\pdnet\\films"; }
 
         template <typename T> void Put(std::vector<uint8_t>& b, T v) { const uint8_t* p = reinterpret_cast<const uint8_t*>(&v); b.insert(b.end(), p, p + sizeof(T)); }
+
+        // This PC's player's camera tilt: the y of its look direction (player object +0x12d90 is the camera's turn, rows
+        // right / up / forward; forward +0x12da0, its y +0x12da4: -1 looking straight down, 1 up; about -0.15 at rest). Found
+        // live 2026-11-19 by tilting the camera in Test Arsenal; the game's PlayerPos doesn't send it (its +0x1c / +0x1e,
+        // object +0x13b34 / +0x13b48, stayed 0xffff). False if there is no player object.
+        bool LocalTilt(float& tilt)
+        {
+            __try
+            {
+                int slot = Var<int32_t>(0x1404bbe00);
+                if (slot < 0 || slot >= 4) return false;
+                uint8_t* object = reinterpret_cast<uint8_t**>(At(0x1404bc9d8))[slot];
+                if (!object) return false;
+                tilt = *reinterpret_cast<volatile float*>(object + 0x12da4);
+                return tilt >= -1.0f && tilt <= 1.0f;
+            }
+            __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+        }
 
         // With g_lock held.
         void AddRecord(uint8_t type, uint8_t peer, const void* payload, size_t bytes)
@@ -113,7 +134,7 @@ namespace pdnet::film
         };
         struct Snapshot
         {
-            uint32_t version = 2;
+            uint32_t version = 4;
             int32_t gameType, rule, stage, layout, localSlot, mode, test;
             SlotInfo slots[4];
             uint8_t localArsenal[100]; // this PC's arsenal for the match (save list + index at save +0x3b08)
@@ -122,6 +143,13 @@ namespace pdnet::film
             int16_t skills[4][30];     // each player's arsenal: its deck counts (DAT_140585fe8[slot], made by FUN_14014f830)
                                        // plus the cards in hand (status record +0x378 per slot, in use at +0x350); -1 unused
             float auraRate[4];         // the Aura refill rate the arsenal gives (DAT_1404bc958)
+            // Version 3 (Experimental 180): the 12 capsule spots, 3 per player (DAT_140585c90 + (slot * 3 + i) * 0x48, a
+            // vector). FUN_140148780 sets them at the battle's start from the stage's spot table and one variant value
+            // (slot 0's player object +0x18), and each capsule takes its spot when it appears (FUN_14026ff20).
+            float capsules[12][3];
+            // Version 4 (Experimental 186): each slot's Advanced pick, the PD_VARIANT text ("1|slot|character|colour|dodge|set";
+            // empty for a normal pick). Such a player's character value is only their slot's carrier (gamepatches.cpp kCarriers).
+            char variant[4][96];
         };
         constexpr size_t kSnapshotV1 = offsetof(Snapshot, character);
 #pragma pack(pop)
@@ -158,7 +186,12 @@ namespace pdnet::film
                 int kinds = table ? *reinterpret_cast<int32_t*>(table + 4) - 1 : 0;
                 for (int i = 0; i < 4; ++i)
                 {
-                    s.character[i] = *reinterpret_cast<int32_t*>(At(0x1404bc420) + i * 0x48 + 8);
+                    // The character (colour << 16 | character, e.g. 0x3000a), as the player object keeps it (+0x12c70, copied
+                    // from its setup entry +8 by FUN_14024e790). The setup copy (DAT_1404bc420 + 8) was 0 for the other
+                    // player in a 2-player match (film 32), so a film's battle got character 0 colour 0 for them.
+                    uint8_t* player = reinterpret_cast<uint8_t**>(At(0x1404bc9d8))[i];
+                    s.character[i] = player ? *reinterpret_cast<int32_t*>(player + 0x12c70) : *reinterpret_cast<int32_t*>(At(0x1404bc420) + i * 0x48 + 8);
+                    for (int k = 0; k < 3; ++k) memcpy(s.capsules[i * 3 + k], At(0x140585c90) + (i * 3 + k) * 0x48, 12);
                     memcpy(&s.auraRate[i], rates + i, 4);
                     for (int k = 0; k < 30; ++k) s.skills[i][k] = -1;
                     int n = 0;
@@ -377,6 +410,14 @@ namespace pdnet::film
         return distinct == 2 ? "Tag Team" : "Battle Royale";
     }
 
+    void Look(int slot, float tilt)
+    {
+        if (!g_recording || slot < 0 || slot >= 4) return;
+        int16_t v = static_cast<int16_t>((std::max)(-1.0f, (std::min)(1.0f, tilt)) * 30000.0f);
+        std::lock_guard guard(g_lock);
+        AddRecord(kLook, static_cast<uint8_t>(slot), &v, sizeof(v));
+    }
+
     void Packet(bool out, const std::string& peer, const uint8_t* data, size_t bytes)
     {
         if (!g_recording) return;
@@ -474,6 +515,10 @@ namespace pdnet::film
                         info.team[i] = s.slots[i].team;
                         info.character[i] = s.version >= 2 ? s.character[i] : -1;
                     }
+                    info.haveCapsules = s.version >= 3 && length >= offsetof(Snapshot, variant);
+                    if (s.version >= 4 && length >= sizeof(Snapshot))
+                        for (int i = 0; i < 4; ++i) info.variant[i] = std::string(s.variant[i], strnlen(s.variant[i], sizeof(s.variant[i])));
+                    if (info.haveCapsules) memcpy(info.capsules, s.capsules, sizeof(info.capsules));
                     info.gameType = s.gameType;
                     info.stage = s.stage;
                     for (const SlotInfo& slot : s.slots)
@@ -490,11 +535,23 @@ namespace pdnet::film
             {
                 lastMs = *reinterpret_cast<const uint32_t*>(&tail[4]);
                 info.packets = *reinterpret_cast<const uint32_t*>(&tail[12]);
+                // No match traffic at all: a film of the Lab's skill preview or an offline battle (made before Experimental
+                // 187), nothing to play: left out of the Theater list.
+                if (*reinterpret_cast<const uint64_t*>(&tail[16]) == 0) continue;
             }
             info.minutes = lastMs / 60000.0;
             films.push_back(std::move(info));
         }
         return films;
+    }
+
+    bool Delete(const std::wstring& file)
+    {
+        if (file.empty() || file.find_first_of(L"\\/:") != std::wstring::npos) return false; // a name in the films folder only
+        if (g_recording && file == g_name) return false;
+        bool ok = DeleteFileW((FilmsDir() + L"\\" + file).c_str()) != 0;
+        Log(L"film: %s deleted by the player%s", file.c_str(), ok ? L"" : L" - FAILED");
+        return ok;
     }
 
     bool Load(const std::wstring& file, std::vector<Event>& events, Info& info)
@@ -522,6 +579,16 @@ namespace pdnet::film
             if (o + 12 + length > d.size()) break;
             const uint8_t* p = &d[o + 12];
             o += 12 + length;
+            if (type == kLook && length == 2 && d[o - 12 - length + 1] < 4)
+            {
+                Event e;
+                e.ms = ms;
+                e.slot = d[o - 12 - length + 1];
+                e.stream = kLookStream;
+                e.data.assign(p, p + 2);
+                events.push_back(std::move(e));
+                continue;
+            }
             if (type != kIn && type != kOut) continue;
             // 7-byte mesh header (type 0x40 = game data, u32 length), 8-byte message header (kind 8), then the block.
             if (length < 15 + 24 || p[2] != 0x40 || *reinterpret_cast<const uint32_t*>(p + 3) != length) continue;
@@ -598,7 +665,11 @@ namespace pdnet::film
                     Sleep(50);
                     int state = Var<int32_t>(0x1404bc950);
                     bool match = state != 0 && state != 13;
-                    if (match && !g_recording && !gamepatches::TestBattle()) { snapshot = false; OpenFilm(); } // not Test Arsenal / playback
+                    // Only online matches (game mode 0x1404bc9d4: 4 host, 5 joiner). The Lab's skill preview runs a town session
+                    // (mode 0) and debug-menu battles are offline: both made empty films (the user, 2026-11-21).
+                    int mode = Var<int32_t>(0x1404bc9d4);
+                    bool online = mode == 4 || mode == 5;
+                    if (match && online && !g_recording && !gamepatches::TestBattle()) { snapshot = false; OpenFilm(); } // not Test Arsenal / playback
                     if (g_recording && state != last)
                     {
                         std::lock_guard guard(g_lock);
@@ -609,12 +680,32 @@ namespace pdnet::film
                         Snapshot s{};
                         if (TakeSnapshot(s))
                         {
+                            for (int i = 0; i < 4; ++i)
+                                if (gamepatches::FilmVariant(i, s.variant[i], sizeof(s.variant[i])))
+                                    Log(L"film: slot %d plays an Advanced pick: '%S' (character value %X)", i, s.variant[i], s.character[i]);
                             std::lock_guard guard(g_lock);
                             AddRecord(kSnapshot, 0, &s, sizeof(s));
                         }
                         snapshot = true;
                         Log(L"film: match setup recorded (type %d, rule %d, stage %d, layout %d, this PC slot %d%s)", s.gameType, s.rule, s.stage, s.layout,
                             s.localSlot, s.test ? L", Test Arsenal" : L"");
+                    }
+                    // This PC's camera tilt, for every player's film (the game doesn't send it): to the other players and
+                    // into this PC's own film, when it changes (at most 20 a second) and at least every half second.
+                    if (state == 6 && !gamepatches::TestBattle())
+                    {
+                        static float sent = 2.0f;
+                        static ULONGLONG sentAt = 0;
+                        float tilt;
+                        ULONGLONG now = GetTickCount64();
+                        if (LocalTilt(tilt) && (std::fabs(tilt - sent) > 0.01f || now - sentAt >= 500))
+                        {
+                            int slot = Var<int32_t>(0x1404bbe00);
+                            p2p::SendLook(slot, tilt);
+                            Look(slot, tilt);
+                            sent = tilt;
+                            sentAt = now;
+                        }
                     }
                     if (!match && g_recording) CloseFilm();
                     last = state;

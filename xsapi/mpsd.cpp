@@ -6,7 +6,7 @@
 #include "../src/gamepatches.h"
 #include "../src/scores.h"
 #include "../src/p2p.h"
-#include "../src/film.h" // Conceptual branch: films record their lobby
+#include "../src/film.h" // Theatre: films record their lobby
 #include "../src/mods.h" // Conceptual branch: lobbies carry the host's mods
 #include "nametrace.h"
 #include <winrt/Windows.Data.Json.h>
@@ -113,7 +113,12 @@ namespace pdnet::mpsd
             for (auto const& p : o.GetNamedObject(L"numbers", json::JsonObject{}))
                 if (p.Value().ValueType() == json::JsonValueType::Number) h.numbers[std::wstring{ p.Key() }] = p.Value().GetNumber();
             for (auto const& p : o.GetNamedObject(L"strings", json::JsonObject{}))
-                if (p.Value().ValueType() == json::JsonValueType::String) h.strings[std::wstring{ p.Key() }] = p.Value().GetString();
+                if (p.Value().ValueType() == json::JsonValueType::String)
+                {
+                    std::wstring value{ p.Value().GetString() };
+                    if (p.Key() == L"gamename") value = value.substr(0, 16); // the host's name in the Lobby Browser (16 at most, as above)
+                    h.strings[std::wstring{ p.Key() }] = value;
+                }
             h.created = FromTicks(_wtoi64(o.GetNamedString(L"created", L"0").c_str()));
             return h;
         }
@@ -161,6 +166,7 @@ namespace pdnet::mpsd
             a["PD_JOIN"] = std::to_string(Ticks(m.joinTime));
             a["PD_BODYTAGS"] = GetConfig().nametagsOnBodies ? "1" : "0"; // used by everyone when this PC is the game host
             a["PD_MATCH"] = gamepatches::MatchSettingsAttribute();         // Custom Settings, the same way (Conceptual branch)
+            if (std::string v = gamepatches::VariantAttribute(); !v.empty()) a["PD_VARIANT"] = v; // the Advanced list's pick
             return a;
         }
 
@@ -170,6 +176,9 @@ namespace pdnet::mpsd
         {
             std::string host = Attr(l.attributes, "PD_HOST");
             if (!l.joined || host.empty()) return;
+            std::vector<gamepatches::LobbyVariant> variants; // the Advanced list's picks (every member's PD_VARIANT)
+            for (auto& m : l.members) variants.push_back({ m.userId, Attr(m.attributes, "PD_NAME"), Attr(m.attributes, "PD_VARIANT") });
+            gamepatches::LobbyVariants(l.id, variants);
             for (auto& m : l.members)
             {
                 if (Attr(m.attributes, "PD_XUID") != host) continue;
@@ -253,7 +262,9 @@ namespace pdnet::mpsd
                 m.xuid = U16(Attr(ma, "PD_XUID"));
                 if (m.xuid.empty()) continue; // joined, attributes not set yet
                 if (Attr(ma, "PD_TOOL") == "1") continue; // lobbytool (a test client, no game): never a session member, or joining players wait on it
-                m.gamertag = U16(Attr(ma, "PD_NAME"));
+                // Other players' names: at most 16 characters (longer ones can crash the game; a player on an older
+                // kit can still send one, 2026-11-14).
+                m.gamertag = U16(Attr(ma, "PD_NAME")).substr(0, 16);
                 m.deviceAddressBase64 = U16(Attr(ma, "PD_ADDR"));
                 m.customConstantsJson = U16(lobbies::Joined(ma, "PD_MCONST"));
                 m.customProperties = ParseStringMap(lobbies::Joined(ma, "PD_MPROPS"));
@@ -824,7 +835,7 @@ namespace pdnet::mpsd
                 }
                 if (lobby && lobby->joined)
                 {
-                    if (doc.templateName == L"SearchableGame") pdnet::film::SetLobby(lobbyId); // Conceptual branch: the films' lobby
+                    if (doc.templateName == L"SearchableGame") pdnet::film::SetLobby(lobbyId); // Theatre: the films' lobby
                     OwnerDuties(lobbyId);
                     if (auto fresh = lobbies::Read(lobbyId); fresh && fresh->joined) lobby = fresh;
                     if (created && lobby->ownerId == lobbies::LocalUserId()) discord::LobbyOpened(*lobby);
@@ -851,6 +862,7 @@ namespace pdnet::mpsd
                 else lobbies::Leave(lobbyId);
                 discord::LobbyLeft(lobbyId, alone);
                 gamepatches::UseOwnSettings();
+                gamepatches::LobbyVariantsLeft(lobbyId);
                 Log(L"xsapi-pdnet: left lobby %S (%s/%s)%s", lobbyId.c_str(), doc.templateName.c_str(), doc.sessionName.c_str(), alone ? L", destroyed" : L"");
                 doc.shared = false;
                 m_myRequests.erase(key);
@@ -999,6 +1011,7 @@ namespace pdnet::mpsd
                 doc.shared = false;
                 discord::LobbyLost(lobbyId);
                 gamepatches::UseOwnSettings();
+                gamepatches::LobbyVariantsLeft(lobbyId);
                 Log(L"xsapi-pdnet: lobby %S closed or this PC was removed; %s/%s is no longer shared", lobbyId.c_str(), doc.templateName.c_str(), doc.sessionName.c_str());
             }
             else

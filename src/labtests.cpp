@@ -9,7 +9,9 @@
 #include <cstdio>
 #include <vector>
 
-// Conceptual branch only (docs\CONCEPTUAL.md): three offline tests, active only inside a Lab > Test Arsenal battle.
+// The dead camera (follow a teammate or anyone, their HUD, a free camera) and Theatre film playback with its controls,
+// both made on the Conceptual branch (docs there: CONCEPTUAL.md). The three offline Lab tests below came with them but
+// are off here (kLabTests): they were for testing on Conceptual.
 //   F6, or View + D-pad Left:  camera: own view -> follow each other player -> own view
 //   F7, or View + D-pad Up:    record: start / stop saving every player's position and hand to LocalState\pdnet\labtest.rec
 //   F8, or View + D-pad Right: play back: both players are driven only by that file, as network players are. Nobody is
@@ -28,6 +30,7 @@ namespace pdnet::labtests
 {
     namespace
     {
+        constexpr bool kLabTests = true; // F6 / F7 / F8 / F9 and View + D-pad in Test Arsenal: Conceptual's test keys (on here)
         constexpr uint64_t kGhidraBase = 0x140000000;
         uint8_t* At(uint64_t ghidra) { return reinterpret_cast<uint8_t*>(GetModuleHandleW(nullptr)) + (ghidra - kGhidraBase); }
         template <typename T> T& Var(uint64_t ghidra) { return *reinterpret_cast<T*>(At(ghidra)); }
@@ -104,6 +107,9 @@ namespace pdnet::labtests
         // Following: the view stays on the watched player, as a player's own camera does, but can be swung round them and
         // up / down (right stick, or Q E and R F); a click of the right stick (or C) puts it back behind them.
         float g_orbitYaw = 0, g_orbitPitch = 0;
+        // Dead camera in a real match (the user, 2026-11-19): only the watcher turns it. The way it faces is taken from the
+        // followed player once (when following starts, on a switch or a reset) and doesn't follow their turning after that.
+        bool g_retakeTurn = true;
         ULONGLONG g_orbitLast = 0;
 
         // Theatre film controls (the user's Halo 3 film-controls card, 2026-11-14), each with a key:
@@ -138,7 +144,9 @@ namespace pdnet::labtests
 
         // A film's battle is running (match state 6). The film's controls and time control work only then: after it, A on
         // the results screen kept pausing the game's update and it hung on a black screen (Conceptual 36).
-        bool FilmActive() { return g_filmShown && Var<int32_t>(0x1404bc950) == 6; }
+        // Only in the film's own battle (a Test Arsenal one): a real match after a film once still counted as the film
+        // (2026-11-19, DESKTOP-SUFDHSP: a debug-menu battle after the Theatre took the film's pause, speed and keys).
+        bool FilmActive() { return g_filmShown && gamepatches::TestBattle() && Var<int32_t>(0x1404bc950) == 6; }
         size_t g_filmAt = 0;
         ULONGLONG g_filmStart = 0;
         uint32_t g_filmBase = 0;
@@ -151,6 +159,11 @@ namespace pdnet::labtests
         // number while its data changes).
         struct LastPlayed { bool any = false; uint32_t number = 0; std::vector<uint8_t> data; };
         LastPlayed g_filmLast[4][26];
+        // Each battle slot's filmed camera tilt (film::Look records, sine of the up/down look), NAN until the film has one.
+        float g_filmTilt[4]{ NAN, NAN, NAN, NAN };
+        // Theatre option (X / X key, the user 2026-11-19): the player cam follows the filmed player's own up/down look. Kept
+        // from film to film.
+        bool g_filmTiltOn = true;
 
         bool LocalDown()
         {
@@ -202,6 +215,12 @@ namespace pdnet::labtests
             Log(L"deadcam: free camera");
         }
 
+        // The player's own Options > Controller choices (the user, 2026-11-16): "Right/Left" (option 0, byte 0x14052dfb0)
+        // and "Up/Down" (option 1, 0x14052dfb1), 0 = NORMAL, 1 = REVERSE, read by the Options script through menu command 66
+        // (FUN_14024b700). The dead camera's and the Theatre's look input follows them (today's directions are NORMAL).
+        float LookX(float v) { return Var<uint8_t>(0x14052dfb0) == 1 ? -v : v; }
+        float LookY(float v) { return Var<uint8_t>(0x14052dfb1) == 1 ? -v : v; }
+
         void MoveFreeCam()
         {
             ULONGLONG now = GetTickCount64();
@@ -238,7 +257,7 @@ namespace pdnet::labtests
                 if (keys['F']) up -= 1;
             }
             auto dead = [](float v) { return std::fabs(v) < 0.2f ? 0.0f : v; };
-            lx = dead(lx); ly = dead(ly); rx = dead(rx); ry = dead(ry);
+            lx = dead(lx); ly = dead(ly); rx = LookX(dead(rx)); ry = LookY(dead(ry));
             if (pan) { up += ly; ly = 0; } // pan: forward / back moves up / down
             float kSpeed = 150.0f;
             constexpr float kTurn = 2.0f;
@@ -278,11 +297,11 @@ namespace pdnet::labtests
                     reset = reset || keys['C'];
                 }
             }
-            if (reset) { g_orbitYaw = g_orbitPitch = 0; return; }
+            if (reset) { g_orbitYaw = g_orbitPitch = 0; g_retakeTurn = true; return; }
             auto dead = [](float v) { return std::fabs(v) < 0.2f ? 0.0f : v; };
             constexpr float kTurn = 2.0f;
-            g_orbitYaw += dead(rx) * kTurn * dt;
-            g_orbitPitch = (std::max)(-0.6f, (std::min)(0.9f, g_orbitPitch + dead(ry) * kTurn * dt));
+            g_orbitYaw += LookX(dead(rx)) * kTurn * dt;
+            g_orbitPitch = (std::max)(-0.6f, (std::min)(0.9f, g_orbitPitch + LookY(dead(ry)) * kTurn * dt));
         }
 
         void UpdateDeadCamera()
@@ -290,7 +309,15 @@ namespace pdnet::labtests
             // Only while the battle runs (match state 6): at its end the game moves on to its results (states 12, 9, 10, 11), and
             // the dead camera stayed on over them until the next match (2026-11-13).
             bool fighting = Var<int32_t>(0x1404bc950) == 6;
-            bool down = fighting && LocalDown();
+            // A start delay (the user, 2026-11-16): the camera switches only once the player has been down for
+            // kDeadCamDelayMs, so the defeat plays out first; a film or Test Arsenal's "pretend down" starts at once.
+            constexpr ULONGLONG kDeadCamDelayMs = 3000;
+            static ULONGLONG downSince = 0;
+            bool rawDown = fighting && LocalDown();
+            if (!rawDown) downSince = 0;
+            else if (!downSince) downSince = GetTickCount64();
+            bool instant = gamepatches::TestBattle() && (g_filmShown || g_pretendDown);
+            bool down = rawDown && (instant || g_deadOn || GetTickCount64() - downSince >= kDeadCamDelayMs);
             if (down != g_deadOn)
             {
                 g_deadOn = down;
@@ -298,6 +325,7 @@ namespace pdnet::labtests
                 g_deadNext = g_deadPrevious = g_deadFree = false;
                 g_deadTarget = down ? NextFollowable(LocalSlot(), 1) : -1;
                 g_orbitYaw = g_orbitPitch = 0;
+                g_retakeTurn = true;
                 if (down) Log(L"deadcam: on, following slot %d", g_deadTarget);
                 else Log(L"deadcam: off (%s)", fighting ? L"back in the fight" : L"the battle is over");
                 if (down && g_deadTarget < 0) StartFreeCam();
@@ -327,7 +355,7 @@ namespace pdnet::labtests
             if (!g_freeCam)
             {
                 int step = g_deadNext.exchange(false) ? 1 : g_deadPrevious.exchange(false) ? -1 : 0;
-                if (step) { g_deadTarget = NextFollowable(g_deadTarget, step); g_orbitYaw = g_orbitPitch = 0; Log(L"deadcam: following slot %d", g_deadTarget); }
+                if (step) { g_deadTarget = NextFollowable(g_deadTarget, step); g_orbitYaw = g_orbitPitch = 0; g_retakeTurn = true; Log(L"deadcam: following slot %d", g_deadTarget); }
                 if (g_deadTarget >= 0 && !Followable(g_deadTarget))
                 {
                     g_deadTarget = NextFollowable(g_deadTarget, 1);
@@ -534,7 +562,8 @@ namespace pdnet::labtests
             char who[80] = "";
             if (g_deadOn && !g_freeCam && g_deadTarget >= 0)
                 sprintf_s(who, ": %.64s", reinterpret_cast<const char*>(At(0x1404bca30) + g_deadTarget * 0x41));
-            sprintf_s(line, "FILM %s / %s   %s   %s%s", now, length, speed, camera, who);
+            sprintf_s(line, "FILM %s / %s   %s   %s%s%s", now, length, speed, camera, who,
+                g_deadOn && !g_freeCam ? (g_filmTiltOn ? "   (their camera tilt)" : "   (level)") : "");
             int x = 24, y = 300;
             ScreenText(x, y, line, 0xffffd060);
             static const char* kLines[] = {
@@ -543,6 +572,7 @@ namespace pdnet::labtests
                 "D-pad L R / Q E: switch players    Right stick / arrows: look",
                 "Left stick / WASD: move            RB LB / R F: up / down",
                 "RT / C (hold): fast forward        L3 / Ctrl (hold): pan",
+                "X / X key: player cam tilts with the player on / off",
                 "D-pad Down / F2: hide / show this text",
             };
             for (const char* text : kLines) ScreenText(x, y += 14, text, 0xffffffff);
@@ -606,7 +636,7 @@ namespace pdnet::labtests
                         if (now && !d.held) *d.press = true;
                         d.held = now;
                     }
-                    bool active = gamepatches::TestBattle();
+                    bool active = kLabTests && gamepatches::TestBattle();
                     {
                         uint8_t k[256];
                         bool pretend = active && ((viewHeld && AnyPadHolds(0x80)) || (KeysHeld(k) && k[VK_F9]));
@@ -737,6 +767,8 @@ namespace pdnet::labtests
             g_haveShape = true;
         }
 
+        constexpr float kRestTilt = -0.15f; // the game camera's look y at rest (player object +0x12da4, see film.cpp)
+
         // The view from behind `object`, along its facing, smoothed so it doesn't snap.
         bool BehindView(uint8_t* object, Vec& eye, Vec& look)
         {
@@ -744,6 +776,14 @@ namespace pdnet::labtests
             static uint8_t* last = nullptr;
             if (!FacingKnown() || !g_haveShape) return false;
             Vec f = FacingWay(BestWay(), FacingAngle(object));
+            static Vec held{};
+            static uint8_t* heldFor = nullptr;
+            if (g_deadOn && !FilmActive()) // a real match: the followed player's turning doesn't turn this camera
+            {
+                if (object != heldFor || g_retakeTurn || !Finite(held)) { held = f; heldFor = object; g_retakeTurn = false; }
+                f = held;
+            }
+            else heldFor = nullptr;
             if (object != last || !Finite(smooth)) smooth = f;
             last = object;
             smooth = Add(Scale(smooth, 0.85f), Scale(f, 0.15f));
@@ -757,9 +797,18 @@ namespace pdnet::labtests
             }
             float reach = std::sqrt(g_behind * g_behind + g_height * g_height);
             float rise = std::atan2(g_height, g_behind) + (g_deadOn ? g_orbitPitch : 0.0f);
+            // In a film, the filmed player's own up/down look (film::Look): its angle away from the camera's resting tilt
+            // (about -0.15) lowers the eye and raises where it looks when they looked up, and the other way round, smoothed.
+            static float tiltSmooth = 0;
+            float tilt = 0;
+            for (int s = 0; s < 4; ++s)
+                if (FilmActive() && g_filmTiltOn && PlayerObject(s) == object && !std::isnan(g_filmTilt[s]))
+                    tilt = std::asin((std::max)(-1.0f, (std::min)(1.0f, g_filmTilt[s]))) - std::asin(kRestTilt);
+            tiltSmooth = tiltSmooth * 0.8f + tilt * 0.2f;
+            rise = (std::max)(-0.5f, (std::min)(1.4f, rise - tiltSmooth));
             Vec position = Field<Vec>(object, kPosition);
             eye = Add(position, Vec{ -d.x * reach * std::cos(rise), reach * std::sin(rise), -d.z * reach * std::cos(rise) });
-            look = Add(position, Vec{ d.x * g_ahead, g_lookHeight, d.z * g_ahead });
+            look = Add(position, Vec{ d.x * g_ahead, g_lookHeight + reach * std::sin(tiltSmooth), d.z * g_ahead });
             return Finite(eye) && Finite(look);
         }
 
@@ -1018,6 +1067,7 @@ namespace pdnet::labtests
             memset(g_filmPlayed, 0, sizeof(g_filmPlayed));
             memset(g_filmStreamOff, 0, sizeof(g_filmStreamOff));
             for (auto& slot : g_filmLast) for (LastPlayed& l : slot) l = LastPlayed{};
+            for (float& t : g_filmTilt) t = NAN;
             // Nametags: the film's names (DAT_1404bca30, 0x41 per slot).
             char* names = reinterpret_cast<char*>(At(0x1404bca30));
             for (int s = 0; s < 4; ++s)
@@ -1028,9 +1078,18 @@ namespace pdnet::labtests
                 g_filmEvents.empty() ? 0.0 : (g_filmEvents.back().ms - g_filmBase) / 60000.0, g_filmSlot[0], g_filmSlot[1], g_filmSlot[2], g_filmSlot[3]);
         }
 
+        // The film's capsule spots (film::Info::capsules): this battle's own came from its own stage variant, so capsules
+        // appeared in the wrong places (the user, 2026-11-19). Put back each frame of the film, before any capsule appears.
+        void RestoreFilmCapsules()
+        {
+            if (!g_filmInfo.haveCapsules) return;
+            for (int k = 0; k < 12; ++k) memcpy(At(0x140585c90) + k * 0x48, g_filmInfo.capsules[k], 12);
+        }
+
         void FilmFrame()
         {
-            if (!g_filmPlaying) return;
+            if (!g_filmPlaying || !gamepatches::TestBattle()) return;
+            RestoreFilmCapsules();
             uint64_t elapsed = g_stepHooked ? static_cast<uint64_t>(g_filmClock) : GetTickCount64() - g_filmStart;
             int frame = FrameNow();
             while (g_filmAt < g_filmEvents.size() && g_filmEvents[g_filmAt].ms - g_filmBase <= elapsed)
@@ -1038,6 +1097,11 @@ namespace pdnet::labtests
                 film::Event& e = g_filmEvents[g_filmAt++];
                 int slot = g_filmSlot[e.slot];
                 if (slot < 0 || !PlayerObject(slot)) continue;
+                if (e.stream == film::kLookStream && e.data.size() == 2)
+                {
+                    g_filmTilt[slot] = *reinterpret_cast<const int16_t*>(e.data.data()) / 30000.0f;
+                    continue;
+                }
                 if (e.stream >= 26) continue;
                 // ReadyStart (22) is the pre-battle handshake: this battle has already started. DmgEffect (20) is played
                 // again: its crash in Conceptual 29 came from data read 4 bytes off.
@@ -1101,19 +1165,21 @@ namespace pdnet::labtests
         // the speed from LT / Z held (slow motion) or RT / C held (fast forward).
         void FilmPresses()
         {
-            static bool held[3] = {};
+            static bool held[4] = {};
             uint8_t keys[256];
             bool haveKeys = KeysHeld(keys);
             bool view = AnyPadHolds(0x2); // View + D-pad is the Lab tests'
-            bool now[3] = {
+            bool now[4] = {
                 AnyPadHolds(0x4) || (haveKeys && keys[VK_SPACE]),            // A
                 AnyPadHolds(0x8) || (haveKeys && keys['H']),                 // B
                 (!view && AnyPadHolds(0x80)) || (haveKeys && keys[VK_F2]),   // D-pad Down
+                AnyPadHolds(0x10) || (haveKeys && keys['X']),                // X
             };
             if (now[0] && !held[0]) { g_filmPaused = !g_filmPaused; Log(L"theatre: %s", g_filmPaused ? L"paused" : L"playing"); }
             if (now[1] && !held[1]) g_hudHidden = !g_hudHidden;
             if (now[2] && !held[2]) g_controlsShown = !g_controlsShown;
-            for (int i = 0; i < 3; ++i) held[i] = now[i];
+            if (now[3] && !held[3]) { g_filmTiltOn = !g_filmTiltOn; Log(L"theatre: players' camera tilt %s", g_filmTiltOn ? L"on" : L"off"); }
+            for (int i = 0; i < 4; ++i) held[i] = now[i];
             float lt = 0, rt = 0;
             PadTriggers(lt, rt);
             float rate = 1.0f;
@@ -1176,6 +1242,8 @@ namespace pdnet::labtests
         {
             if (g_filmShown) Log(L"theatre: battle over");
             g_filmPlaying = g_filmShown = false;
+            g_filmPaused = false;
+            g_filmRate = 1.0f;
             // The end of a battle is noticed only when the next one starts, after a film for it may already be queued
             // (Conceptual 35: a film after another battle played 0 records): a queued film is kept.
             if (!g_filmQueued) g_filmEvents.clear();
@@ -1207,6 +1275,9 @@ namespace pdnet::labtests
             auto original = reinterpret_cast<CameraFn>(At(0x14012bfc0));
             if (InMatchNow() && !InBattle())
             {
+                // A real match: a Test Arsenal or Theatre battle before it is over (it was only noticed when the next
+                // Test Arsenal battle started, so a film stayed "shown" into this match).
+                if (g_wasInBattle) { g_wasInBattle = false; EndOfBattle(); }
                 DeadCameraFrame(original);
                 return;
             }
@@ -1227,7 +1298,7 @@ namespace pdnet::labtests
                 g_wasInBattle = true;
                 g_pressCamera = g_pressRecord = g_pressPlay = false; // presses from before this battle
                 LogPlayers(L"battle started");
-                gamepatches::MatchStarted(); // lobby Custom Settings: the Aura refill multiplier
+                gamepatches::MatchStarted(); // lobby Custom Settings (Conceptual only): the Aura refill multiplier
                 if (g_filmQueued) StartFilmPlayback();
             }
             // Shows this hook keeps running in the battle, and whether the game's frame counter moves.
@@ -1306,6 +1377,8 @@ namespace pdnet::labtests
         }
     }
 
+    bool FilmPaused() { return FilmActive() && g_filmPaused; }
+
     bool QueueFilm(const std::wstring& file)
     {
         if (!film::Load(file, g_filmEvents, g_filmInfo))
@@ -1350,8 +1423,8 @@ namespace pdnet::labtests
         if (gamepatches::HookCall(0x14017d00e, 0x14012bfc0, reinterpret_cast<void*>(&HookedCamera)))
         {
             WatchInput();
-            Log(L"labtest: ready: in a Test Arsenal battle, F6 or View + D-pad Left: camera, F7 or View + D-pad Up: record, F8 or View + D-pad Right: play back");
-            Log(L"deadcam: ready (HUD %s); in Test Arsenal, F9 or View + D-pad Down pretends to be down", HookHud() ? L"follows the watched player" : L"NOT hooked");
+            if (kLabTests) Log(L"labtest: ready: in a Test Arsenal battle, F6 or View + D-pad Left: camera, F7 or View + D-pad Up: record, F8 or View + D-pad Right: play back");
+            Log(L"deadcam: ready (HUD %s)", HookHud() ? L"follows the watched player" : L"NOT hooked");
             g_stepHooked = gamepatches::HookCall(0x1401c865a, 0x1401c7630, reinterpret_cast<void*>(&HookedStep));
             Log(L"theatre: film controls %s", g_stepHooked ? L"ready (pause, slow motion, fast forward)" : L"without time control (update step NOT hooked)");
         }

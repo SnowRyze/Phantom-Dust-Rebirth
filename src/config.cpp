@@ -13,7 +13,7 @@ namespace pdnet
         constexpr char kDefaultIni[] =
             "; pdnet settings. Restart the game after editing.\r\n"
             "\r\n"
-            "; Your name as other players see it (max 32 characters).\r\n"
+            "; Your name as other players see it (max 16 characters).\r\n"
             "display_name=Player\r\n";
 
         std::string Trim(std::string s)
@@ -150,12 +150,15 @@ namespace pdnet
                 else if (key == "match_aura" && !value.empty()) c.matchAura = (std::clamp)(std::stoi(value), 0, 10);
                 else if (key == "match_refill" && !value.empty()) c.matchRefill = (std::clamp)(std::stoi(value), 5, 20);
                 else if (key == "aura_beeps") c.auraBeeps = _stricmp(value.c_str(), "off") != 0;
+                else if (key == "preview_sound") c.previewSound = _stricmp(value.c_str(), "off") != 0;
                 else if (key == "sound_log") c.soundLog = _stricmp(value.c_str(), "on") == 0;
+                else if (key == "variant_test") c.variantTest = value;
+                else if (key == "charsel_portraits") c.charselPortraits = _stricmp(value.c_str(), "off") != 0;
                 else if (key == "more_controllers") c.moreControllers = _stricmp(value.c_str(), "off") != 0;
                 else if (key == "display_name" && !value.empty())
                 {
                     std::wstring name{ winrt::to_hstring(value) };
-                    c.displayName = name.substr(0, 32);
+                    c.displayName = name.substr(0, 16); // longer names can crash the game (the user, 2026-11-14)
                 }
             }
             };

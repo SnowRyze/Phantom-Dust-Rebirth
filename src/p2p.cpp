@@ -15,8 +15,10 @@ namespace pdnet::p2p
     bool Request(const std::string&, net::MsgType, const std::vector<uint8_t>&, uint32_t, net::Message&) { return false; }
     int Ping(const std::string&, uint32_t, std::vector<uint8_t>*) { return -1; }
     void Expect(const std::string&) {}
-    uint16_t OpenLink(const std::string&) { return 0; }
+    uint16_t OpenLink(const std::string&, bool) { return 0; }
     void CloseLink(const std::string&) {}
+    void SendLook(int, float) {}
+    bool HasLink(const std::string&) { return false; }
 }
 
 #else
@@ -38,7 +40,7 @@ namespace pdnet::p2p
     namespace
     {
         using namespace eossdk;
-        constexpr uint8_t kControl = 0, kGame = 1, kPing = 2;
+        constexpr uint8_t kControl = 0, kGame = 1, kPing = 2, kLook = 3;
 
         struct Outgoing
         {
@@ -65,7 +67,15 @@ namespace pdnet::p2p
             std::vector<int> rtts;
             int pingsSent = 0;
             int silentReports = 0; // reports in a row with game packets in but none out
+            // Joining (OpenLink holdForGame): the host's game packets are held until this PC's game has sent its first
+            // packet on the link, or kHoldMs have passed (see HoldOrDeliver).
+            std::atomic<bool> holding{ false };
+            ULONGLONG openedAt = 0;
+            std::mutex heldLock;
+            std::deque<std::vector<uint8_t>> held;
         };
+        constexpr ULONGLONG kHoldMs = 1500;
+        constexpr size_t kHeldMax = 256;
 
         std::function<void(const net::Message&)> g_onControl;
 
@@ -141,6 +151,44 @@ namespace pdnet::p2p
             }
         }
 
+        // Joins between two PCs on one network (a Windows PC and the Flatpak on Fedora, 2026-11-13) failed on every
+        // direct EOS link and worked through Epic's relay: the host's game packets went through (69 in) but the joiner's
+        // game hardly answered (9 out) and gave up after 5 s (menus 84 / 53). The game's receive loop (FUN_140029330)
+        // stops for good when a packet comes from a peer whose connection it knows but hasn't set up yet (state 0/1;
+        // early history, 6a), and on a fast direct link the host's first packets - and those kept from before the
+        // link opened - reached the joiner's game in that moment. So on a joiner's link they wait for the game's own
+        // first packet on it (by then its side is set up), or kHoldMs.
+        void ReleaseHeld(Link& link, const wchar_t* why)
+        {
+            std::deque<std::vector<uint8_t>> held;
+            {
+                std::lock_guard guard(link.heldLock);
+                if (!link.holding.exchange(false)) return;
+                held.swap(link.held);
+            }
+            for (auto& data : held) ToGame(link, data.data(), static_cast<uint32_t>(data.size()));
+            Log(L"p2p: %S's game packets go to the game now (%s; %zu held)", link.peer.substr(0, 8).c_str(), why, held.size());
+        }
+
+        void HoldOrDeliver(Link& link, const uint8_t* data, uint32_t bytes)
+        {
+            if (link.holding)
+            {
+                if (GetTickCount64() - link.openedAt > kHoldMs) ReleaseHeld(link, L"waited 1.5 s");
+                else
+                {
+                    std::lock_guard guard(link.heldLock);
+                    if (link.holding)
+                    {
+                        if (link.held.size() >= kHeldMax) link.held.pop_front();
+                        link.held.emplace_back(data, data + bytes);
+                        return;
+                    }
+                }
+            }
+            ToGame(link, data, bytes);
+        }
+
         // Game -> link socket -> EOS.
         void LinkReader(std::shared_ptr<Link> link)
         {
@@ -153,7 +201,11 @@ namespace pdnet::p2p
                 if (n == SOCKET_ERROR)
                 {
                     int err = WSAGetLastError();
-                    if (err == WSAETIMEDOUT || err == WSAECONNRESET) continue;
+                    if (err == WSAETIMEDOUT || err == WSAECONNRESET)
+                    {
+                        if (link->holding && GetTickCount64() - link->openedAt > kHoldMs) ReleaseHeld(*link, L"waited 1.5 s");
+                        continue;
+                    }
                     if (!link->closing) Log(L"p2p: link to %S stopped receiving (%d)", link->peer.substr(0, 8).c_str(), err);
                     return;
                 }
@@ -164,8 +216,9 @@ namespace pdnet::p2p
                 }
                 link->outPackets++;
                 link->outBytes += n;
-                film::Packet(true, link->peer, buf.data(), static_cast<size_t>(n)); // Conceptual branch: Theatre films
+                film::Packet(true, link->peer, buf.data(), static_cast<size_t>(n)); // Theatre films
                 Queue({ link->peer, kGame, std::vector<uint8_t>(buf.begin(), buf.begin() + n) });
+                if (link->holding) ReleaseHeld(*link, L"this PC's game sent its first packet");
             }
         }
 
@@ -439,7 +492,7 @@ namespace pdnet::p2p
 
                 if (channel == kGame)
                 {
-                    film::Packet(false, peer, buf, bytes); // Conceptual branch: Theatre films
+                    film::Packet(false, peer, buf, bytes); // Theatre films
                     std::shared_ptr<Link> link;
                     {
                         std::lock_guard guard(g_lock);
@@ -454,7 +507,18 @@ namespace pdnet::p2p
                     if (!link) continue;
                     link->inPackets++;
                     link->inBytes += bytes;
-                    ToGame(*link, buf, bytes);
+                    HoldOrDeliver(*link, buf, bytes);
+                    continue;
+                }
+
+                if (channel == kLook)
+                {
+                    if (bytes == 7 && memcmp(buf, "PDLK", 4) == 0 && buf[4] < 4)
+                    {
+                        int16_t v;
+                        memcpy(&v, buf + 5, 2);
+                        film::Look(buf[4], v / 30000.0f);
+                    }
                     continue;
                 }
 
@@ -694,6 +758,26 @@ namespace pdnet::p2p
         });
     }
 
+    bool HasLink(const std::string& peer)
+    {
+        std::lock_guard guard(g_lock);
+        for (auto& [id, link] : g_links)
+            if (_stricmp(id.c_str(), peer.c_str()) == 0) return true;
+        return false;
+    }
+
+    void SendLook(int slot, float tilt)
+    {
+        int16_t v = static_cast<int16_t>((std::max)(-1.0f, (std::min)(1.0f, tilt)) * 30000.0f);
+        std::vector<uint8_t> data{ 'P', 'D', 'L', 'K', static_cast<uint8_t>(slot), static_cast<uint8_t>(v & 0xff), static_cast<uint8_t>((v >> 8) & 0xff) };
+        std::vector<std::string> peers;
+        {
+            std::lock_guard guard(g_lock);
+            for (auto& [peer, link] : g_links) peers.push_back(peer);
+        }
+        for (auto& peer : peers) Queue({ peer, kLook, data });
+    }
+
     void SendControl(const std::string& peer, net::MsgType type, uint32_t nonce, const std::vector<uint8_t>& body)
     {
         Queue({ peer, kControl, net::Encode(type, nonce, body) });
@@ -779,7 +863,7 @@ namespace pdnet::p2p
         return static_cast<int>(std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - start).count());
     }
 
-    uint16_t OpenLink(const std::string& peer)
+    uint16_t OpenLink(const std::string& peer, bool holdForGame)
     {
         std::lock_guard guard(g_lock);
         if (auto it = g_links.find(peer); it != g_links.end()) return it->second->port;
@@ -802,6 +886,8 @@ namespace pdnet::p2p
             return 0;
         }
         link->port = ntohs(bound.sin6_port);
+        link->openedAt = GetTickCount64();
+        link->holding = holdForGame;
         g_links[peer] = link;
         static std::once_flag again;
         std::call_once(again, [] { std::thread(SelfTest).detach(); }); // again, now that the game holds its port
@@ -815,11 +901,12 @@ namespace pdnet::p2p
                 {
                     link->inPackets++;
                     link->inBytes += e.data.size();
-                    ToGame(*link, e.data.data(), static_cast<uint32_t>(e.data.size()));
+                    HoldOrDeliver(*link, e.data.data(), static_cast<uint32_t>(e.data.size()));
                     ++handed;
                 }
             g_early.erase(early);
-            if (handed) Log(L"p2p: %d game packet(s) from %S arrived before the link opened - handed to the game now", handed, peer.substr(0, 8).c_str());
+            if (handed) Log(L"p2p: %d game packet(s) from %S arrived before the link opened - %s", handed, peer.substr(0, 8).c_str(),
+                            holdForGame ? L"held until this PC's game sends" : L"handed to the game now");
         }
         return link->port;
     }

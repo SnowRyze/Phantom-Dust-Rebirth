@@ -108,7 +108,7 @@ if (-not $previous) {
     }
 }
 if ($previous -eq $env:COMPUTERNAME) { $previous = '' } # an earlier empty answer, not a chosen name
-$prompt = 'Your player name (what the other players will see, max 32 characters)'
+$prompt = 'Your player name (what the other players will see, max 16 characters)'
 if ($previous) { $prompt += " [$previous - press Enter to keep it]" }
 for ($try = 0; -not $Name -and $try -lt 3; ++$try) {
     $Name = ((Ask $prompt) -replace '[\r\n=$]', '').Trim()
@@ -117,7 +117,7 @@ for ($try = 0; -not $Name -and $try -lt 3; ++$try) {
 }
 $Name = ($Name -replace '[\r\n=$]', '').Trim()
 if (-not $Name) { $Name = $env:COMPUTERNAME } # three empty answers with no earlier name
-if ($Name.Length -gt 32) { $Name = $Name.Substring(0, 32) }
+if ($Name.Length -gt 16) { $Name = $Name.Substring(0, 16) } # longer names can crash the game
 $ini = Get-Content "$kit\pdnet.ini" -Raw -Encoding UTF8 # UTF-8: voice_talk_mark is a music note
 Set-Content "$kit\pdnet.ini" ($ini -replace '(?m)^display_name=.*$', "display_name=$Name") -Encoding UTF8 -NoNewline
 Set-Content $nameFile $Name -Encoding UTF8 -ErrorAction SilentlyContinue

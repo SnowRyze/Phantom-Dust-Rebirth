@@ -311,7 +311,10 @@ namespace pdnet::discord
             for (auto& [id, n] : a.players) if (name(id) == a.name) { hostId = id; break; }
             std::vector<std::string> slots, ids;
             if (!hostId.empty()) ids.push_back(hostId);
-            for (auto& id : a.order) if (id != hostId && a.players.count(id)) ids.push_back(id);
+            // Each player once: a player who left and came back was in `order` twice, and the second copy took the
+            // free slot's line when someone else left (2026-11-14, "AnoMayCry" twice, no "< public slot >").
+            for (auto& id : a.order)
+                if (id != hostId && a.players.count(id) && std::find(ids.begin(), ids.end(), id) == ids.end()) ids.push_back(id);
             for (auto& [id, n] : a.players) if (std::find(ids.begin(), ids.end(), id) == ids.end()) ids.push_back(id);
             for (auto& id : ids) slots.push_back(name(id));
             for (uint32_t i = 0; i < max; ++i) text += "\n" + (i < slots.size() ? Plain(slots[i]) : std::string("< public slot >"));
@@ -585,7 +588,12 @@ namespace pdnet::discord
                         a.left.clear();
                         for (auto& [id, name] : now) if (!a.players.count(id)) a.joined.push_back(id);
                         for (auto& [id, name] : a.players) if (!now.count(id)) a.left.push_back(id);
-                        for (auto& id : a.joined) a.order.push_back(id);
+                        for (auto& id : a.joined)
+                        {
+                            // A player who comes back takes a place at the end again, like a new join.
+                            a.order.erase(std::remove(a.order.begin(), a.order.end(), id), a.order.end());
+                            a.order.push_back(id);
+                        }
                         // The first line names the latest event: a join if there is one, else a leave.
                         if (!a.joined.empty()) { a.eventId = a.joined.back(); a.event = "joined the lobby"; }
                         else if (!a.left.empty()) { a.eventId = a.left.back(); a.event = "left the lobby"; }

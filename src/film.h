@@ -1,5 +1,5 @@
 #pragma once
-// Conceptual branch only: Theatre films, step 1 (the recorder). See film.cpp and docs\CONCEPTUAL.md.
+// Theatre films: the recorder and reader (made on the Conceptual branch, notes in its docs\CONCEPTUAL.md). See film.cpp.
 #include <cstdint>
 #include <string>
 #include <vector>
@@ -16,6 +16,12 @@ namespace pdnet::film
     // The game lobby (EOS lobby id of the multiplayer session) this PC is in, from xsapi\mpsd.cpp when it joins or
     // creates one. Each film records it, with its lobby session number and its match number in that lobby.
     void SetLobby(const std::string& lobbyId);
+
+    // A player's camera tilt (the up/down look, sine of the angle, -1 down .. 1 up), which the game's own traffic doesn't
+    // carry: this PC's own, read by the watcher, and other players' from p2p.cpp (pdnet sends it alongside the game).
+    void Look(int slot, float tilt);
+    // Film events with this stream number are Look records: data = the tilt as an int16 (tilt * 30000).
+    constexpr uint8_t kLookStream = 200;
 
     // The saved films, newest first (at most `max`), as the Theatre list shows them. Unreadable files are left out.
     struct Info
@@ -41,6 +47,11 @@ namespace pdnet::film
         int16_t skills[4][30];
         bool haveSkills[4]{};
         std::string name[4];  // each slot's player name, when recorded
+        // The match's capsule spots (3 per player, x y z), recorded since Experimental 180 (snapshot version 3).
+        bool haveCapsules = false;
+        float capsules[12][3]{};
+        // Each slot's Advanced pick (PD_VARIANT text), recorded since Experimental 186 (snapshot version 4); empty otherwise.
+        std::string variant[4];
         Info() { for (auto& deck : skills) for (int16_t& id : deck) id = -1; }
     };
     std::vector<Info> List(size_t max);
@@ -57,4 +68,7 @@ namespace pdnet::film
     };
     // Reads and decodes a film (bounds-checked): its stream records in time order, and its details. False if unreadable.
     bool Load(const std::wstring& file, std::vector<Event>& events, Info& info);
+
+    // Deletes a saved film (the Theater's delete, the player's choice). False if it couldn't be deleted or is being recorded.
+    bool Delete(const std::wstring& file);
 }

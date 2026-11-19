@@ -47,7 +47,7 @@ namespace pdnet
         bool eosTest = false;               // eos_test=on: one-shot Epic Online Services feasibility check (see eostest.h)
         bool eos = true;                    // stay signed in to Epic Online Services (see eos.h)
         bool xboxOff = true;                // pdnet answers every Xbox Live (XSAPI) class itself (see xsapi/)
-        std::wstring displayName = L"Player"; // display_name=: name shown to other players (max 32 characters)
+        std::wstring displayName = L"Player"; // display_name=: name shown to other players (max 16 characters; longer can crash the game)
         std::wstring discordWebhook;        // discord_webhook=<URL>: announce lobbies this PC hosts in a Discord channel (see discord.h)
         bool discordLobbyMessages = true;   // discord_lobby_messages=on|off: "opened" / "closed" messages
         bool discordPlayerMessages = true;  // discord_player_messages=on|off: "<name> joined / left" (and "full") messages
@@ -64,7 +64,10 @@ namespace pdnet
         int matchRefill = 10;               // match_refill=5..20: Aura refill multiplier x10 (10 = x1, on top of the case's rate)
         int splashVolume = 40;              // splash_volume=: % of the remembered volume from the start-up logos until the main menu (pdlaunch; the Settings menu shows it)
         bool auraBeeps = true;              // aura_beeps=on|off: the aura particles' beeping (Options > Sound shows it)
+        bool previewSound = true;           // preview_sound=on|off: the skill preview's sounds online (Options > Sound shows it)
         bool moreControllers = true;        // more_controllers=on|off: PlayStation, Nintendo and other controllers, read by pdlaunch with SDL3 (see gamepads.cpp)
+        std::string variantTest;            // variant_test=c,colour,dodge,set: play your Test Arsenal character as that Advanced-list variant (testing, see variants.h)
+        bool charselPortraits = true;       // charsel_portraits=on|off: the monsters' portraits on the character select, and its Advanced list (Y) (kit\pdnet\charsel-portraits.bin, see gamepatches.cpp)
         bool soundLog = false;              // sound_log=on: log each game sound (bank, cue, caller) the first time it plays (debug, see gamepatches.cpp)
     };
 

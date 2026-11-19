@@ -15,7 +15,7 @@ namespace pdnet
     bool KeysHeld(uint8_t* keys);
 
     // The sticks of whichever controller pushes each one furthest, -1..1 (right and up positive). False when all are centred.
-    // (Conceptual branch: the dead camera's free camera.)
+    // (The dead camera's free camera.)
     bool PadSticks(float& leftX, float& leftY, float& rightX, float& rightY);
     // The most-pressed left and right triggers (0..1) over every controller.
     void PadTriggers(float& left, float& right);

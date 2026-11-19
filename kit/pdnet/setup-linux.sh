@@ -10,8 +10,7 @@
 #   ./setup-linux.sh --logs           copy the logs to your home folder, to send after a test
 #
 # wine-uwp is looked for in $WINE_UWP (the wine-uwp script), on PATH, in ~/.local/opt/wine-uwp and ~/wine-uwp; if
-# none can load pdnet, it offers to download the prebuilt one (github.com/designgears/wine-uwp releases, or
-# github.com/LiveManQuestion/wine-uwp's while designgears/wine-uwp has none).
+# none can load pdnet, it offers to download the prebuilt one (github.com/designgears/wine-uwp releases).
 # The game's files are not changed: wine-uwp loads pdnet.dll into the game when it starts (local.env in the game's
 # folder, WINE_UWP_INJECT), as pdlaunch.exe does on Windows. pdnet and its files are copied next to the game.
 # Like pdlaunch.exe, a launcher (~/.local/bin/phantom-dust-rebirth, menu entry "Phantom Dust Rebirth") calls this
@@ -54,10 +53,9 @@ for c in "${WINE_UWP:-}" "$(command -v wine-uwp 2>/dev/null || true)" ~/.local/o
     fi
     old=${old:-$c}
 done
-# None (or only an older one): offer the prebuilt runtime, into ~/.local/opt. From designgears/wine-uwp's latest
-# release; until that repository has published one, from the LiveManQuestion/wine-uwp fork's (same runtime).
-sources="https://github.com/designgears/wine-uwp/releases/latest/download wine-uwp-x86_64.tar.xz
-https://github.com/LiveManQuestion/wine-uwp/releases/latest/download wine-uwp-phantom-dust-x86_64.tar.xz"
+# None (or only an older one): offer the prebuilt runtime from designgears/wine-uwp's latest release, into ~/.local/opt.
+wup_url=https://github.com/designgears/wine-uwp/releases/latest/download
+wup_asset=wine-uwp-x86_64.tar.xz
 dl_tmp=""
 download_wine_uwp() {
     local dest=$HOME/.local/opt
@@ -68,30 +66,27 @@ download_wine_uwp() {
     if [ -z "${1:-}" ]; then
         if [ -n "$old" ]; then
             say "Your wine-uwp ($old) is too old to load pdnet. A newer one can be downloaded to $dest/wine-uwp"
-            say "(about 50 MB; your game, prefix and sign-in are kept)."
+            say "(about 80 MB; your game, prefix and sign-in are kept)."
         else
-            say "wine-uwp (the Wine build that runs Phantom Dust) was not found. It can be downloaded to $dest/wine-uwp (about 50 MB)."
+            say "wine-uwp (the Wine build that runs Phantom Dust) was not found. It can be downloaded to $dest/wine-uwp (about 80 MB)."
         fi
         case $(ask "Download it now? [Y/n]") in [nN]*) fail "set WINE_UWP=/path/to/bin/wine-uwp to use your own build." ;; esac
     fi
     dl_tmp=$(mktemp -d)
     trap 'rm -rf "$dl_tmp"' EXIT
-    local tmp=$dl_tmp release="" asset="" r a
-    # The first source that has a release (its checksum file downloads).
-    while read -r r a; do
-        if curl -fsL -o "$tmp/$a.sha256" "$r/$a.sha256"; then release=$r; asset=$a; break; fi
-    done <<<"$sources"
-    [ -n "$release" ] || fail "download failed (no wine-uwp release could be reached; is the network up?)."
-    say "Downloading ${release%/latest/download}/latest"
-    curl -fL --progress-bar -o "$tmp/$asset" "$release/$asset" || fail "download failed ($release/$asset)."
-    (cd "$tmp" && sha256sum -c --quiet "$asset.sha256") || fail "the download is damaged (checksum mismatch); run this again."
+    local tmp=$dl_tmp
+    curl -fsL -o "$tmp/$wup_asset.sha256" "$wup_url/$wup_asset.sha256" ||
+        fail "download failed (the wine-uwp release could not be reached; is the network up?)."
+    say "Downloading ${wup_url%/latest/download}/latest"
+    curl -fL --progress-bar -o "$tmp/$wup_asset" "$wup_url/$wup_asset" || fail "download failed ($wup_url/$wup_asset)."
+    (cd "$tmp" && sha256sum -c --quiet "$wup_asset.sha256") || fail "the download is damaged (checksum mismatch); run this again."
     mkdir -p "$dest"
     if [ -e "$dest/wine-uwp" ]; then
         rm -rf "$dest/wine-uwp.old"
         mv "$dest/wine-uwp" "$dest/wine-uwp.old"
         say "(The previous $dest/wine-uwp is kept as $dest/wine-uwp.old.)"
     fi
-    tar -xJf "$tmp/$asset" -C "$dest" || fail "could not unpack $asset."
+    tar -xJf "$tmp/$wup_asset" -C "$dest" || fail "could not unpack $wup_asset."
     wup=$dest/wine-uwp/bin/wine-uwp
     if ! "$dest/wine-uwp/bin/wine" --version >/dev/null 2>&1; then
         fail "the downloaded wine-uwp doesn't start on this system. It needs glibc 2.38 or newer (Ubuntu 24.04, Debian 13, Fedora 39, Mint 22 or newer)."
@@ -138,11 +133,21 @@ if [ $action = logs ]; then
     exit 0
 fi
 
+# Data files pdnet reads next to pdnet.dll (on Windows it runs from the kit folder; here it runs from the game's).
+# charsel-portraits.bin: the Advanced character select's portraits and lobby banners (without it the grid shows the
+# game's own monster pictures and the lobby shows the carrier monsters' banners).
+copy_extras() {
+    local f
+    for f in charsel-portraits.bin; do
+        if [ -f "$kit/$f" ]; then cp -f "$kit/$f" "$game/"; fi
+    done
+}
+
 # --- --remove -------------------------------------------------------------------------------------------------------
 if [ $action = remove ]; then
     [ -n "$game" ] || fail "Phantom Dust is not installed in $data."
     running && fail "close Phantom Dust first."
-    rm -f "$game"/{pdnet.dll,pdnet.ini,eos.ini,EOSSDK-Win64-Shipping.dll,xaudio2_9redist.dll,kit-version.txt,before-start.sh}
+    rm -f "$game"/{pdnet.dll,pdnet.ini,eos.ini,EOSSDK-Win64-Shipping.dll,xaudio2_9redist.dll,kit-version.txt,charsel-portraits.bin,before-start.sh}
     # only what this script wrote
     grep -qs 'written by setup-linux.sh' "$launcher" && rm -f "$launcher"
     grep -qs 'written by setup-linux.sh' "$menu_entry" && rm -f "$menu_entry"
@@ -202,6 +207,7 @@ if [ $action = update ]; then
     update_game() {
         [ -f "$game/pdnet.dll" ] || exec bash "$kit/setup-linux.sh" ${keep_name:+--name "$keep_name"}
         cp -f "$kit/pdnet.dll" "$kit/EOSSDK-Win64-Shipping.dll" "$kit/kit-version.txt" "$game/"
+        copy_extras
     }
 
     repo=$(sed -n 's/^\xEF\xBB\xBF//; s/^update_repo=//p' "$kit/pdnet.ini" 2>/dev/null | tr -d '\r' | tail -1 || true)
@@ -235,7 +241,8 @@ print("update", best[0], best[1], m.group(1).lower() if m else "-", "revert" if 
         current)
             say "Up to date (build ${build:-?})."
             if [ -n "$game" ] && [ -f "$game/pdnet.dll" ] &&
-               { ! cmp -s "$kit/pdnet.dll" "$game/pdnet.dll" || ! cmp -s "$kit/kit-version.txt" "$game/kit-version.txt"; }; then
+               { ! cmp -s "$kit/pdnet.dll" "$game/pdnet.dll" || ! cmp -s "$kit/kit-version.txt" "$game/kit-version.txt" ||
+                 { [ -f "$kit/charsel-portraits.bin" ] && ! cmp -s "$kit/charsel-portraits.bin" "$game/charsel-portraits.bin"; }; }; then
                 say "The game's pdnet files aren't this kit's; copying the kit's."
                 update_game
             fi
@@ -342,18 +349,19 @@ fi
 previous=$previous_name
 tries=0
 while [ -z "$name" ] && [ $tries -lt 3 ]; do
-    prompt="Your player name (what the other players will see, max 32 characters)"
+    prompt="Your player name (what the other players will see, max 16 characters)"
     [ -n "$previous" ] && prompt="$prompt [$previous - press Enter to keep it]"
     name=$(ask "$prompt:")
     [ -z "$name" ] && name=$previous
     tries=$((tries + 1))
 done
-name=$(printf '%s' "${name:-Player}" | tr -d '\r\n=$' | sed 's/^ *//; s/ *$//' | cut -c1-32)
+name=$(printf '%s' "${name:-Player}" | tr -d '\r\n=$' | sed 's/^ *//; s/ *$//' | cut -c1-16)
 
 # --- copy pdnet in --------------------------------------------------------------------------------------------------
 cp -f "$kit/pdnet.dll" "$kit/EOSSDK-Win64-Shipping.dll" "$game/"
 # pdnet reads it next to itself: the build on the main menu and the Updates row in Options
 if [ -f "$kit/kit-version.txt" ]; then cp -f "$kit/kit-version.txt" "$game/"; fi
+copy_extras
 install -m 600 "$kit/eos.ini" "$game/eos.ini"
 # EOS needs xaudio2_9redist.dll next to it for voice; Wine's own XAudio2 works under that name.
 cp -f "$libdir/xaudio2_9.dll" "$game/xaudio2_9redist.dll"
@@ -448,3 +456,4 @@ fi
 say "Keep this kit folder where it is: the updates go through it."
 say "The first title screen should say \"Rebirth\". Your Xbox profile doesn't show while pdnet is on: make a new one."
 say "After a test: $0 --logs     To stop using pdnet: $0 --remove"
+say "PD Helper (arsenal editor; optional, now or any time later): bash \"$kit/pdhelper-linux.sh\""

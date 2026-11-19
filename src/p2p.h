@@ -12,6 +12,7 @@
 //   0 control: pdnet control messages (net::Message: connect/ack/delete), reliable and ordered
 //   1 game:    the game's own datagrams, unreliable and unordered (like UDP)
 //   2 ping:    ping/pong for QoS and link stats, unreliable (so losses show)
+//   3 look:    each player's camera tilt for Theatre films (SendLook), unreliable
 // Each link's ping, jitter, loss, direct-or-relayed path and traffic go to pdnet.log every 10 s ("p2p: link ...").
 #include "net.h"
 #include <memory>
@@ -35,7 +36,16 @@ namespace pdnet::p2p
     // A player now in this PC's lobby: accept their connection ahead of Epic's notice and open it from this side too.
     void Expect(const std::string& peer);
 
-    // The local UDP port the game sends to for `peer` (opens the link if needed); 0 on failure.
-    uint16_t OpenLink(const std::string& peer);
+    // The local UDP port the game sends to for `peer` (opens the link if needed); 0 on failure. `holdForGame` (this PC
+    // joins): the peer's game packets wait until this PC's game has sent its first one on the link (at most 1.5 s).
+    uint16_t OpenLink(const std::string& peer, bool holdForGame = false);
     void CloseLink(const std::string& peer);
+
+    // This PC's camera tilt (film::Look) to every linked player, on channel 3 ("PDLK", u8 slot, i16 tilt * 30000), unreliable.
+    // Builds without channel 3 drop it: it doesn't decode as a control message.
+    void SendLook(int slot, float tilt);
+
+    // A link to `peer` (EOS product user id, any case) is open: the peer hasn't left, even if its packets have stopped
+    // for a while (EOS restores interrupted connections).
+    bool HasLink(const std::string& peer);
 }

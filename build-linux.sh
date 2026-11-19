@@ -80,7 +80,7 @@ echo "1. pdnet core"
 FLAGS=("${CFLAGS[@]}" "${EOSFLAGS[@]}" "-DPDNET_BUILD_LABEL=\"$LABEL\"")
 CORE=()
 for f in dllmain hooks gamesave log config net sda testpeer eostest credstore eossdk eosclock eos lobbies p2p \
-         gamepatches gamepads discord scores; do
+         gamepatches gamepads discord scores variants; do
     CORE+=("$ROOT/src/$f.cpp")
 done
 compile obj "${CORE[@]}"

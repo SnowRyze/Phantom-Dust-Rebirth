@@ -33,6 +33,7 @@ What's in the kit
   eos.ini             connection settings for the test. Please don't share it further.
   setup.ps1, remove.ps1, collect-log.ps1, nosuspend.ps1   the scripts behind the .bat files
   setup-linux.sh      Linux (wine-uwp) setup, see below
+  pdhelper-linux.sh   Linux: runs PD Helper with the game, see below
 
 Steps
 -----
@@ -81,6 +82,11 @@ Updates in the game turns it off. If it can't update, the game starts as it is
 (log: ~/.local/share/wine-uwp/logs/msesper-before-start.log).
 To stop using pdnet: bash setup-linux.sh --remove. Setting up a newer kit: run its setup-linux.sh.
 (On Linux the game reads pdnet.ini from its own folder, ~/.local/share/wine-uwp/stage/msesper.)
+PD Helper (https://github.com/eradication0/PDHelper, arsenal editor and ModLoader) on Linux: start the game, then run
+bash pdhelper-linux.sh  from this pdnet folder (Flatpak: ~/.var/app/io.github.snowryze.PhantomDustRebirth/data/wine-uwp/
+rebirth-kit). The first time it offers to download PD Helper 4.1 into ~/PDHelper; if you already have it, give its
+folder instead: bash pdhelper-linux.sh /path/to/PD-Helper-folder. The folder is remembered. bash pdhelper-linux.sh
+modloader starts the Skill Editor. It sets up .NET 6 for PD Helper by itself (about 70 MB, once).
 
 Settings (pdnet.ini in the pdnet folder)
 -----------------------------------

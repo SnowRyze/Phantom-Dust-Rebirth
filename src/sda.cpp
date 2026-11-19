@@ -258,9 +258,9 @@ namespace pdnet
 
             // Returns the pair for a peer, creating it if needed. `created` reports whether it is new.
             // `eosPeer` set: the pair runs over EOS P2P through a local link socket.
-            winrt::com_ptr<EndpointPair> GetOrAdd(const Snapshot& remote, const std::array<uint8_t, 16>& observedIp, bool& created, const std::string& eosPeer = {})
+            winrt::com_ptr<EndpointPair> GetOrAdd(const Snapshot& remote, const std::array<uint8_t, 16>& observedIp, bool& created, const std::string& eosPeer = {}, bool joining = false)
             {
-                uint16_t linkPort = eosPeer.empty() ? 0 : p2p::OpenLink(eosPeer);
+                uint16_t linkPort = eosPeer.empty() ? 0 : p2p::OpenLink(eosPeer, joining);
                 std::array<uint8_t, 16> ip = linkPort ? net::InterfaceIp() : observedIp;
                 std::lock_guard guard(g_lock);
                 if (auto existing = FindLocked(remote.deviceId))
@@ -345,7 +345,7 @@ namespace pdnet
                     if (p2p::Request(remote.eosUser, net::MsgType::Connect, body, 22000, reply))
                     {
                         bool created;
-                        auto pair = GetOrAdd(remote, net::InterfaceIp(), created, remote.eosUser);
+                        auto pair = GetOrAdd(remote, net::InterfaceIp(), created, remote.eosUser, true); // this PC joins
                         if (pair->m_linkPort)
                         {
                             Log(L"sda: connected to %s over EOS P2P, game packets go to local link port %u", remote.Describe().c_str(), pair->m_linkPort);

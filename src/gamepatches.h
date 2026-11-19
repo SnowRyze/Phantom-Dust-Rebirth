@@ -1,6 +1,7 @@
 #pragma once
 #include <map>
 #include <string>
+#include <vector>
 // Small in-memory changes to the game's own code (PDUWP.exe), applied once at startup. Each one checks that the bytes
 // it replaces are exactly the expected ones first, so a different game version is left alone. No files are changed.
 namespace pdnet::gamepatches
@@ -59,6 +60,9 @@ namespace pdnet::gamepatches
     bool MindReading();
     // True from Lab > Test Arsenal until back in the menus: its wins don't count for the scoreboard.
     bool TestBattle();
+    // Theatre films: slot's Advanced pick (the PD_VARIANT text, "1|slot|character|colour|dodge|set") while that slot plays
+    // a variant, into `out`; false (and "") for a normal pick.
+    bool FilmVariant(int slot, char* out, size_t size);
 
     // The multiplayer rating as kept in the save (progress.dat; 0x1405b1370), or -1 before the save is loaded.
     int SavedRating();
@@ -69,6 +73,13 @@ namespace pdnet::gamepatches
     // The lobby this player is in closed, removed them, or lost its game host (xsapi/mpsd.cpp). If they are in the
     // Arsenal editor opened from the lobby, leaving it takes them out the way the lobby would, not back into it.
     void LobbyEnded();
+
+    // Advanced list variants online: this PC's lobby member attribute PD_VARIANT (empty: a normal pick), and every
+    // update of a game lobby's members (EOS user id, PD_NAME, PD_VARIANT) / leaving it. xsapi/mpsd.cpp calls these.
+    struct LobbyVariant { std::string userId, name, value; };
+    std::string VariantAttribute();
+    void LobbyVariants(const std::string& lobbyId, const std::vector<LobbyVariant>& members);
+    void LobbyVariantsLeft(const std::string& lobbyId);
 
     // True while the save's multiplayer profile is the active one (online play; the story uses the other).
     bool MultiplayerProfile();
