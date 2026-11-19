@@ -381,9 +381,10 @@ namespace pdnet::discord
         GetLocalTime(&now);
         char stamp[64];
         sprintf_s(stamp, "%S-%04u%02u%02u-%02u%02u", pc, now.wYear, now.wMonth, now.wDay, now.wHour, now.wMinute);
-        // Discord takes 10 MB per message without a server boost.
-        std::pair<std::string, std::string> files[] = { { std::string("pdnet-log-") + stamp + ".txt", Tail(LocalStatePath() + L"\\pdnet.log", 8u << 20) },
-                                                        { std::string("pdlaunch-log-") + stamp + ".txt", Tail(kitDir + L"pdlaunch.log", 1u << 20) } };
+        // Discord takes 10 MB per message without a server boost. pdpl.log: PDPL's output (mod loader, Conceptual).
+        std::pair<std::string, std::string> files[] = { { std::string("pdnet-log-") + stamp + ".txt", Tail(LocalStatePath() + L"\\pdnet.log", 7u << 20) },
+                                                        { std::string("pdlaunch-log-") + stamp + ".txt", Tail(kitDir + L"pdlaunch.log", 1u << 20) },
+                                                        { std::string("pdpl-log-") + stamp + ".txt", Tail(LocalStatePath() + L"\\pdnet\\pdpl.log", 1u << 20) } };
         if (files[0].second.empty()) return "no log yet";
 
         const std::string boundary = "pdnet-log-boundary-7f3a9c";

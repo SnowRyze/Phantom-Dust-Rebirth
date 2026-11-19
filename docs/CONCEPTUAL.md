@@ -103,16 +103,17 @@ PDPL's start-up code only.)
 - PhysicsFS search path, first wins: loose files in `RoamingState\mods`, then every `.zip` / `.7z` in its root by
   name, then the game folder. Archive files are copied to `RoamingState\fake\<file name>` and that copy is opened.
 - Plugin DLLs under VFS `/plugins/` (also inside archives) are loaded at start with MemoryModule.
-- `PHYSFS_*` functions are exported (MinGW exports everything; plugins link them), so pdnet can unmount and remount.
-  Mounting a path that's already mounted does nothing; unmounting fails while a file from it is open.
-- It calls `AllocConsole`, and its command loop reads stdin forever: either a console window in front of the game, or
-  (if the console can't be made) a loop that may spin. Step 1 checks which.
+- **1.2.2's DLL has no export table** (MSVC build, dumpbin, 2026-11-19), so pdnet can't call its PhysicsFS functions
+  yet: changing mods without a restart waits on a PDPL build that exports them. (Mounting a path that's already mounted
+  does nothing; unmounting fails while a file from it is open.)
+- It calls `AllocConsole`, and its command loop reads stdin forever. pdnet handles both (step 1): a hidden console of
+  its own first, so PDPL's fails, and pipes for PDPL's input (empty: no spinning) and output (to pdnet\pdpl.log).
 
 ### How Rebirth uses it
 - **Next start:** pdnet keeps `RoamingState\mods` holding the enabled mods as hard links named `!rb00-<id>.zip`,
   `!rb01-...` in menu order, so PDPL mounts them early and in the right order (shaders, plugins). The player's own
   archives stay under their own names below ours; turning one off moves it to `mods\disabled\`.
-- **Now:** pdnet unmounts and remounts in the new order through PDPL's PhysicsFS functions. Files read only at start
+- **Now (once PDPL exports PhysicsFS):** pdnet unmounts and remounts in the new order. Files read only at start
   (shaders, probably audio) need the restart; the menu says so.
 - **Skill data:** PDPL redirects the gsdata file, but the game then copies its stored online copy over it, so pdnet
   still writes a mod's gsdata into the block at 0x1404c5240, working with the modpack guard.
@@ -129,12 +130,15 @@ PDPL's start-up code only.)
   differ.
 - **A broken mod can stop the game starting:** safe mode.
 
-### Requests for Torphedo
-1. A quiet mode (no console, log to a file, no spinning command loop).
-2. A lock around mount changes.
-3. `fake\` copies keyed by full path, and reused while current.
-4. A `CreateFileW` hook too, if step 1 shows `fopen` opens it misses.
-5. Optional: a mount list file at start, and `pdmod.json` as a shared format.
+### Requests for Torphedo (after their answers, 2026-11-19)
+1. Export PhysicsFS (or a few PDPL functions) in release builds: needed for live changes.
+2. `fake\` copies keyed by full path and deleted at start-up (agreed; exmot files need it).
+3. `modlist.txt`: mount exactly what's listed, in order. Rebirth's Mods menu writes it; it replaces the `!rbNN-`
+   links and `mods_enabled` / `mods_order`.
+4. One `PHYSFS_getRealDir` call in the hook instead of `PHYSFS_exists` + `PHYSFS_getRealDir`.
+5. A `CreateFileW` hook, if step 1 shows it's needed.
+Torphedo's other answers: the console only shows on sideloaded copies (pdnet hides it anyway); `pdmod.json` is
+Rebirth's metadata only, and `touches` is worked out from the paths at every scan, not written by creators.
 
 ### Steps
 1. PDPL bundled and injected before the game resumes; a test archive changes a model, a map and a shader.
@@ -147,6 +151,12 @@ PDPL's start-up code only.)
 8. Catalog plugins.
 
 ## Log
+- 2026-11-19: Mod loader step 1 (Conceptual 41): PDPL 1.2.2 (deps\pdpl\pd_loader_core.dll, sha256 checked by build.ps1)
+  goes in the kit; pdlaunch loads it after pdnet while the game is suspended and waits for its CreateFile2 hook (E9 at
+  KERNELBASE!CreateFile2, up to 5 s; skipped with mods=off or when pdnet\mods-boot.txt exists). pdnet's PdBeforePdpl first
+  makes a hidden console (PDPL's AllocConsole fails: no window) and pipes for PDPL's input (empty) and output
+  (LocalState\pdnet\pdpl.log, also in Send Log); pdnet logs PDPL's CPU after 1 and 5 min. Mods go in
+  %LOCALAPPDATA%\Packages\Microsoft.MSEsper_8wekyb3d8bbwe\RoamingState\mods. Built; not yet tried in the game.
 - 2026-11-19: mod loader plan and code plan changed to PDPL loading the files (the user's call, after Torphedo's reply). No code yet.
 - 2026-11-16: mod loader code plan written (docs\MOD_LOADER_CODE.md). No code yet.
 - 2026-11-16: Mod loader and mod menu: plan written (above); pdnet loads mods itself, not PDPL (the user's call). Read-only, no kit built.

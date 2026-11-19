@@ -8,6 +8,7 @@
 #include "gamepatches.h"
 #include "hooks.h"
 #include "log.h"
+#include "pdpl.h"
 #include "../xsapi/xsapi.h"
 
 namespace
@@ -29,6 +30,7 @@ namespace
 
             if (g_injected)
             {
+                pdnet::pdpl::Report(); // mod loader step 1 (Conceptual): is PDPL in the game, and how busy is it
                 if (pdnet::GetConfig().eos) pdnet::eos::Start();
                 return;
             }
@@ -74,6 +76,14 @@ extern "C" DWORD WINAPI PdInjectedInit(LPVOID)
             Sleep(1);
         }
     }).detach();
+    return 0;
+}
+
+// pdlaunch calls this in the game right before it loads PDPL (pd_loader_core.dll): a hidden console and pipes for PDPL's
+// input and output (see pdpl.h).
+extern "C" DWORD WINAPI PdBeforePdpl(LPVOID)
+{
+    pdnet::pdpl::BeforeLoad();
     return 0;
 }
 

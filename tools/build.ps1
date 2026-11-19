@@ -267,6 +267,14 @@ Copy-Item (Join-Path $root 'kit') $kit -Recurse
 $files = Join-Path $kit 'pdnet'
 Copy-Item (Join-Path $out 'pdnet.dll'), (Join-Path $out 'pdlaunch.exe'), (Join-Path $out 'SDL3.dll'), $eosDll, $xaudio $files
 
+# PDPL (Torphedo's mod loader): pdlaunch injects pd_loader_core.dll before the game runs. deps\pdpl\VERSION.txt names
+# its sha256, so a changed or damaged DLL never goes into a kit unnoticed.
+$pdpl = Join-Path $root 'deps\pdpl\pd_loader_core.dll'
+$pdplSha = Select-String -Path (Join-Path $root 'deps\pdpl\VERSION.txt') -Pattern '^sha256 pd_loader_core\.dll ([0-9a-f]{64})' | ForEach-Object { $_.Matches[0].Groups[1].Value } | Select-Object -First 1
+if (-not (Test-Path $pdpl) -or -not $pdplSha) { Fail 'deps\pdpl\pd_loader_core.dll or its sha256 line in deps\pdpl\VERSION.txt is missing.' }
+if ((Get-FileHash $pdpl -Algorithm SHA256).Hash.ToLower() -ne $pdplSha) { Fail 'deps\pdpl\pd_loader_core.dll does not match the sha256 in deps\pdpl\VERSION.txt.' }
+Copy-Item $pdpl $files
+
 $eosIni = Join-Path $root 'private\eos.tester.ini'
 if (Test-Path $eosIni) { Copy-Item $eosIni (Join-Path $files 'eos.ini') }
 else { Write-Host "No private\eos.tester.ini: the kit has no eos.ini, so its players can't sign in to Epic (online play won't work)." -ForegroundColor Yellow }

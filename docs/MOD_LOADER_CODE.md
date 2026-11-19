@@ -10,7 +10,25 @@ PDPL's PhysicsFS functions. Rebirth adds everything around it: the in-game Mods 
 sort, lobbies, skill data in memory. PDPL is used unchanged; fixes go to Torphedo (section 12), not into a copy.
 
 PDPL source read: `Torphedo/pd_loader_core` commit `4264ea4` (2025-11-26). Newest release: **1.2.2** (2025-12-24,
-asset `pdpl.zip`, sha256 `62a043e7...543e`). Check the 1.2.2 changes before step 1.
+asset `pdpl.zip`, sha256 `62a043e7...543e`), built from that same commit.
+
+**1.2.2's `pd_loader_core.dll` has no export table** (an MSVC build; checked with dumpbin, 2026-11-19). So pdnet can't
+call its PhysicsFS functions: the live remount (sections 5.2-5.3, step 3) waits on a PDPL build that exports them
+(request 1). Until then mods change at the next start only (the `!rbNN-` links, or `modlist.txt` if PDPL adds it).
+
+**Torphedo's answers (2026-11-19):**
+- The console only appears when the game is sideloaded, and hiding the window would be easy. Rebirth supports unpacked
+  (sideloaded) copies, so pdnet handles it itself (section 4.3); no change in PDPL needed.
+- PhysicsFS locks each call. The gap is between two calls in PDPL's hook (`PHYSFS_exists` then `PHYSFS_getRealDir`).
+- `fake\` copies keyed by file name only: a real problem for modding the motion (exmot) files; they should also be
+  deleted at start-up. Agreed to fix.
+- A `CreateFileW` hook: fine if needed.
+- `modlist.txt` (a mount list): if PDPL adds it, it's the one record of which mods are on and their order. Rebirth's
+  Mods menu writes it (no other program), and `mods_enabled` / `mods_order` in settings.ini go away. Turned-off
+  mods can stay in it as `# id` lines to keep their place.
+- `pdmod.json` needs nothing from PDPL: it's Rebirth's metadata only. `touches` isn't a field: it's worked out
+  from the paths at every scan, so it can't be out of date. Dependencies by id (`load_after` / `load_before`) stay.
+- Forwarding PDPL's output into Rebirth's log can be done inside pdnet: step 1 does it (section 4.3).
 
 Words used here:
 - **game path**: a file path as the game opens it (`Assets/Data/player/pc01a/pc01a2.alr`, `3dsprite_ps.cso`).
@@ -120,7 +138,6 @@ freecam         someone/pd-freecam       plugin
   "author": "someone",
   "description": "Stage 3 at night, with neon lights.",
   "online": "match",
-  "touches": ["maps", "shaders"],
   "load_after": ["skillpack-toaf"],
   "load_before": []
 }
@@ -130,7 +147,7 @@ freecam         someone/pd-freecam       plugin
 | `id` | file name, cleaned | Must equal the catalog id for catalog mods |
 | `name`, `version`, `author`, `description` | file name, "", "", "" | Shown in the menu |
 | `online` | `match` | `match`: changes the game for everyone, must match the host. `local`: only looks or sounds different on this PC |
-| `touches` | worked out from the paths | `skills maps models animation audio shaders ui text plugins other` |
+| (`touches`) | not a field | Worked out from the paths at every scan: `skills maps models animation audio shaders ui text plugins other` |
 | `load_after`, `load_before` | none | Ids. `load_after: [X]` = my files win over X's |
 
 PDPL ignores `pdmod.json` (it's just another file in the archive), so the same archive works with plain PDPL too.
@@ -202,15 +219,21 @@ pdnet is the game's `Microsoft.Xbox.Services.dll` there. `EnsureInitialized` (no
 `LoadLibraryW(<pdnet's folder>\pd_loader_core.dll)` before anything else. That's late (after the start-up logos), so
 files the game opened before it come from vanilla. `build-linux.sh` / `setup-linux.sh` copy the DLL next to pdnet.
 
-### 4.3 What step 1 has to check about PDPL itself
-From PDPL's code (`dll_main.c`, `console.c`):
-- It calls `AllocConsole` and shows the console window. A console window in front of the game isn't acceptable for
-  players.
-- If `AllocConsole` fails, `loader_main`'s `while (running) { fgets(...); command_exec(line); }` gets end-of-file at
-  once, every time, so that thread may spin at 100% of a core for the whole session.
-- Step 1 records: does a console appear (Store copy, unpacked copy), and what CPU does PDPL's thread use (Process
-  Explorer, thread start address in pd_loader_core.dll). Either problem = upstream request 1 (section 12) before
-  players get it.
+### 4.3 PDPL's console and output (done in step 1, `src/pdpl.cpp`)
+From PDPL's code (`dll_main.c`, `console.c`): it calls `AllocConsole` and shows the window (sideloaded copies), and
+its command loop `while (running) { fgets(...); command_exec(line); }` would get end-of-file at once, every time, where
+there's no console (Store copies), and may spin a core. pdnet deals with both without a change in PDPL:
+- pdlaunch runs pdnet's export `PdBeforePdpl` in the game right before it loads `pd_loader_core.dll`.
+- `pdpl::BeforeLoad` makes a console of pdnet's own and hides it at once, so PDPL's `AllocConsole` fails (one console
+  per process): no window, and PDPL never reopens its output to a console.
+- It points standard input at an empty pipe (PDPL's `fgets` waits there for good), and standard output and error at a
+  pipe. PDPL's C runtime takes those handles when the DLL loads. A pdnet thread copies the text, without PDPL's colour
+  codes and with a time on each line, to `LocalState\pdnet\pdpl.log` (the start before is kept as `pdpl.prev.log`);
+  PDPL's own messages (not its `CreateFile2` lines) also go to pdnet.log, the first 200. Options > Send Log uploads
+  pdpl.log too.
+- The output is a pipe, so PDPL's C runtime buffers it: lines arrive in blocks of about 4 KB.
+- `pdpl::Report` (pdnet's set-up) logs whether PDPL is in the game, and after 1 and 5 minutes the CPU time of the
+  threads that started in `pd_loader_core.dll`.
 
 ---
 
@@ -551,27 +574,25 @@ can't be unloaded. So:
 
 ## 12. Requests for Torphedo (upstream)
 
-In order of importance:
-1. **A quiet mode for players:** no console window, PDPL's messages to a log file, no command loop (or one that stops
-   at end of input instead of spinning). E.g. a `quiet` file next to the DLL, or an exported `pdpl_set_quiet` called
-   before its thread starts. Needed before Stable (section 4.3).
-2. **A lock around mount changes:** export a way to change the search path while the CreateFile2 hook can't be
-   between `PHYSFS_exists` and `PHYSFS_getRealDir`, e.g. `pdpl_lock()` / `pdpl_unlock()` taking the same mutex the
-   hook uses.
-3. **`fake\` copies keyed by the full path,** so two files with the same name in different folders don't share one
-   copy; and reuse a copy that's still current instead of extracting on every open.
-4. **A `CreateFileW` hook too,** if step 1 shows files the game opens through `fopen` (PDUWP and the D3D11 library
-   both use it) that PDPL misses.
-5. **Optional:** a mount list (`mods\mountlist.txt`, archives in order) PDPL reads at start instead of listing the
-   folder. It would replace the `!rbNN-` link scheme with one file. And `pdmod.json` as a shared format.
+Updated after Torphedo's answers (2026-11-19). In order of importance:
+1. **Exports.** 1.2.2's `pd_loader_core.dll` has no export table, so nothing outside it can call PhysicsFS. Export the
+   `PHYSFS_*` functions (section 5.2's list), or a few of PDPL's own (mount, unmount, search path). Needed for changing
+   mods without a restart (step 3). Worth checking whether plugins that import from `pd_loader_core.dll` work with 1.2.2.
+2. **`fake\` copies keyed by the full path,** deleted at start-up (Torphedo agreed: needed for the exmot files).
+3. **`modlist.txt`:** PDPL mounts exactly the archives listed, in that order (`# id` lines skipped). Rebirth's Mods
+   menu writes it; it replaces the `!rbNN-` links and the order in settings.ini.
+4. **The remount gap:** one `PHYSFS_getRealDir` call in the hook (its string copied) instead of `PHYSFS_exists` then
+   `PHYSFS_getRealDir`, so a remount can't land between the two.
+5. **A `CreateFileW` hook too,** if step 1 shows files the game opens through `fopen` that PDPL misses.
 
-Nothing in Rebirth's plan waits on 3-5.
+The console, the command loop and forwarding PDPL's output are handled in pdnet (section 4.3). Steps 1, 2 and 4-8 don't
+wait on any of these; step 3 waits on 1.
 
 ---
 
 ## 13. Creator tooling
 
-`tools/make-mod.ps1 -Folder D:\MyMod`: checks `pdmod.json` (fields, id format, `touches`), warns about paths the game
+`tools/make-mod.ps1 -Folder D:\MyMod`: checks `pdmod.json` (fields, id format), warns about paths the game
 doesn't have (with `-Game <folder>`), zips with `/` names to `<id>-<version>.zip`, prints
 `sha256 <name> <hex>` and the catalog line. `mods/README.md`: layout (PDPL's: game paths at the root, `plugins/` for
 DLLs), `pdmod.json`, `online: match` vs `local`, publishing a GitHub release, asking for a catalog entry, plugin review.

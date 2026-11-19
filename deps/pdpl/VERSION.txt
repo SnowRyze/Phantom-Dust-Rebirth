@@ -1,0 +1,6 @@
+PDPL (Phantom Dust Plugin Loader) 1.2.2 by Torphedo: https://github.com/Torphedo/pd_loader_core
+pd_loader_core.dll from the release's pdpl.zip (release 1.2.2, 2025-12-24, built from commit 4264ea4; pdpl.zip sha256 62a043e72e6fa5fbc94990a06c0cf6201b7531b430e60e9f9bbff53f1373543e).
+pdlaunch injects it into the game while the game is still suspended; it loads mod files from RoamingState\mods.
+The DLL has no export table (MSVC build), so pdnet can't call its PhysicsFS functions; mods change at game start only.
+To update PDPL: replace the DLL and the sha256 line below (build.ps1 refuses a DLL that doesn't match it).
+sha256 pd_loader_core.dll 5e6b7f2f9430322c6f3dbe838009ca622f248edf9c6dd09491a5edf1023be4ae
