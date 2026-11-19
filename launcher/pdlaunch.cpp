@@ -24,6 +24,8 @@
 #include <vector>
 #include <SDL3/SDL.h>  // types only: SDL3.dll is loaded at run time (ReadControllers)
 #include "padshare.h"
+#include "logscrub.h"
+#include <cstdarg>
 #include "modsync.h"
 #include <bcrypt.h>
 #pragma comment(lib, "winhttp.lib")
@@ -34,18 +36,36 @@ namespace
 {
     std::wstring g_dir;
 
+    // The player's in-game name, which the log shows in place of the PC's own names (logscrub.h; the user, 2026-11-22):
+    // display_name from the kit's pdnet.ini, then the game's settings.ini.
+    const std::wstring& LogName()
+    {
+        static std::wstring name = []
+        {
+            wchar_t local[MAX_PATH] = {};
+            DWORD n = GetEnvironmentVariableW(L"LOCALAPPDATA", local, MAX_PATH);
+            std::vector<std::wstring> files{ g_dir + L"pdnet.ini" };
+            if (n && n < MAX_PATH) files.push_back(std::wstring(local) + L"\\Packages\\Microsoft.MSEsper_8wekyb3d8bbwe\\LocalState\\pdnet\\settings.ini");
+            return pdnet::logscrub::ReadName(files);
+        }();
+        return name;
+    }
+
     void Log(const wchar_t* fmt, ...)
     {
         FILE* f = nullptr;
         if (_wfopen_s(&f, (g_dir + L"pdlaunch.log").c_str(), L"a, ccs=UTF-8") || !f) return;
         SYSTEMTIME t;
         GetLocalTime(&t);
-        fwprintf(f, L"%04u-%02u-%02u %02u:%02u:%02u.%03u ", t.wYear, t.wMonth, t.wDay, t.wHour, t.wMinute, t.wSecond, t.wMilliseconds);
+        wchar_t body[4096];
         va_list args;
         va_start(args, fmt);
-        vfwprintf(f, fmt, args);
+        _vsnwprintf_s(body, _TRUNCATE, fmt, args);
         va_end(args);
-        fwprintf(f, L"\n");
+        std::wstring text = body;
+        static const std::wstring computer = pdnet::logscrub::ComputerName();
+        pdnet::logscrub::Scrub(text, LogName(), computer);
+        fwprintf(f, L"%04u-%02u-%02u %02u:%02u:%02u.%03u %s\n", t.wYear, t.wMonth, t.wDay, t.wHour, t.wMinute, t.wSecond, t.wMilliseconds, text.c_str());
         fclose(f);
     }
 

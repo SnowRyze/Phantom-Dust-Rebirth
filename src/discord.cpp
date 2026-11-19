@@ -3,6 +3,7 @@
 #include <set>
 #include "config.h"
 #include "log.h"
+#include "logscrub.h"
 #include <condition_variable>
 #include <deque>
 #include <thread>
@@ -377,17 +378,30 @@ namespace pdnet::discord
         std::wstring kitDir = module;
         kitDir = kitDir.substr(0, kitDir.find_last_of(L'\\') + 1);
 
-        wchar_t pc[MAX_COMPUTERNAME_LENGTH + 1] = L"PC";
-        DWORD pcLen = _countof(pc);
-        GetComputerNameW(pc, &pcLen);
+        // Named after the player's in-game name, not the PC (the user, 2026-11-22), and every line cleaned of the PC's own
+        // names too (logscrub.h: older lines were written before pdnet cleaned them, and PDPL's log is its own).
+        std::wstring player = GetConfig().displayName.empty() ? L"player" : GetConfig().displayName;
+        std::wstring computer = logscrub::ComputerName();
+        auto clean = [&](std::string data)
+        {
+            if (data.empty()) return data;
+            int n = MultiByteToWideChar(CP_UTF8, 0, data.data(), static_cast<int>(data.size()), nullptr, 0);
+            std::wstring wide(n, L'\0');
+            MultiByteToWideChar(CP_UTF8, 0, data.data(), static_cast<int>(data.size()), wide.data(), n);
+            logscrub::Scrub(wide, player, computer);
+            int m = WideCharToMultiByte(CP_UTF8, 0, wide.data(), static_cast<int>(wide.size()), nullptr, 0, nullptr, nullptr);
+            std::string out(m, '\0');
+            WideCharToMultiByte(CP_UTF8, 0, wide.data(), static_cast<int>(wide.size()), out.data(), m, nullptr, nullptr);
+            return out;
+        };
         SYSTEMTIME now;
         GetLocalTime(&now);
-        char stamp[64];
-        sprintf_s(stamp, "%S-%04u%02u%02u-%02u%02u", pc, now.wYear, now.wMonth, now.wDay, now.wHour, now.wMinute);
+        char stamp[96];
+        sprintf_s(stamp, "%S-%04u%02u%02u-%02u%02u", logscrub::FileSafe(player).c_str(), now.wYear, now.wMonth, now.wDay, now.wHour, now.wMinute);
         // Discord takes 10 MB per message without a server boost. pdpl.log: PDPL's output (mod loader, Conceptual).
-        std::pair<std::string, std::string> files[] = { { std::string("pdnet-log-") + stamp + ".txt", Tail(LocalStatePath() + L"\\pdnet.log", 7u << 20) },
-                                                        { std::string("pdlaunch-log-") + stamp + ".txt", Tail(kitDir + L"pdlaunch.log", 1u << 20) },
-                                                        { std::string("pdpl-log-") + stamp + ".txt", Tail(LocalStatePath() + L"\\pdnet\\pdpl.log", 1u << 20) } };
+        std::pair<std::string, std::string> files[] = { { std::string("pdnet-log-") + stamp + ".txt", clean(Tail(LocalStatePath() + L"\\pdnet.log", 7u << 20)) },
+                                                        { std::string("pdlaunch-log-") + stamp + ".txt", clean(Tail(kitDir + L"pdlaunch.log", 1u << 20)) },
+                                                        { std::string("pdpl-log-") + stamp + ".txt", clean(Tail(LocalStatePath() + L"\\pdnet\\pdpl.log", 1u << 20)) } };
         if (files[0].second.empty()) return "no log yet";
 
         const std::string boundary = "pdnet-log-boundary-7f3a9c";

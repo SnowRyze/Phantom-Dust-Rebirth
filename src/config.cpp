@@ -185,6 +185,7 @@ namespace pdnet
             Log(L"config: network_mode=%s advertise_ip=%s game_port=%u control_port=%u qos_probes=%u%s%s",
                 c.teredo ? L"teredo" : c.p2p ? L"eos" : L"direct", c.advertiseIp.c_str(), c.gamePort, c.controlPort, c.qosProbes,
                 c.p2p ? L" p2p_relay=" : L"", c.p2p ? c.p2pRelay.c_str() : L"");
+            SetLogName(c.displayName);
             return c;
         }
     }
