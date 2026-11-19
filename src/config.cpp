@@ -117,7 +117,7 @@ namespace pdnet
                 auto eq = line.find('=');
                 if (eq == std::string::npos) continue;
                 std::string key = Trim(line.substr(0, eq)), value = Trim(line.substr(eq + 1));
-                if (key == "menu_debug") c.menuDebug = _stricmp(value.c_str(), "on") == 0;
+                if (key == "menu_debug") c.menuDebug = _stricmp(value.c_str(), "on") == 0 ? 44 : atoi(value.c_str()) > 0 ? atoi(value.c_str()) : 0;
                 else if (key == "voice_chat") c.voiceChat = _stricmp(value.c_str(), "off") != 0;
                 else if (key == "voice_listen") c.voiceListen = _stricmp(value.c_str(), "off") != 0;
                 else if (key == "voice_mode") c.voiceClassic = _stricmp(value.c_str(), "classic") == 0;
@@ -139,6 +139,8 @@ namespace pdnet
                 else if (key == "log_webhook") c.logWebhook = std::wstring(value.begin(), value.end());
                 else if (key == "partner_aim") c.partnerClassic = _stricmp(value.c_str(), "classic") == 0;
                 else if (key == "partner_lock_key") { if (uint32_t code = KeyCode(value); code != ~0u) c.partnerLockKey = code; }
+                else if (key == "conceptual_updates") c.conceptualUpdatesOff = _stricmp(value.c_str(), "off") == 0;
+                else if (key == "lobby_mods") c.lobbyModsAuto = _stricmp(value.c_str(), "off") != 0;
                 else if (key == "update_channel") { if (!value.empty()) c.updateChannel = std::wstring(value.begin(), value.end()); } // empty in settings.ini: pdnet.ini's
                 else if (key == "discord_invite")c.discordInvite = std::wstring(value.begin(), value.end());
                 else if (key == "discord_lobby_messages") c.discordLobbyMessages = _stricmp(value.c_str(), "off") != 0;

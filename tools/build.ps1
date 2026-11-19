@@ -11,8 +11,8 @@
 #   promote <N>               make Experimental N the next "Stable <M>" (the public version) with
 #                             private\public-links.ini, tag stable-<M> and publish it (the whole kit for first installs,
 #                             plus pdnet-update-<build>.zip for updates)
-#   conceptual "notes"        save the kit as the next "PhantomDust-pdnet Conceptual <N>.zip" (from the Conceptual
-#                             branch): never published, and its pdlaunch never updates it
+#   conceptual "notes"        publish to Conceptual kits' own updates, and save the kit as the next "PhantomDust-pdnet Conceptual <N>.zip" (from the Conceptual
+#                             branch); its pdlaunch updates only from Conceptual releases
 # Needs: Visual Studio 2022 (or Build Tools) with "Desktop development with C++", and Epic's EOS SDK in deps\eos-sdk.
 # Optional, in private\ (never in git): eos.tester.ini (the EOS client testers use, shipped as the kit's eos.ini) and
 # links.ini (discord_webhook=, log_webhook=, discord_invite=, put into the kit's pdnet.ini).
@@ -252,7 +252,7 @@ try {
     # ---- pdlaunch.exe: a Windows program, not a console one (it stays running in the background with the game) ----
     Step 'Building pdlaunch.exe'
     $sdl = Join-Path $root 'deps\SDL3'
-    & cl.exe /nologo /std:c++20 /EHsc /MT /O2 /W3 /permissive- /utf-8 /DUNICODE /D_UNICODE "/I$src" "/I$sdl\include" '/Foobj\launcher\' /Fepdlaunch.exe "$root\launcher\pdlaunch.cpp" /link /SUBSYSTEM:WINDOWS /ENTRY:wmainCRTStartup kernel32.lib psapi.lib ole32.lib user32.lib
+    & cl.exe /nologo /std:c++20 /EHsc /MT /O2 /W3 /permissive- /utf-8 /DUNICODE /D_UNICODE "/I$src" "/I$sdl\include" '/Foobj\launcher\' /Fepdlaunch.exe "$root\launcher\pdlaunch.cpp" "$root\launcher\modsync.cpp" "$root\launcher\mapslots.cpp" /link /SUBSYSTEM:WINDOWS /ENTRY:wmainCRTStartup kernel32.lib psapi.lib ole32.lib user32.lib
     if ($LASTEXITCODE -ne 0) { Fail 'pdlaunch.exe failed to build (see the errors above).' }
     Copy-Item "$sdl\SDL3.dll" $out -Force
 }
@@ -266,6 +266,14 @@ if (Test-Path $kit) { Remove-Item $kit -Recurse -Force }
 Copy-Item (Join-Path $root 'kit') $kit -Recurse
 $files = Join-Path $kit 'pdnet'
 Copy-Item (Join-Path $out 'pdnet.dll'), (Join-Path $out 'pdlaunch.exe'), (Join-Path $out 'SDL3.dll'), $eosDll, $xaudio $files
+
+# PDPL (Torphedo's mod loader): pdlaunch injects pd_loader_core.dll before the game runs. deps\pdpl\VERSION.txt names
+# its sha256, so a changed or damaged DLL never goes into a kit unnoticed.
+$pdpl = Join-Path $root 'deps\pdpl\pd_loader_core.dll'
+$pdplSha = Select-String -Path (Join-Path $root 'deps\pdpl\VERSION.txt') -Pattern '^sha256 pd_loader_core\.dll ([0-9a-f]{64})' | ForEach-Object { $_.Matches[0].Groups[1].Value } | Select-Object -First 1
+if (-not (Test-Path $pdpl) -or -not $pdplSha) { Fail 'deps\pdpl\pd_loader_core.dll or its sha256 line in deps\pdpl\VERSION.txt is missing.' }
+if ((Get-FileHash $pdpl -Algorithm SHA256).Hash.ToLower() -ne $pdplSha) { Fail 'deps\pdpl\pd_loader_core.dll does not match the sha256 in deps\pdpl\VERSION.txt.' }
+Copy-Item $pdpl $files
 
 $eosIni = Join-Path $root 'private\eos.tester.ini'
 if (Test-Path $eosIni) { Copy-Item $eosIni (Join-Path $files 'eos.ini') }
@@ -295,7 +303,8 @@ $label = if ($Mode -eq 'experimental') {
     "PhantomDust-pdnet Experimental $number"
 } elseif ($Mode -eq 'conceptual') { "PhantomDust-pdnet Conceptual $((LastNumber 'Conceptual') + 1)" }
 else { 'PhantomDust-pdnet development build' }
-$version = "$label`r`npdnet.dll MD5 $md5`r`n" + $(if ($Mode -eq 'experimental') { "Build: $number`r`n" } else { '' }) +
+if ($Mode -eq 'conceptual') { $conceptualNumber = (LastNumber 'Conceptual') + 1 }
+$version = "$label`r`npdnet.dll MD5 $md5`r`n" + $(if ($Mode -eq 'experimental') { "Build: $number`r`n" } elseif ($Mode -eq 'conceptual') { "Build: $conceptualNumber`r`n" } else { '' }) +
            "Source: $(if ($commit) { $commit } else { 'unknown (not built from a git clone)' })$dirty`r`n" + $(if ($Mode -ne 'build' -and $Arg) { "$Arg`r`n" } else { '' })
 [IO.File]::WriteAllText((Join-Path $files 'kit-version.txt'), $version, (New-Object Text.UTF8Encoding $false))
 Zip $kit (Join-Path $out 'PhantomDust-pdnet.zip')
@@ -310,7 +319,27 @@ if ($Mode -eq 'conceptual') {
     $zip = Join-Path $kits "$label.zip"
     Copy-Item (Join-Path $out 'PhantomDust-pdnet.zip') $zip -Force
     Write-Host "  $zip" -ForegroundColor Green
-    Write-Host 'Conceptual: not published, and it never updates itself. The kit has eos.ini and the Discord links inside: share it only with your testers.' -ForegroundColor Yellow
+    Write-Host 'The kit has eos.ini and the Discord links inside: share it only with your testers.' -ForegroundColor Yellow
+
+    # The update for installed Conceptual kits: a pre-release of the pushed commit, asset pdnet-conceptual-<N>.zip. Other
+    # kits never take it: they only look for pdnet-update-<N>.zip (launcher\pdlaunch.cpp, CheckForUpdate).
+    $asset = Join-Path $out "pdnet-conceptual-$conceptualNumber.zip"
+    UpdateZip $kit $asset
+    $fullCommit = $null; $pushed = $false
+    if ($commit) {
+        $ErrorActionPreference = 'Continue'
+        $fullCommit = git -C $root rev-parse HEAD 2>$null
+        git -C $root fetch -q origin 2>$null
+        $pushed = [bool](git -C $root branch -r --contains $fullCommit 2>$null)
+        $ErrorActionPreference = 'Stop'
+    }
+    if (-not $fullCommit) { Write-Host 'Not published to GitHub: not a git clone.' -ForegroundColor Yellow }
+    elseif ($dirty) { Write-Host 'Not published to GitHub: commit the changes first (an update must match a commit).' -ForegroundColor Yellow }
+    elseif (-not $pushed) { Write-Host 'Not published to GitHub: push this commit first, then run build.bat conceptual again.' -ForegroundColor Yellow }
+    else {
+        $page = PublishRelease "conceptual-$conceptualNumber" $fullCommit "Conceptual $conceptualNumber" $true (ReleaseNotes $conceptualNumber $asset $(if ($Arg) { $Arg } else { "Conceptual $conceptualNumber." })) $asset
+        if ($page) { Write-Host "Published: $page" -ForegroundColor Green }
+    }
 }
 
 if ($Mode -eq 'experimental') {

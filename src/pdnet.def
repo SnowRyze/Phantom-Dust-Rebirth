@@ -3,3 +3,4 @@ EXPORTS
     DllGetActivationFactory = PdGetActivationFactory PRIVATE
     DllCanUnloadNow = PdCanUnloadNow PRIVATE
     PdInjectedInit
+    PdBeforePdpl

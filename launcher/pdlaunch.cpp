@@ -4,7 +4,8 @@
 // game suspended and run "pdlaunch.exe -p <pid> -tid <main thread id>". pdlaunch then:
 //   1. loads pdnet.dll (next to pdlaunch.exe) into the game with a remote LoadLibraryW thread,
 //   2. runs pdnet's PdInjectedInit export there (hooks the game's WinRT activation, starts EOS),
-//   3. resumes the game's main thread.
+//   3. loads PDPL (Torphedo's mod loader, pd_loader_core.dll) unless mods=off (InjectPdpl; Conceptual),
+//   4. resumes the game's main thread.
 // It always resumes the game, even if a step fails (the game then runs without pdnet). Results go to pdlaunch.log.
 // The folder must be readable by the game's sandbox (store-setup.ps1 grants ALL APPLICATION PACKAGES read access).
 #include <windows.h>
@@ -23,6 +24,7 @@
 #include <vector>
 #include <SDL3/SDL.h>  // types only: SDL3.dll is loaded at run time (ReadControllers)
 #include "padshare.h"
+#include "modsync.h"
 #include <bcrypt.h>
 #pragma comment(lib, "winhttp.lib")
 #pragma comment(lib, "advapi32.lib")
@@ -79,6 +81,59 @@ namespace
         return nullptr;
     }
 
+    // Loads `dll` in the game with a remote LoadLibraryW thread; its module handle there, or null (logged).
+    HMODULE RemoteLoadLibrary(HANDLE process, const std::wstring& dll, const wchar_t* what)
+    {
+        HMODULE remote = nullptr;
+        size_t bytes = (dll.size() + 1) * sizeof(wchar_t);
+        void* remotePath = VirtualAllocEx(process, nullptr, bytes, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
+        if (remotePath && WriteProcessMemory(process, remotePath, dll.c_str(), bytes, nullptr))
+        {
+            // kernel32 is mapped at the same address in every process of this boot.
+            auto loadLibrary = reinterpret_cast<LPTHREAD_START_ROUTINE>(GetProcAddress(GetModuleHandleW(L"kernel32.dll"), "LoadLibraryW"));
+            std::wstring label = std::wstring(L"LoadLibraryW(") + what + L")";
+            if (RunRemote(process, loadLibrary, remotePath, 30000, label.c_str()))
+            {
+                remote = FindRemoteModule(process, dll);
+                if (!remote) Log(L"%s did not load in the game (missing read access for app packages? run Setup.bat again)", what);
+            }
+        }
+        else
+        {
+            Log(L"could not write into the game process (%lu)", GetLastError());
+        }
+        if (remotePath) VirtualFreeEx(process, remotePath, 0, MEM_RELEASE);
+        return remote;
+    }
+
+    // Runs the export `name` of `dll` (loaded in the game at `remote`) on a remote thread and waits for it.
+    bool RunRemoteExport(HANDLE process, HMODULE remote, const std::wstring& dll, const char* name, DWORD timeoutMs)
+    {
+        // The export's offset is the same in both copies of the DLL; find it in a local copy loaded as data.
+        HMODULE local = LoadLibraryExW(dll.c_str(), nullptr, DONT_RESOLVE_DLL_REFERENCES);
+        FARPROC function = local ? GetProcAddress(local, name) : nullptr;
+        bool ok = false;
+        std::wstring label(name, name + strlen(name));
+        if (!function)
+        {
+            Log(L"%s has no %s export (old build?)", dll.substr(dll.find_last_of(L'\\') + 1).c_str(), label.c_str());
+        }
+        else
+        {
+            auto start = reinterpret_cast<LPTHREAD_START_ROUTINE>(reinterpret_cast<uint8_t*>(remote) + (reinterpret_cast<uint8_t*>(function) - reinterpret_cast<uint8_t*>(local)));
+            ok = RunRemote(process, start, nullptr, timeoutMs, label.c_str());
+        }
+        if (local) FreeLibrary(local);
+        return ok;
+    }
+
+    HANDLE OpenGame(DWORD pid)
+    {
+        HANDLE process = OpenProcess(PROCESS_CREATE_THREAD | PROCESS_QUERY_INFORMATION | PROCESS_VM_OPERATION | PROCESS_VM_WRITE | PROCESS_VM_READ, FALSE, pid);
+        if (!process) Log(L"OpenProcess(%lu) failed (%lu)", pid, GetLastError());
+        return process;
+    }
+
     bool Inject(DWORD pid)
     {
         std::wstring dll = g_dir + L"pdnet.dll";
@@ -87,53 +142,86 @@ namespace
             Log(L"pdnet.dll not found next to pdlaunch.exe");
             return false;
         }
-        HANDLE process = OpenProcess(PROCESS_CREATE_THREAD | PROCESS_QUERY_INFORMATION | PROCESS_VM_OPERATION | PROCESS_VM_WRITE | PROCESS_VM_READ, FALSE, pid);
-        if (!process)
-        {
-            Log(L"OpenProcess(%lu) failed (%lu)", pid, GetLastError());
-            return false;
-        }
-
+        HANDLE process = OpenGame(pid);
+        if (!process) return false;
         bool ok = false;
-        size_t bytes = (dll.size() + 1) * sizeof(wchar_t);
-        void* remotePath = VirtualAllocEx(process, nullptr, bytes, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
-        if (remotePath && WriteProcessMemory(process, remotePath, dll.c_str(), bytes, nullptr))
+        if (HMODULE remote = RemoteLoadLibrary(process, dll, L"pdnet.dll"))
         {
-            // kernel32 is mapped at the same address in every process of this boot.
-            auto loadLibrary = reinterpret_cast<LPTHREAD_START_ROUTINE>(GetProcAddress(GetModuleHandleW(L"kernel32.dll"), "LoadLibraryW"));
-            if (RunRemote(process, loadLibrary, remotePath, 30000, L"LoadLibraryW(pdnet.dll)"))
-            {
-                HMODULE remote = FindRemoteModule(process, dll);
-                // The export's offset is the same in both copies of the DLL; find it in a local copy loaded as data.
-                HMODULE local = LoadLibraryExW(dll.c_str(), nullptr, DONT_RESOLVE_DLL_REFERENCES);
-                FARPROC init = local ? GetProcAddress(local, "PdInjectedInit") : nullptr;
-                if (!remote)
-                {
-                    Log(L"pdnet.dll did not load in the game (missing read access for app packages? run store-setup.ps1 again)");
-                }
-                else if (!init)
-                {
-                    Log(L"pdnet.dll has no PdInjectedInit export (old build?)");
-                }
-                else
-                {
-                    auto remoteInit = reinterpret_cast<LPTHREAD_START_ROUTINE>(reinterpret_cast<uint8_t*>(remote) + (reinterpret_cast<uint8_t*>(init) - reinterpret_cast<uint8_t*>(local)));
-                    ok = RunRemote(process, remoteInit, nullptr, 30000, L"PdInjectedInit");
-                    if (ok) Log(L"pdnet loaded into the game (pid %lu)", pid);
-                }
-                if (local) FreeLibrary(local);
-            }
+            ok = RunRemoteExport(process, remote, dll, "PdInjectedInit", 30000);
+            if (ok) Log(L"pdnet loaded into the game (pid %lu)", pid);
         }
-        else
-        {
-            Log(L"could not write into the game process (%lu)", GetLastError());
-        }
-        if (remotePath) VirtualFreeEx(process, remotePath, 0, MEM_RELEASE);
         CloseHandle(process);
         return ok;
     }
-}
 
+    std::wstring Setting(const wchar_t* key, const wchar_t* fallback); // (below)
+    bool UrlGet(const std::wstring& url, std::string& body, unsigned long timeoutMs); // (below)
+    std::string Sha256(const std::string& data); // (below)
+    // The mod catalog (mod_list_url= in pdnet.ini or settings.ini): mods.txt on this repository's own mod-catalog branch,
+    // which holds only that file and is written only by the Mod Admin app (outside the repository, like the leaderboard
+    // admin tool), so every kit (Conceptual, Experimental, Stable) reads the same whitelist.
+    constexpr wchar_t kModListUrl[] = L"https://raw.githubusercontent.com/SnowRyze/Phantom-Dust-Rebirth/mod-catalog/mods.txt";
+    const modsync::Net kModNet{ UrlGet, Sha256 };
+
+    // Mod loader (Conceptual, step 1; docs\MOD_LOADER_CODE.md): PDPL, Torphedo's Phantom Dust Plugin Loader
+    // (pd_loader_core.dll, next to pdlaunch.exe), loaded after pdnet while the game is still suspended. It loads mod files
+    // from RoamingState\mods. Skipped with mods=off, and after a start that never reached the title screen (pdnet keeps
+    // LocalState\pdnet\mods-boot.txt until then). First pdnet's PdBeforePdpl gives it a hidden console and pipes for its
+    // input and output (pdpl.h). PDPL's DllMain only starts a thread, which hooks CreateFile2 and then holds the game's file
+    // opens until its mods are mounted; the game mustn't run before that hook is in, or its first files would bypass PDPL.
+    // MinHook puts a jump (E9) at the start of KERNELBASE!CreateFile2, which is at the same address in every process of
+    // this boot, so pdlaunch reads that byte in the game until it changes (5 s at most).
+    void InjectPdpl(DWORD pid, const std::wstring& localState)
+    {
+        if (_wcsicmp(Setting(L"mods", L"on").c_str(), L"off") == 0)
+        {
+            Log(L"mods: off (mods=off) - PDPL not loaded");
+            return;
+        }
+        if (!localState.empty() && GetFileAttributesW((localState + L"\\pdnet\\mods-boot.txt").c_str()) != INVALID_FILE_ATTRIBUTES)
+        {
+            Log(L"mods: the last start didn't reach the title screen - starting without mods (PDPL not loaded)");
+            return;
+        }
+        std::wstring gameDir; // the game folder: where PDUWP.exe runs from (new map slots read the game's stage list there)
+        if (HANDLE game = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, pid))
+        {
+            wchar_t image[MAX_PATH] = {};
+            DWORD size = MAX_PATH;
+            if (QueryFullProcessImageNameW(game, 0, image, &size)) { gameDir = image; gameDir = gameDir.substr(0, gameDir.find_last_of(L'\\')); }
+            CloseHandle(game);
+        }
+        modsync::Sync(localState, Log, &kModNet, Setting(L"mod_list_url", kModListUrl), gameDir); // catalog downloads, then PDPL's mods folder = the mod list, before PDPL reads it
+        std::wstring dll = g_dir + L"pd_loader_core.dll", pdnet = g_dir + L"pdnet.dll";
+        if (GetFileAttributesW(dll.c_str()) == INVALID_FILE_ATTRIBUTES)
+        {
+            Log(L"mods: pd_loader_core.dll not found next to pdlaunch.exe - PDPL not loaded");
+            return;
+        }
+        HANDLE process = OpenGame(pid);
+        if (!process) return;
+        if (HMODULE remote = FindRemoteModule(process, pdnet))
+        {
+            if (!RunRemoteExport(process, remote, pdnet, "PdBeforePdpl", 10000)) Log(L"mods: PDPL may show a console window (pdnet's PdBeforePdpl didn't run)");
+        }
+        ULONGLONG start = GetTickCount64();
+        if (RemoteLoadLibrary(process, dll, L"pd_loader_core.dll"))
+        {
+            auto createFile2 = reinterpret_cast<const uint8_t*>(GetProcAddress(GetModuleHandleW(L"kernelbase.dll"), "CreateFile2"));
+            bool hooked = false;
+            while (createFile2 && !hooked && GetTickCount64() - start < 5000)
+            {
+                uint8_t first = 0;
+                SIZE_T read = 0;
+                hooked = ReadProcessMemory(process, createFile2, &first, 1, &read) && read == 1 && first == 0xE9;
+                if (!hooked) Sleep(1);
+            }
+            if (hooked) Log(L"mods: PDPL loaded (its file hook was in after %llu ms)", GetTickCount64() - start);
+            else Log(L"mods: PDPL loaded, but its file hook wasn't seen in 5 s - resuming the game anyway");
+        }
+        CloseHandle(process);
+    }
+}
 namespace
 {
     // pdnet.ini (next to pdlaunch.exe) value, or `fallback`.
@@ -808,6 +896,21 @@ namespace
         return ok;
     }
 
+    // HttpsGet with a whole https:// URL (the mod catalog and downloads, modsync).
+    bool UrlGet(const std::wstring& url, std::string& body, unsigned long timeoutMs)
+    {
+        URL_COMPONENTS parts{ sizeof(parts) };
+        wchar_t host[256], path[2048], extra[1024];
+        parts.lpszHostName = host;
+        parts.dwHostNameLength = _countof(host);
+        parts.lpszUrlPath = path;
+        parts.dwUrlPathLength = _countof(path);
+        parts.lpszExtraInfo = extra;
+        parts.dwExtraInfoLength = _countof(extra);
+        if (!WinHttpCrackUrl(url.c_str(), 0, 0, &parts) || parts.nScheme != INTERNET_SCHEME_HTTPS) return false;
+        return HttpsGet(host, std::wstring(path) + extra, body, timeoutMs);
+    }
+
     // Lowercase hex digest (BCRYPT_MD5_ALGORITHM / BCRYPT_SHA256_ALGORITHM) of some bytes; empty on failure.
     std::string HashHex(LPCWSTR algorithm, const std::string& data)
     {
@@ -822,6 +925,8 @@ namespace
         BCryptCloseAlgorithmProvider(alg, 0);
         return hex;
     }
+
+    std::string Sha256(const std::string& data) { return HashHex(BCRYPT_SHA256_ALGORITHM, data); }
 
     std::string ReadFileBytes(const std::wstring& path)
     {
@@ -905,17 +1010,20 @@ namespace
     {
         ClearOldUpdate();
         KitVersion kit = ReadKitVersion();
-        // Conceptual kits (build.bat conceptual, from the Conceptual branch) are never published and never updated:
-        // an update would replace the concept with a master build.
-        if (kit.label.find("Conceptual") != std::string::npos) { Log(L"update: off (Conceptual build)"); return; }
+        // Conceptual kits (build.bat conceptual, Conceptual branch only) have their own updates: pre-releases
+        // "conceptual-<N>" with the asset pdnet-conceptual-<N>.zip. Other kits only take build-<N> / stable-<M> releases, and
+        // a Conceptual kit only its own, so it can never become a master build. It ignores update_channel, which settings.ini
+        // shares with the other kits (only conceptual_updates=off stops it).
+        const bool conceptual = kit.label.find("Conceptual") != std::string::npos;
+        if (conceptual && _wcsicmp(Setting(L"conceptual_updates", L"").c_str(), L"off") == 0) { Log(L"update: off (conceptual_updates=off)"); return; }
         // Stable is the public version since 2026-11-10 (the separate public channel and its Public kits are gone): a
         // "Public" kit, or update_channel=public left in a Public kit's pdnet.ini, follows Stable.
         std::wstring fallback = kit.label.find("Experimental") != std::string::npos ? L"experimental"
                               : kit.label.find("Stable") != std::string::npos || kit.label.find("Public") != std::string::npos ? L"stable" : L"off";
-        std::wstring channel = Setting(L"update_channel", L"");
+        std::wstring channel = conceptual ? L"conceptual" : Setting(L"update_channel", L"");
         for (auto& c : channel) c = static_cast<wchar_t>(towlower(c));
         if (channel == L"public") channel = L"stable";
-        if (!channel.empty() && channel != L"stable" && channel != L"experimental" && channel != L"off")
+        if (!conceptual && !channel.empty() && channel != L"stable" && channel != L"experimental" && channel != L"off")
         {
             // A typo in settings.ini must not count as stable, which would take an Experimental kit back to a Stable.
             Log(L"update: update_channel=%s isn't stable, experimental or off - using this kit's own (%s)", channel.c_str(), fallback.c_str());
@@ -923,13 +1031,13 @@ namespace
         }
         if (channel.empty()) channel = fallback;
         if (channel == L"off") { Log(L"update: off (%s)", fallback == L"off" ? L"development build" : L"update_channel=off"); return; }
-        bool experimental = channel == L"experimental";
-        // Each channel takes only its own releases (tag build-<N> / stable-<M>, which is in each asset's download link):
-        // a kit switched to another channel gets that kind's label from its own release (a Stable's asset has the same
-        // name as its Experimental's).
-        std::string tagPrefix = experimental ? "/download/build-" : "/download/stable-";
-        const char* kindName = experimental ? "Experimental" : "Stable";
-        std::string assetMarker = "/pdnet-update-";
+        bool experimental = channel == L"experimental" || conceptual; // Conceptual builds are pre-releases
+        // Each channel takes only its own releases (tag build-<N> / stable-<M> / conceptual-<N>, which is in each asset's
+        // download link): a kit switched to another channel gets that kind's label from its own release (a Stable's asset has
+        // the same name as its Experimental's).
+        std::string tagPrefix = conceptual ? "/download/conceptual-" : experimental ? "/download/build-" : "/download/stable-";
+        const char* kindName = conceptual ? "Conceptual" : experimental ? "Experimental" : "Stable";
+        std::string assetMarker = conceptual ? "/pdnet-conceptual-" : "/pdnet-update-";
 
         std::string md5 = HashHex(BCRYPT_MD5_ALGORITHM, ReadFileBytes(g_dir + L"pdnet.dll")).substr(0, 8);
         if (!kit.md5.empty() && md5 != kit.md5)
@@ -1163,6 +1271,14 @@ int wmain(int argc, wchar_t** argv)
 
     if (argc == 2 && _wcsicmp(argv[1], L"-attach") == 0) return Attach();
 
+    // pdlaunch.exe -syncmods <LocalState folder> [catalog URL or file] [game folder]: only the mod sync with its catalog
+    // downloads and map slots (testing; modsync.h), logged to pdlaunch.log.
+    if (argc >= 3 && argc <= 5 && _wcsicmp(argv[1], L"-syncmods") == 0)
+    {
+        modsync::Sync(argv[2], Log, &kModNet, argc >= 4 && argv[3][0] ? std::wstring(argv[3]) : Setting(L"mod_list_url", kModListUrl), argc == 5 ? std::wstring(argv[4]) : std::wstring());
+        return 0;
+    }
+
     DWORD pid = 0, tid = 0;
     for (int i = 1; i + 1 < argc; ++i)
     {
@@ -1210,6 +1326,7 @@ int wmain(int argc, wchar_t** argv)
     std::thread controllers(ReadControllers, pid, localState); // until the game exits
     std::thread keyboard(ReadKeyboard, pid, localState); // until the game exits
     bool injected = Inject(pid);
+    if (injected) InjectPdpl(pid, localState);
 
     HANDLE thread = OpenThread(THREAD_SUSPEND_RESUME, FALSE, tid);
     DWORD previous = thread ? ResumeThread(thread) : static_cast<DWORD>(-1);

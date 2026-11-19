@@ -1,0 +1,15 @@
+# The format of Rebirth's mod catalog (the whitelist of mods the game's Mods list can show and download).
+# The live catalog is NOT this file: it is mods.txt on this repository's own "mod-catalog" branch, edited only with the
+# Mod Admin app (outside the repository, next to the leaderboard admin tool). pdlaunch reads
+#   https://raw.githubusercontent.com/SnowRyze/Phantom-Dust-Rebirth/mod-catalog/mods.txt
+# at every game start (mod_list_url= in pdnet.ini or settings.ini points a PC elsewhere, e.g. at a test catalog).
+#
+# One line per mod:  <id> <github owner/repo> [plugin]
+#   id      a-z, 0-9 and -, 3 to 32 characters; never changes once listed (lobbies and settings use it)
+#   repo    the GitHub repository whose newest release is the mod: its first .zip or .7z, checked against the sha256
+#           GitHub works out for every uploaded file (a line "sha256 <file name> <64 hex digits>" in the release notes,
+#           if there is one, is used instead). Creators only have to upload the zip to a release.
+#   plugin  only for mods with DLLs under plugins/, and only after someone has read their source
+#
+# Example (not a real mod):
+# neon-arena  someone/pd-neon-arena

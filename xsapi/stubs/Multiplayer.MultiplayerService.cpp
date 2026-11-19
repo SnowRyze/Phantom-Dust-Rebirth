@@ -7,6 +7,7 @@
 #include "Multiplayer.MultiplayerSessionChangeEventArgs.h"
 #include "Multiplayer.MultiplayerSubscriptionLostEventArgs.h"
 #include "Multiplayer.MultiplayerSearchHandleDetails.h"
+#include "../../src/mods.h" // Conceptual: each result's mods, for SESSION INFO
 #include <algorithm>
 #include <regex>
 #include "../repeatable.h"
@@ -240,6 +241,13 @@ namespace winrt::Microsoft::Xbox::Services::Multiplayer::implementation
                 joinable = ::pdnet::gamepatches::JoinableRules();
                 break;
             }
+        // Conceptual: the Quick Join item opens the Mods list now, but its script still starts this search (and the game
+        // would join the first result): right after the Mods list opened, no lobbies.
+        if (joinable && ::pdnet::mods::ListJustOpened())
+        {
+            ::pdnet::Log(L"xsapi-pdnet: Quick Join's search skipped (its menu item opens the Mods list now)");
+            co_return winrt::single_threaded_vector<Microsoft::Xbox::Services::Multiplayer::MultiplayerSearchHandleDetails>().GetView();
+        }
         // Cross Play plays no part: every player is on pdnet, so the game's "numbers/cross ..." clause (from its hidden
         // Cross Play option, which can end up set differently on two PCs) is dropped.
         filter = std::regex_replace(filter, std::wregex(L"( and )?numbers/cross [a-z]+ -?[0-9]+( and )?"), L"$1$2");
@@ -279,13 +287,16 @@ namespace winrt::Microsoft::Xbox::Services::Multiplayer::implementation
 
         std::vector<Microsoft::Xbox::Services::Multiplayer::MultiplayerSearchHandleDetails> results;
         std::vector<int> rated; // for SESSION INFO's "(Rated)" / "(Unrated)" (gamepatches.cpp)
+        std::vector<std::string> modTags; // and its mods (Conceptual)
         for (auto& doc : matched)
         {
             results.push_back(winrt::make<implementation::MultiplayerSearchHandleDetails>(doc));
             auto limit = doc->search->numbers.find(L"ratinglimit");
             rated.push_back(doc->rated >= 0 ? doc->rated : limit != doc->search->numbers.end() ? (limit->second != 0 ? 1 : 0) : -1);
+            modTags.push_back(doc->mods);
         }
         ::pdnet::scores::SetSearchResultsRated(std::move(rated));
+        ::pdnet::mods::SetSearchResults(std::move(modTags));
         ::pdnet::Log(L"xsapi-pdnet: search %s: %zu session(s), %zu match '%s'", sessionTemplateName.c_str(), all.size(), results.size(), filter.c_str());
         co_return winrt::single_threaded_vector(std::move(results)).GetView();
     }
