@@ -151,6 +151,14 @@ PDPL's start-up code only.)
 - 2026-11-16: mod loader code plan written (docs\MOD_LOADER_CODE.md). No code yet.
 - 2026-11-16: Mod loader and mod menu: plan written (above); pdnet loads mods itself, not PDPL (the user's call). Read-only, no kit built.
 (Newest first: what was tried, what happened.)
+- 2026-11-19: Lobby match settings, research (nothing built). Starting health and Aura: FUN_14024e790 sets up each
+  player's status record with FUN_14024d020(record, object, 1, health, aura, ...), which writes health to +0xc, +0x10
+  (max), +0x14 and Aura to +0x18 (int) and +0x1c (float). For a human player both come from gsdata's rule table:
+  gsdata (DAT_1404c5228) + 0x33040 + rule (DAT_1404bc5dc) * 0x10 = { health, starting Aura, 99 or 5, 10 } (rule 11 uses
+  +0x33100 / +0x33104; the AI takes health from DAT_1404c0188). gsdata_en.dat: rules 0-2 and 5-9 { 20, 0 }, 3 { 10, 0 },
+  4 { 40, 5 }, 10 { 5, 0 }, 11 { 10, 0 }, 12 { 40, 0 }. The Aura refill rates (1.3 / 1.0 / 0.7 by school count) are at
+  +0x33034, copied per player to DAT_1404bc958[slot] at setup. Route for the host's values: a member attribute like
+  PD_BODYTAGS, read from the host member in xsapi\mpsd.cpp ApplyHostRules.
 - 2026-11-16: Film nametag colours (Conceptual 40): in a film the ally colour goes to the watched player and their team
   in the film (snapshot teams, film::Info::team), the enemy colour to the rest; the flying camera keeps the last
   watched player's side. Before, the battle's own sides (this PC's slot 0) decided it.
