@@ -26,6 +26,8 @@ namespace pdnet::gamepatches
         constexpr uint64_t kGhidraBase = 0x140000000;
 
         std::atomic<bool> g_theatre{ false }; // the Settings screen (menu 68) is showing the Theatre's film list (Conceptual)
+        std::atomic<bool> g_modsList{ false }; // the Settings screen is showing the Mods list (Conceptual; was Quick Join)
+        void LeaveModList(); // (below)
         // Lobby Custom Settings (Conceptual): the Settings screen is showing them (opened from the lobby's Options menu).
         std::atomic<bool> g_customMatch{ false }, g_openingCustom{ false };
         std::mutex g_matchLock;
@@ -927,17 +929,26 @@ namespace pdnet::gamepatches
         int HookedPushMenu(int64_t manager, int menu, char force)
         {
             int current = CurrentMenu(manager);
-            bool theatre = false;
+            bool theatre = false, mods = false;
             if (menu == 40 && current == 36) // Theater (livetrade 40 from livemain 36): the film list, not Trade (Conceptual branch)
             {
                 menu = 68; // the Settings screen, as the Theatre
                 theatre = true;
                 Log(L"theatre: opened (in place of Trade)");
             }
+            // Mods (was Quick Join): its pick opened the session list (43) straight from livemain (36); the Lobby Browser goes
+            // there through its search options (38) instead, so only Quick Join's pick is turned into the Mods list.
+            if (menu == 43 && current == 36)
+            {
+                menu = 68; // the Settings screen, as the Mods list
+                mods = true;
+                Log(L"mods: list opened (in place of Quick Join)");
+            }
             if (menu == 68)
             {
                 g_customMatch = g_openingCustom.exchange(false);
                 g_theatre = theatre;
+                g_modsList = mods;
                 g_settingsOpenedAt = GetTickCount64();
             }
             RenameStrings(); // cheap; covers string tables loaded after start-up
@@ -996,6 +1007,7 @@ namespace pdnet::gamepatches
             int current = CurrentMenu(manager);
             Log(L"menu: back (from %d)", current);
             if (current == kSettingsMenuId && g_customMatch.exchange(false)) Log(L"gamepatch: Custom Settings: back to the lobby");
+            if (current == kSettingsMenuId && g_modsList.exchange(false)) LeaveModList();
             int step = g_testPicking;
             if (step != kPickingNone && current == (step == kPickingStage ? kStageMenu : step == kPickingCharacter || step == kPickingOpponentCharacter ? kCharacterMenu : kArsenalPickMenu))
             {
@@ -1282,13 +1294,13 @@ namespace pdnet::gamepatches
             }
         }
 
-        // Quick Join: the multiplayer menu (livemain, menu 36) calls its quick search "Quick Match" and describes it
-        // as Quick-rule only; it now joins any lobby the player can play (MultiplayerService search, pdnet). Its two
-        // texts in the loaded script's string pool are overwritten in place (the new ones are shorter).
+        // Mods (Conceptual, mod loader step 4): the multiplayer menu's (livemain, menu 36) quick search, "Quick Match"
+        // (later Quick Join), is the Mods item now: its pick opens the Mods list (HookedPushMenu) instead of the session
+        // search. Its two texts in the loaded script's string pool are overwritten in place (the new ones are shorter).
         constexpr int kLiveMainMenu = 36;
         constexpr Relabel kLiveMainTexts[] = {
-            { "Quick Match", "Quick Join" },
-            { "Search for a game session with the Quick game rule.", "Join the first open game session you can play in." },
+            { "Quick Match", "Mods" },
+            { "Search for a game session with the Quick game rule.", "Turn mods on and off, and choose which wins." },
         };
 
         int RelabelScript(uint8_t* script, const Relabel* texts, size_t count)
@@ -1442,7 +1454,7 @@ namespace pdnet::gamepatches
                     int quick = RelabelScript(script, kLiveMainTexts, std::size(kLiveMainTexts));
                     int browser = RelabelLonger(script, "OptiMatch", "Lobby Browser",
                         "Select game attributes, and then search for a game session.", "Choose search options, then pick a session.");
-                    if (fresh) Log(L"gamepatch: multiplayer menu: Quick Match renamed Quick Join (%d of 2 texts), OptiMatch renamed Lobby Browser (%d of 1)", quick, browser);
+                    if (fresh) Log(L"gamepatch: multiplayer menu: Quick Match renamed Mods (%d of 2 texts), OptiMatch renamed Lobby Browser (%d of 1)", quick, browser);
                 }
             }).detach();
         }
@@ -1523,11 +1535,11 @@ namespace pdnet::gamepatches
         MenuCommandFn g_addItem = nullptr;
 
         // The multiplayer menu's items and their descriptions, renamed as the list is built (a watcher that patches
-        // the script after it loads is too late for the first draw): Quick Join and Lobby Browser.
+        // the script after it loads is too late for the first draw): Mods (was Quick Match / Quick Join) and Lobby Browser.
         constexpr Relabel kMenuItems[] = {
-            { "Quick Match", "Quick Join" },
+            { "Quick Match", "Mods" },
             { "OptiMatch", "Lobby Browser" },
-            { "Search for a game session with the Quick game rule.", "Join the first open game session you can play in." },
+            { "Search for a game session with the Quick game rule.", "Turn mods on and off, and choose which wins." },
             { "Select game attributes, and then search for a game session.", "Choose search options, then pick a session." },
             { "Xbox Live Options", "Online Settings" },
             { "Online Options", "Online Settings" }, // the script's text once RenameXboxLive got to it
@@ -2018,6 +2030,275 @@ namespace pdnet::gamepatches
             FillFilmPage();
             Log(L"theatre: page %d of %d", g_filmPage + 1, pages);
         }
+        // Mods (Conceptual, mod loader step 4): the multiplayer menu's Mods item (was Quick Join) opens this same screen with
+        // the mods as its rows, from LocalState\pdnet\mods-state.txt: what pdlaunch put in PDPL's mods folder at this game
+        // start (launcher\modsync.cpp), in priority order (the top one wins when two change the same file). A turns the
+        // highlighted mod on or off; X picks it up, up / down then carry it, X puts it down; Y sorts (load_after /
+        // load_before first, then cosmetic mods above models, maps, skills and the rest); LB / RB turn pages. Leaving saves
+        // mods_order and mods_enabled to settings.ini, and pdlaunch applies them at the next game start (PDPL 1.2.2 can't be
+        // told to change its mods while the game runs). The player's own PDPL archives (RoamingState\mods) stay below the
+        // others in name order, as PDPL mounts them by name.
+        constexpr int kModRows = 10;
+        struct ModRow
+        {
+            std::string id, source, name, version, author, online, problem, description;
+            std::vector<std::string> touches, after, before;
+            bool on = true, plugins = false;
+            int files = 0;
+            bool Movable() const { return source != "pdpl"; }
+        };
+        std::vector<ModRow> g_mods;
+        std::vector<std::tuple<std::string, std::string, int>> g_modOverlaps; // two mods, how many game files both have
+        int g_looseFiles = 0;
+        char g_modRow[kModRows][112];
+        char g_modHint[kModRows][300];
+        int g_modRows = 0, g_modPage = 0, g_movingMod = -1;
+        std::atomic<bool> g_modsDirty{ false };
+        // \a2# A, \a3# B, \a5# Y (the lobby's "\a5#Invite"), \a4# X (the character select's X "Toggle Monsters").
+        const char* kModsBar = "\a8#Select  LB / RB Page \a2#On / Off \a580r\a4#Move \a5#Auto Sort \a3#Back";
+
+        std::vector<std::string> SplitFields(const std::string& s, char sep) // empty fields kept
+        {
+            std::vector<std::string> out(1);
+            for (char c : s)
+                if (c == sep) out.emplace_back();
+                else out.back() += c;
+            return out;
+        }
+
+        std::vector<std::string> SplitList(const std::string& s)
+        {
+            std::vector<std::string> out;
+            for (auto& x : SplitFields(s, ','))
+                if (!x.empty()) out.push_back(x);
+            return out;
+        }
+
+        void LoadModList()
+        {
+            g_mods.clear();
+            g_modOverlaps.clear();
+            g_looseFiles = 0;
+            std::ifstream in(LocalStatePath() + L"\\pdnet\\mods-state.txt", std::ios::binary);
+            std::string line;
+            while (std::getline(in, line))
+            {
+                if (!line.empty() && line.back() == '\r') line.pop_back();
+                auto f = SplitFields(line, '\t');
+                if (f[0] == "loose" && f.size() > 1) g_looseFiles = atoi(f[1].c_str());
+                else if (f[0] == "conflict" && f.size() > 3) g_modOverlaps.emplace_back(f[1], f[2], atoi(f[3].c_str()));
+                else if (f[0] == "mod" && f.size() > 12)
+                {
+                    ModRow m;
+                    m.id = f[1];
+                    m.on = f[2] == "on";
+                    m.source = f[3];
+                    m.name = f[4];
+                    m.version = f[5];
+                    m.author = f[6];
+                    m.online = f[7];
+                    m.touches = SplitList(f[8]);
+                    m.plugins = f[9] == "1";
+                    m.files = atoi(f[10].c_str());
+                    m.problem = f[11];
+                    if (f.size() > 13) m.after = SplitList(f[13]);
+                    if (f.size() > 14) m.before = SplitList(f[14]);
+                    if (f.size() > 15) m.description = f[15];
+                    g_mods.push_back(std::move(m));
+                }
+            }
+            Log(L"mods: list: %zu mod(s) from mods-state.txt", g_mods.size());
+        }
+
+        int ModPages() { return g_mods.empty() ? 1 : static_cast<int>((g_mods.size() + kModRows - 1) / kModRows); }
+        int ModIndex(const std::string& id)
+        {
+            for (size_t i = 0; i < g_mods.size(); ++i)
+                if (g_mods[i].id == id) return static_cast<int>(i);
+            return -1;
+        }
+        int LastMovableMod()
+        {
+            int last = -1;
+            for (size_t i = 0; i < g_mods.size(); ++i)
+                if (g_mods[i].Movable()) last = static_cast<int>(i);
+            return last;
+        }
+
+        // "Wins over X for 12 files" / "X wins for 3 files": with both on, the one higher in the list wins.
+        std::string ModOverlapText(int i)
+        {
+            std::string wins, loses;
+            for (const auto& [a, b, n] : g_modOverlaps)
+            {
+                const std::string* other = a == g_mods[i].id ? &b : b == g_mods[i].id ? &a : nullptr;
+                int j = other ? ModIndex(*other) : -1;
+                if (j < 0 || !g_mods[i].on || !g_mods[j].on) continue;
+                char part[96];
+                sprintf_s(part, "%s%s (%d file%s)", (j > i ? wins : loses).empty() ? "" : ", ", g_mods[j].name.c_str(), n, n == 1 ? "" : "s");
+                (j > i ? wins : loses) += part;
+            }
+            std::string text;
+            if (!wins.empty()) text += " Wins over " + wins + ".";
+            if (!loses.empty()) text += " Loses to " + loses + ".";
+            return text;
+        }
+
+        void FillModPage()
+        {
+            if (g_mods.empty())
+            {
+                strcpy_s(g_modRow[0], "\a160wNo mods yet\f\a1#\a230c\f\a0#");
+                strcpy_s(g_modHint[0], "Put a .zip or .7z in LocalState\\pdnet\\mods (or PDPL's RoamingState\\mods), then start the game again.");
+                return;
+            }
+            char page[48] = "";
+            if (ModPages() > 1) sprintf_s(page, " (page %d of %d: LB / RB)", g_modPage + 1, ModPages());
+            for (int r = 0; r < g_modRows; ++r)
+            {
+                size_t i = static_cast<size_t>(g_modPage) * kModRows + r;
+                if (i >= g_mods.size())
+                {
+                    g_modRow[r][0] = 0;
+                    strcpy_s(g_modHint[r], page);
+                    continue;
+                }
+                const ModRow& m = g_mods[i];
+                const char* kind = m.source == "pdpl" ? "PDPL" : m.online == "local" ? "Only you" : "Online";
+                _snprintf_s(g_modRow[r], _TRUNCATE, "\a160w%s[%s] %s\f\a1#\a230c%s %s\f\a0#", static_cast<int>(i) == g_movingMod ? "> " : "",
+                            m.on ? "x" : "  ", m.name.c_str(), m.version.c_str(), kind);
+                std::string hint = m.description.empty() ? m.name : m.description;
+                if (!m.author.empty()) hint += " By " + m.author + ".";
+                hint += ModOverlapText(static_cast<int>(i));
+                if (!m.problem.empty()) hint += " (" + m.problem + ")";
+                if (!m.Movable()) hint += " PDPL folder: ordered by file name.";
+                if (static_cast<int>(i) == g_movingMod) hint += " Up / down to move, X to put it down.";
+                if (g_modsDirty) hint += "\nChanges apply at the next game start.";
+                hint += page;
+                strcpy_s(g_modHint[r], hint.substr(0, sizeof(g_modHint[r]) - 1).c_str());
+            }
+        }
+
+        void RefreshModRows()
+        {
+            LoadModList();
+            g_modPage = 0;
+            g_movingMod = -1;
+            g_modsDirty = false;
+            g_modRows = g_mods.empty() ? 1 : (std::min)(kModRows, static_cast<int>(g_mods.size()));
+            FillModPage();
+        }
+
+        void ToggleMod(size_t i)
+        {
+            if (i >= g_mods.size()) return;
+            g_mods[i].on = !g_mods[i].on;
+            g_modsDirty = true;
+            Log(L"mods menu: %S %s", g_mods[i].id.c_str(), g_mods[i].on ? L"on" : L"off");
+            FillModPage();
+        }
+
+        // The mod being carried goes to `target` (its place among the movable mods; the player's PDPL archives stay put).
+        void MoveModTo(size_t target)
+        {
+            int last = LastMovableMod();
+            if (g_movingMod < 0 || last < 0) return;
+            int to = (std::min)(static_cast<int>(target), last);
+            if (to == g_movingMod) return;
+            ModRow m = std::move(g_mods[g_movingMod]);
+            g_mods.erase(g_mods.begin() + g_movingMod);
+            g_mods.insert(g_mods.begin() + to, std::move(m));
+            g_movingMod = to;
+            g_modsDirty = true;
+            FillModPage();
+        }
+
+        void TurnModPage(int step, int row)
+        {
+            int pages = ModPages();
+            if (pages <= 1) return;
+            g_modPage = (g_modPage + step + pages) % pages;
+            if (g_movingMod >= 0 && row >= 0) MoveModTo(static_cast<size_t>(g_modPage) * kModRows + row); // carried along
+            FillModPage();
+        }
+
+        // Auto sort: cosmetic mods (only looks or sound, or "online": "local") at the top, then models / animation, maps,
+        // skills / text, and plugins / anything else at the bottom; load_after / load_before always kept ("load_after": X =
+        // my files win over X's, so I go above X). Ties by name. A loop in load_after / load_before keeps its current order.
+        int ModTier(const ModRow& m)
+        {
+            auto has = [&](const char* k) { return std::find(m.touches.begin(), m.touches.end(), k) != m.touches.end(); };
+            bool cosmetic = !m.touches.empty() && std::all_of(m.touches.begin(), m.touches.end(), [](const std::string& t) { return t == "ui" || t == "audio" || t == "shaders"; });
+            if (cosmetic || m.online == "local") return 0;
+            if (has("plugins") || has("other")) return 4;
+            if (has("skills") || has("text")) return 3;
+            if (has("maps")) return 2;
+            return 1;
+        }
+
+        void AutoSortMods()
+        {
+            std::vector<ModRow> movable, fixed;
+            for (auto& m : g_mods) (m.Movable() ? movable : fixed).push_back(m);
+            size_t n = movable.size();
+            std::vector<std::vector<size_t>> below(n); // below[a]: the mods a must be above
+            std::vector<int> above(n, 0);              // how many must be above each
+            auto index = [&](const std::string& id) { for (size_t i = 0; i < n; ++i) if (movable[i].id == id) return static_cast<int>(i); return -1; };
+            auto edge = [&](int a, int b) { if (a >= 0 && b >= 0 && a != b) { below[a].push_back(static_cast<size_t>(b)); ++above[b]; } };
+            for (size_t a = 0; a < n; ++a)
+            {
+                for (auto& id : movable[a].after) edge(static_cast<int>(a), index(id));
+                for (auto& id : movable[a].before) edge(index(id), static_cast<int>(a));
+            }
+            std::vector<bool> placed(n, false);
+            std::vector<ModRow> sorted;
+            auto lower = [](std::string s) { for (char& c : s) c = static_cast<char>(tolower(static_cast<unsigned char>(c))); return s; };
+            for (size_t done = 0; done < n; ++done)
+            {
+                int pick = -1;
+                for (size_t i = 0; i < n; ++i)
+                {
+                    if (placed[i] || above[i] > 0) continue;
+                    if (pick < 0 || std::make_pair(ModTier(movable[i]), lower(movable[i].name)) < std::make_pair(ModTier(movable[pick]), lower(movable[pick].name))) pick = static_cast<int>(i);
+                }
+                if (pick < 0) // a loop: the first unplaced one in the current order goes next
+                {
+                    for (size_t i = 0; i < n && pick < 0; ++i)
+                        if (!placed[i]) pick = static_cast<int>(i);
+                    movable[pick].problem = "load order loop";
+                    Log(L"mods menu: auto sort: load_after / load_before loop at %S", movable[pick].id.c_str());
+                }
+                placed[pick] = true;
+                for (size_t b : below[pick]) --above[b];
+                sorted.push_back(movable[pick]);
+            }
+            sorted.insert(sorted.end(), fixed.begin(), fixed.end());
+            bool changed = false;
+            for (size_t i = 0; i < sorted.size(); ++i) changed = changed || sorted[i].id != g_mods[i].id;
+            g_mods = std::move(sorted);
+            g_movingMod = -1;
+            if (changed) g_modsDirty = true;
+            std::string order;
+            for (auto& m : g_mods) order += (order.empty() ? "" : ", ") + m.id;
+            Log(L"mods menu: auto sort%s: %S", changed ? L"" : L" (no change)", order.c_str());
+            FillModPage();
+        }
+
+        // Leaving the list (back, or any other way out): changes go to settings.ini for the next game start.
+        void LeaveModList()
+        {
+            g_movingMod = -1;
+            if (!g_modsDirty.exchange(false)) return;
+            std::string order, enabled;
+            for (auto& m : g_mods)
+            {
+                order += (order.empty() ? "" : ",") + m.id;
+                if (m.on) enabled += (enabled.empty() ? "" : ",") + m.id;
+            }
+            SaveSettings({ { "mods_order", order }, { "mods_enabled", enabled } });
+            Log(L"mods menu: saved for the next game start - order %S; on: %S", order.c_str(), enabled.empty() ? "none" : enabled.c_str());
+        }
+
         struct Colour { const char* name; uint32_t rgb; };
         constexpr Colour kColours[] = { { "Yellow", 0xFFE600 }, { "Red", 0xFF5A5A }, { "Blue", 0x4FB4FF }, { "Green", 0x5AFF6E },
                                         { "Purple", 0xB46EFF }, { "Orange", 0xFFA03C }, { "Cyan", 0x3CF0FF }, { "Pink", 0xFF78C8 },
@@ -2323,6 +2604,7 @@ namespace pdnet::gamepatches
                 }
                 return 0;
             }
+            if (g_modsList) return 0; // left / right: nothing (A, X and Y are read in HookedButtons)
             if (g_customMatch)
             {
                 static ULONGLONG last = 0;
@@ -2438,6 +2720,7 @@ namespace pdnet::gamepatches
         void SettingsTick()
         {
             if (!InSettings()) g_confirmingSave = false;
+            if (!InSettings() && g_modsDirty && GetTickCount64() - g_settingsOpenedAt > 1000) LeaveModList(); // the Mods list left some other way than back
             if (!InSettings() && GetTickCount64() - g_settingsOpenedAt > 1000 && (g_settingsDirty || g_typingName))
             {
                 g_typingName = false;
@@ -2600,7 +2883,61 @@ namespace pdnet::gamepatches
                 }
                 return buttons & ~0x1010ll;
             }
-            if (!InSettings() || (args && args[0] != 0) || g_theatre) return buttons;
+            if (InSettings() && g_modsList && (!args || args[0] == 0))
+            {
+                // Each button acts once per press: the script reads the buttons several times a frame.
+                static bool held[5] = {}; // RB, LB, X, Y, A
+                uint8_t keys[256];
+                bool haveKeys = KeysHeld(keys);
+                bool now[5] = {
+                    AnyPadHolds(0x800) || (haveKeys && (keys[VK_NEXT] || keys['E'])),  // RB, Page Down, E: next page
+                    AnyPadHolds(0x400) || (haveKeys && (keys[VK_PRIOR] || keys['Q'])), // LB, Page Up, Q: previous page
+                    AnyPadHolds(0x10) || (haveKeys && keys['X']),                      // X: pick up / put down
+                    AnyPadHolds(0x20) || (haveKeys && keys['Y']),                      // Y: auto sort
+                    (buttons & 0x1010) != 0,                                           // A: on / off
+                };
+                bool pressed[5];
+                for (int i = 0; i < 5; ++i) { pressed[i] = now[i] && !held[i]; held[i] = now[i]; }
+                int64_t manager = MenuManager();
+                int window = manager ? *reinterpret_cast<int16_t*>(manager + 0x10402) : -1;
+                int row = window >= 0 && window < 16 ? WindowAt(manager, window)[0x12 / 2] : -1; // the cursor (as in the Theatre)
+                size_t at = static_cast<size_t>(g_modPage) * kModRows + (row >= 0 ? row : 0);
+                auto sound = [](int64_t which) { int64_t s[2] = { which, 0 }; reinterpret_cast<InputFn>(At(0x140261750))(s); };
+                if (g_movingMod >= 0 && row >= 0 && row < kModRows && static_cast<int>(at) != g_movingMod && at < g_mods.size()) MoveModTo(at); // carried with the cursor
+                if (pressed[0] || pressed[1])
+                {
+                    sound(37);
+                    TurnModPage(pressed[0] ? 1 : -1, row);
+                }
+                if (pressed[4] && row >= 0 && at < g_mods.size())
+                {
+                    sound(37);
+                    ToggleMod(at);
+                }
+                if (pressed[2] && row >= 0 && at < g_mods.size())
+                {
+                    if (g_movingMod >= 0)
+                    {
+                        Log(L"mods menu: %S put down at %d", g_mods[g_movingMod].id.c_str(), g_movingMod + 1);
+                        g_movingMod = -1;
+                        sound(0);
+                    }
+                    else if (g_mods[at].Movable())
+                    {
+                        g_movingMod = static_cast<int>(at);
+                        sound(0);
+                    }
+                    else sound(1); // the player's PDPL archives go by file name
+                    FillModPage();
+                }
+                if (pressed[3] && !g_mods.empty())
+                {
+                    sound(37);
+                    AutoSortMods();
+                }
+                return buttons & ~0x1010ll; // A is the list's, not the script's row action
+            }
+            if (!InSettings() || (args && args[0] != 0) || g_theatre || g_modsList) return buttons;
             static uint64_t last = 0; // the script reads the buttons several times a frame: act once per press
             bool a = (buttons & 0x1010) != 0, b = (buttons & 0x2020) != 0;
             bool fresh = GetTickCount64() - last > 150;
@@ -2629,7 +2966,7 @@ namespace pdnet::gamepatches
         // The button bar (menu command 88 with 2, text): the Options screen's "Change / Back" gets "A Save".
         int64_t HookedButtonBar(int64_t* args)
         {
-            const char* kSave = g_customMatch ? (g_matchMine ? kCustomBar : kCustomViewBar) : g_theatre ? kTheatreBar : g_confirmingSave ? kConfirmBar : kNormalBar;
+            const char* kSave = g_customMatch ? (g_matchMine ? kCustomBar : kCustomViewBar) : g_theatre ? kTheatreBar : g_modsList ? kModsBar : g_confirmingSave ? kConfirmBar : kNormalBar;
             char text[64];
             if (args && args[0] == 1 && CopyString(reinterpret_cast<const char*>(args[1]), text, sizeof(text)) && strcmp(text, "LOADING") == 0 &&
                 CurrentMenu(MenuManager()) == kLobbyMenu && !g_matchLoadingSince)
@@ -2658,6 +2995,17 @@ namespace pdnet::gamepatches
                     g_addItem(item);
                 }
                 if (rows) Log(L"gamepatch: Custom Settings: %d rows", kCustomRows);
+                return true;
+            }
+            if (g_modsList)
+            {
+                if (rows) RefreshModRows();
+                for (int r = 0; r < g_modRows; ++r)
+                {
+                    int64_t item[8] = { reinterpret_cast<int64_t>(rows ? g_modRow[r] : g_modHint[r]) };
+                    g_addItem(item);
+                }
+                if (rows) Log(L"mods menu: %zu mod(s) listed", g_mods.size());
                 return true;
             }
             if (g_theatre)
@@ -2692,10 +3040,12 @@ namespace pdnet::gamepatches
             if (menu != kSettingsMenu) return;
             int texts = RelabelScript(script, kSettingsTexts, std::size(kSettingsTexts)), patched = PatchSettingsScript(script);
             static constexpr Relabel kToTheatre[] = { { "ONLINE SETTINGS", "THEATRE" } }, kToCustom[] = { { "ONLINE SETTINGS", "CUSTOM SETTINGS" } },
-                kToSettings[] = { { "THEATRE", "ONLINE SETTINGS" }, { "CUSTOM SETTINGS", "ONLINE SETTINGS" } };
+                kToMods[] = { { "ONLINE SETTINGS", "MODS" } },
+                kToSettings[] = { { "THEATRE", "ONLINE SETTINGS" }, { "CUSTOM SETTINGS", "ONLINE SETTINGS" }, { "MODS", "ONLINE SETTINGS" } };
             RelabelScript(script, kToSettings, std::size(kToSettings));
             if (g_theatre) RelabelScript(script, kToTheatre, 1);
             else if (g_customMatch) RelabelScript(script, kToCustom, 1);
+            else if (g_modsList) RelabelScript(script, kToMods, 1);
             if (fresh) Log(L"gamepatch: Settings menu (was Xbox Live Options): %d text(s), A button %s", texts, patched ? L"changes settings" : L"left as it is (script not as expected)");
         }
 

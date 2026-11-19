@@ -703,12 +703,12 @@ namespace modsync
         char when[32];
         sprintf_s(when, "%04u-%02u-%02u %02u:%02u", t.wYear, t.wMonth, t.wDay, t.wHour, t.wMinute);
         std::string state = std::string("# pdlaunch, ") + when + ": mods in priority order (first wins); tab-separated\n";
-        state += "# mod id on|off source name version author online touches plugins files problem path load_after load_before\n";
+        state += "# mod id on|off source name version author online touches plugins files problem path load_after load_before description\n";
         state += "loose\t" + std::to_string(loose) + "\n";
         for (const auto& m : mods)
             state += "mod\t" + m.id + "\t" + (m.enabled ? "on" : "off") + "\t" + Utf8(SourceName(m.source)) + "\t" + Field(m.name) + "\t" +
                      Field(m.version) + "\t" + Field(m.author) + "\t" + m.online + "\t" + Join(m.touches, ',') + "\t" + (m.plugins ? "1" : "0") + "\t" +
-                     std::to_string(m.files.size()) + "\t" + Field(m.problem) + "\t" + Field(Utf8(m.path)) + "\t" + Join(m.after, ',') + "\t" + Join(m.before, ',') + "\n";
+                     std::to_string(m.files.size()) + "\t" + Field(m.problem) + "\t" + Field(Utf8(m.path)) + "\t" + Join(m.after, ',') + "\t" + Join(m.before, ',') + "\t" + Field(m.description) + "\n";
         state += conflicts;
         if (!WriteText(pdnetDir + L"\\mods-state.txt", state)) log(L"mods: couldn't write mods-state.txt");
 

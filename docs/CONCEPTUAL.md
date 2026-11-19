@@ -151,6 +151,14 @@ Rebirth's metadata only, and `touches` is worked out from the paths at every sca
 8. Catalog plugins.
 
 ## Log
+- 2026-11-19: Mod loader step 4, the Mods list (Conceptual 44): the user asked for Quick Join to become the mods list. Its
+  pick opened the session list (43) straight from the multiplayer menu (36; this PC's log: '43 (from 36)' then 'Quick Join -
+  any game type'; the Lobby Browser goes 36 -> 38 -> 43); HookedPushMenu turns it into menu 68 in a Mods mode (g_modsList)
+  and the item reads Mods. Rows from pdnet\mods-state.txt (pdlaunch writes it; now with each mod's description): [x] name,
+  version, Online / Only you / PDPL; hint: description, author, which mods it wins over or loses to, problems. A on / off, X
+  pick up (the mod follows the cursor) / put down, Y auto sort (load_after / load_before, then cosmetic, models, maps,
+  skills, plugins / other), LB / RB pages; the player's PDPL archives stay below in name order. Leaving saves mods_order /
+  mods_enabled to settings.ini for the next start. The X icon (\a4#) is a guess. Not yet tried in the game.
 - 2026-11-19: Mod loader .7z details (Conceptual 43): Windows' tar.exe can't read .7z ("LZMA codec is unsupported", LZMA2
   and PPMd alike), so pdlaunch reads .7z with 7-Zip when it's installed (registry Software\7-Zip Path64 / Path, or
   Program Files\7-Zip), and zips tar can't read too. Without 7-Zip a .7z still goes to PDPL, without name, files or

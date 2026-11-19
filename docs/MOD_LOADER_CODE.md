@@ -468,7 +468,16 @@ with `InTheatre()` and `InModsList()`. Every `g_theatre` use (`HookedPushMenu`, 
 `HookedButtons`, `HookedButtonBar`, `SettingsItems`, `SettingsScriptPatch`) switches on the mode. Settings and Theatre
 behave as before (checked in step 4).
 
-### 8.2 Options > Mods (main menu, menu 4)
+### 8.2 Opening the list: the multiplayer menu's Mods item (was Quick Join)
+
+**As built (2026-11-19, the user's call): the multiplayer menu's Quick Join item is the Mods item**, not a row in Options.
+Quick Join's pick opened the session list (43) straight from livemain (36); `HookedPushMenu` turns that push into menu 68
+with `g_modsList` (the Lobby Browser reaches 43 through 38, so it isn't affected). Its texts read "Mods" / "Turn mods on and
+off, and choose which wins.". Back from the list goes to the multiplayer menu, as from Settings. Quick Join's search is
+gone from the menu. The screen uses its own flags (`g_modsList`), like Custom Settings, rather than one enum. The original
+Options plan below is kept for reference.
+
+### 8.2b (not built) Options > Mods (main menu, menu 4)
 - A ninth item after Updates in `LogItems`: `g_modsRowText` ("Mods: 3 on" / "Mods: off" / "Mods: safe mode" / "Mods:
   PDPL missing"), hint "Turn mods on and off, and choose which wins when two change the same file."
 - `CheckSendLogPick`: event 108 with label `aMAIN_S8` → `OpenModsList()`.
