@@ -188,8 +188,8 @@ Folders: PDPL's = `%LOCALAPPDATA%\Packages\Microsoft.MSEsper_8wekyb3d8bbwe\Roami
     `mods_enabled`), and the game uses them (a mod turned off is gone, its `!rb` file deleted).
 19. Settings, Theatre and Custom Settings (same screen) still work as before.
 
-**Catalog and downloads (step 5)** (needs a real entry in `mods/mods.txt` on the Conceptual branch, or `mod_list_url=` in
-settings.ini pointing at a test catalog)
+**Catalog and downloads (step 5)** (add a mod with the Mod Admin app first, or set `mod_list_url=` in settings.ini to a
+test catalog)
 20. A catalog mod shows in the Mods list, off, right column "Download", hint "From the mod catalog ... Turn it on and it
     downloads at the next game start."
 21. Turn it on, leave, restart: pdlaunch.log `newest release ...`, `downloading ...`, `downloaded, N bytes, sha256 ok`; it's in
@@ -209,6 +209,18 @@ settings.ini pointing at a test catalog)
 30. Skills the mod didn't change keep the Skill Update 1.40 values (compare one with a mod-less game).
 
 ## Log
+- 2026-11-19: Mod catalog admin (the user: the whitelist is controlled by a separate admin app, like the scoreboard, and
+  mods are added by pasting a link). The Mod Admin app lives with the leaderboard admin tool, outside the repository:
+  D:\PhantomDust-Dumped-NoMovie\admin-tool\Mod Admin.bat / ModAdmin.ps1 / modadmin.ini (never commit, push or ship it). It
+  keeps the catalog as mods.txt on this repo's own mod-catalog branch (only that file; the first save makes it as a commit
+  with no parent), written through GitHub's API with private\github-token.txt. Paste any GitHub link to a mod's repo
+  (repo page, release, file, owner/repo), Check: it finds the repo, suggests an id, and checks the newest release has a
+  .zip / .7z with a sha256 line (players' games refuse one without); Add saves at once (re-reading the file first). Also
+  Remove, Plugin on / off (with a warning), Check all releases, Open repo, Copy repo link. pdlaunch's default
+  mod_list_url is now that branch's mods.txt, so every kit reads one whitelist; mods\mods.txt in the repo only describes
+  the format. Tested without the window and without writing to GitHub: link parsing, ids, release checks (this repo
+  ok, Torphedo's refused for no sha256 line, missing repo), catalog round trip, reading (no branch yet). Not yet used to
+  save: the first Add will create the branch.
 - 2026-11-19: Mod loader step 6, skill data from mods (Conceptual 46): PDPL hands the game a mod's gsdata_<lang>.dat, but the
   game's stored online copy goes over the block (0x1404c5240) once, on the first main menu / join, so the mod is lost.
   pdlaunch now extracts the gsdata the game would get (loose files in PDPL's folder, else the highest mod that has it)

@@ -157,8 +157,10 @@ namespace
     std::wstring Setting(const wchar_t* key, const wchar_t* fallback); // (below)
     bool UrlGet(const std::wstring& url, std::string& body, unsigned long timeoutMs); // (below)
     std::string Sha256(const std::string& data); // (below)
-    // The mod catalog (mod_list_url= in pdnet.ini or settings.ini): mods\mods.txt in this repository's Conceptual branch.
-    constexpr wchar_t kModListUrl[] = L"https://raw.githubusercontent.com/SnowRyze/Phantom-Dust-Rebirth/Conceptual/mods/mods.txt";
+    // The mod catalog (mod_list_url= in pdnet.ini or settings.ini): mods.txt on this repository's own mod-catalog branch,
+    // which holds only that file and is written only by the Mod Admin app (outside the repository, like the leaderboard
+    // admin tool), so every kit (Conceptual, Experimental, Stable) reads the same whitelist.
+    constexpr wchar_t kModListUrl[] = L"https://raw.githubusercontent.com/SnowRyze/Phantom-Dust-Rebirth/mod-catalog/mods.txt";
     const modsync::Net kModNet{ UrlGet, Sha256 };
 
     // Mod loader (Conceptual, step 1; docs\MOD_LOADER_CODE.md): PDPL, Torphedo's Phantom Dust Plugin Loader

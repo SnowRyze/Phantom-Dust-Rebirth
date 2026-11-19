@@ -36,6 +36,12 @@ game: the Mods list turns a catalog mod on, pdlaunch downloads it before PDPL lo
 (pdlaunch extracts it at every sync; PDPL's 1.2.2 DLL has no exports to read it through) and writes only the bytes where it
 differs from the game folder's file, so untouched values keep the stored copy's numbers.
 
+**The catalog's admin (2026-11-19, the user's call):** the whitelist is edited only with the Mod Admin app, which lives
+outside the repository with the leaderboard admin tool (`admin-tool\Mod Admin.bat`). It stores the catalog as `mods.txt` on
+the repo's own `mod-catalog` branch through GitHub's API; mods are added by pasting a link to their GitHub repo, and the
+app checks the newest release has a `.zip` / `.7z` with a sha256 line before saving. pdlaunch's default `mod_list_url` is
+that file. `mods/mods.txt` in the repo only describes the format.
+
 **Torphedo's answers (2026-11-19):**
 - The console only appears when the game is sideloaded, and hiding the window would be easy. Rebirth supports unpacked
   (sideloaded) copies, so pdnet handles it itself (section 4.3); no change in PDPL needed.
