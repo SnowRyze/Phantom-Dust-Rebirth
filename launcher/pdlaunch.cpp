@@ -183,7 +183,15 @@ namespace
             Log(L"mods: the last start didn't reach the title screen - starting without mods (PDPL not loaded)");
             return;
         }
-        modsync::Sync(localState, Log, &kModNet, Setting(L"mod_list_url", kModListUrl)); // catalog downloads, then PDPL's mods folder = the mod list, before PDPL reads it
+        std::wstring gameDir; // the game folder: where PDUWP.exe runs from (new map slots read the game's stage list there)
+        if (HANDLE game = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, pid))
+        {
+            wchar_t image[MAX_PATH] = {};
+            DWORD size = MAX_PATH;
+            if (QueryFullProcessImageNameW(game, 0, image, &size)) { gameDir = image; gameDir = gameDir.substr(0, gameDir.find_last_of(L'\\')); }
+            CloseHandle(game);
+        }
+        modsync::Sync(localState, Log, &kModNet, Setting(L"mod_list_url", kModListUrl), gameDir); // catalog downloads, then PDPL's mods folder = the mod list, before PDPL reads it
         std::wstring dll = g_dir + L"pd_loader_core.dll", pdnet = g_dir + L"pdnet.dll";
         if (GetFileAttributesW(dll.c_str()) == INVALID_FILE_ATTRIBUTES)
         {
@@ -1263,11 +1271,11 @@ int wmain(int argc, wchar_t** argv)
 
     if (argc == 2 && _wcsicmp(argv[1], L"-attach") == 0) return Attach();
 
-    // pdlaunch.exe -syncmods <LocalState folder> [catalog URL or file]: only the mod sync with its catalog downloads
-    // (testing; modsync.h), logged to pdlaunch.log.
-    if ((argc == 3 || argc == 4) && _wcsicmp(argv[1], L"-syncmods") == 0)
+    // pdlaunch.exe -syncmods <LocalState folder> [catalog URL or file] [game folder]: only the mod sync with its catalog
+    // downloads and map slots (testing; modsync.h), logged to pdlaunch.log.
+    if (argc >= 3 && argc <= 5 && _wcsicmp(argv[1], L"-syncmods") == 0)
     {
-        modsync::Sync(argv[2], Log, &kModNet, argc == 4 ? std::wstring(argv[3]) : Setting(L"mod_list_url", kModListUrl));
+        modsync::Sync(argv[2], Log, &kModNet, argc >= 4 && argv[3][0] ? std::wstring(argv[3]) : Setting(L"mod_list_url", kModListUrl), argc == 5 ? std::wstring(argv[4]) : std::wstring());
         return 0;
     }
 

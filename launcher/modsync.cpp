@@ -1,5 +1,6 @@
 // Mod loader step 2 (Conceptual): see modsync.h.
 #include "modsync.h"
+#include "mapslots.h"
 #include <windows.h>
 #include <algorithm>
 #include <cctype>
@@ -31,6 +32,8 @@ namespace modsync
             std::string id, name, version, author, description, online = "match", problem;
             std::string sha, tag; // sha256 of the archive (lobbies compare it), the release tag (catalog mods)
             std::vector<std::string> pluginFiles; // plugins/*.dll|exe (step 8)
+            std::string category;                 // mod-info.ini's category= (or pdmod.json's), e.g. Map
+            bool isMap = false;                   // a new map (.alr + .dat at the archive's root): a map slot, not copied to PDPL
             std::string warning;                  // shown in the Mods list, doesn't stop the mod (step 8)
             std::vector<std::string> after, before, touches, files; // files: lowercase game paths
             bool plugins = false, enabled = true, read = false;
@@ -409,7 +412,7 @@ namespace modsync
         bool LoadCache(const std::wstring& file, Mod& m)
         {
             std::string text = ReadText(file);
-            if (text.rfind("modinfo 1\n", 0) != 0) return false;
+            if (text.rfind("modinfo 2\n", 0) != 0) return false; // 2: category (mod-info.ini) kept too
             std::string idHint;
             for (const auto& line : Split(text, '\n'))
             {
@@ -426,6 +429,7 @@ namespace modsync
                 else if (k == "after") m.after = Split(v, ',');
                 else if (k == "before") m.before = Split(v, ',');
                 else if (k == "sha") m.sha = v;
+                else if (k == "category") m.category = v;
             }
             m.read = true;
             return true;
@@ -433,9 +437,9 @@ namespace modsync
 
         void SaveCache(const std::wstring& file, const Mod& m)
         {
-            std::string t = "modinfo 1\n";
+            std::string t = "modinfo 2\n";
             t += "id=" + Field(m.id) + "\nname=" + Field(m.name) + "\nversion=" + Field(m.version) + "\nauthor=" + Field(m.author) +
-                 "\ndescription=" + Field(m.description) + "\nonline=" + m.online + "\nafter=" + Join(m.after, ',') + "\nbefore=" + Join(m.before, ',') + "\nsha=" + m.sha + "\n";
+                 "\ndescription=" + Field(m.description) + "\nonline=" + m.online + "\nafter=" + Join(m.after, ',') + "\nbefore=" + Join(m.before, ',') + "\nsha=" + m.sha + "\ncategory=" + Field(m.category) + "\n";
             for (const auto& f : m.files) t += "f " + f + "\n";
             WriteText(file, t);
         }
@@ -472,12 +476,13 @@ namespace modsync
                 g_log(L"mods: %s: %S", m.file.c_str(), m.problem.c_str());
                 return;
             }
-            std::string manifestEntry;
+            std::string manifestEntry, iniEntry;
             for (const auto& raw : entries)
             {
                 std::string p = GamePath(raw);
                 if (p.empty() || p.find("..") != std::string::npos) continue;
                 if (p == "pdmod.json") manifestEntry = raw;
+                if (p == "mod-info.ini") iniEntry = raw;
                 m.files.push_back(p);
             }
             if (!manifestEntry.empty())
@@ -494,8 +499,29 @@ namespace modsync
                     m.online = online == "local" ? "local" : "match";
                     m.after = JsonGetStrings(json, "load_after");
                     m.before = JsonGetStrings(json, "load_before");
+                    m.category = JsonGetString(json, "category");
                 }
                 else g_log(L"mods: %s: pdmod.json couldn't be read", m.file.c_str());
+            }
+            // mod-info.ini (the community's map format: id, author, name, ver, desc, category, preview): its details where
+            // pdmod.json gave none. Its id is a random hash, not a catalog id, so it isn't used.
+            if (!iniEntry.empty())
+            {
+                std::string ini;
+                if (ReadEntry(m.path, sevenZip, iniEntry, ini))
+                    for (const auto& line : Split(ini, '\n'))
+                    {
+                        size_t eq = line.find('=');
+                        if (line.empty() || line[0] == ';' || line[0] == '#' || eq == std::string::npos) continue;
+                        std::string k = Lower(line.substr(0, eq)), v = line.substr(eq + 1);
+                        while (!k.empty() && k.back() == ' ') k.pop_back();
+                        while (!v.empty() && (v.front() == ' ' || v.front() == '\t')) v.erase(0, 1);
+                        if (k == "name" && m.name.empty()) m.name = v;
+                        else if (k == "ver" && m.version.empty()) m.version = v;
+                        else if (k == "author" && m.author.empty()) m.author = v;
+                        else if (k == "desc" && m.description.empty()) m.description = v;
+                        else if (k == "category" && m.category.empty()) m.category = v;
+                    }
             }
             m.read = true;
             SaveCache(cache, m);
@@ -812,7 +838,7 @@ namespace modsync
         }
     }
 
-    void Sync(const std::wstring& localState, LogFn log, const Net* net, const std::wstring& catalogUrl)
+    void Sync(const std::wstring& localState, LogFn log, const Net* net, const std::wstring& catalogUrl, const std::wstring& gameDir)
     {
         g_log = log;
         g_net = net;
@@ -1012,6 +1038,20 @@ namespace modsync
             bool plugins = false;
             m.touches = Touches(m.files, plugins);
             m.plugins = plugins;
+            // A new map: category Map, or a .alr + .dat pair at the archive's root (not at a game path). It gets a map slot
+            // (mapslots.cpp) instead of being put in PDPL's folder as it is.
+            {
+                bool rootAlr = false, rootDat = false;
+                for (const auto& p : m.files)
+                {
+                    if (p.find('/') != std::string::npos) continue;
+                    std::wstring ext = Extension(Wide(p));
+                    rootAlr = rootAlr || ext == L".alr";
+                    rootDat = rootDat || ext == L".dat";
+                }
+                m.isMap = (Lower(m.category).find("map") != std::string::npos || m.category.empty()) && rootAlr && rootDat;
+                if (m.isMap) m.touches = { "maps" };
+            }
             // A downloaded mod with DLLs needs the catalog's "plugin" flag (someone read its source): without it, it's never
             // put in PDPL's folder.
             // Plugins (step 8): PDPL loads plugins/*.dll from every archive it mounts, at game start. A plugin that imports
@@ -1110,7 +1150,7 @@ namespace modsync
                 }
                 continue;
             }
-            if (!m.enabled || m.path.empty() || (!m.problem.empty() && m.problem.rfind("has plugins", 0) == 0)) continue;
+            if (!m.enabled || m.path.empty() || m.isMap || (!m.problem.empty() && m.problem.rfind("has plugins", 0) == 0)) continue;
             wchar_t prefix[16];
             swprintf_s(prefix, L"!rb%03d-", slot++);
             std::wstring name = prefix + Wide(m.id) + m.ext, target = pdplDir + L"\\" + name;
@@ -1151,6 +1191,31 @@ namespace modsync
                 for (const auto& f : fewer) n += more.count(f);
                 if (n) conflicts += "conflict\t" + on[a]->id + "\t" + on[b]->id + "\t" + std::to_string(n) + "\n";
             }
+
+        // ---- new map slots (mapslots.cpp) ----
+        // Each enabled map mod, in priority order, becomes a new stage in the multiplayer map picker (its .alr / .dat
+        // under a free stage number, its preview on the picker's sheet); with none, the generated files are removed.
+        if (!gameDir.empty())
+        {
+            std::vector<mapslots::MapMod> maps;
+            for (const auto& m : mods)
+            {
+                if (!m.isMap || !m.enabled || m.path.empty() || (!m.problem.empty() && m.problem.rfind("has plugins", 0) == 0)) continue;
+                mapslots::MapMod map{ m.id, m.name.empty() ? m.id : m.name };
+                for (const auto& p : m.files)
+                {
+                    if (p.find('/') != std::string::npos) continue;
+                    std::wstring ext = Extension(Wide(p));
+                    if (ext == L".alr" && map.alr.empty()) ExtractGameFile(m, p, map.alr);
+                    else if (ext == L".dat" && map.dat.empty()) ExtractGameFile(m, p, map.dat);
+                    else if (p == "preview.png" || (map.preview.empty() && (ext == L".png" || ext == L".jpg"))) ExtractGameFile(m, p, map.preview);
+                }
+                if (map.alr.empty() || map.dat.empty()) { log(L"mods: %S: its map files couldn't be read - no map slot", m.id.c_str()); continue; }
+                maps.push_back(std::move(map));
+            }
+            mapslots::Generate(gameDir, pdplDir, pdnetDir, maps, log);
+        }
+        else log(L"mods: game folder unknown - map slots not made");
 
         // ---- skill data (step 6) ----
         // PDPL hands the game a mod's gsdata_<lang>.dat, but the game then copies its stored online copy over that data in
@@ -1194,14 +1259,14 @@ namespace modsync
         char when[32];
         sprintf_s(when, "%04u-%02u-%02u %02u:%02u", t.wYear, t.wMonth, t.wDay, t.wHour, t.wMinute);
         std::string state = std::string("# pdlaunch, ") + when + ": mods in priority order (first wins); tab-separated\n";
-        state += "# mod id on|off source name version author online touches plugins files problem path load_after load_before description sha256(12) tag plugin_files warning\n";
+        state += "# mod id on|off source name version author online touches plugins files problem path load_after load_before description sha256(12) tag plugin_files warning map\n";
         if (lobbyStart) state += "lobbystart\t1\n"; // this start uses a lobby's mods (the Mods list says so)
         state += "loose\t" + std::to_string(loose) + "\n";
         for (const auto& m : mods)
             state += "mod\t" + m.id + "\t" + (m.enabled ? "on" : "off") + "\t" + Utf8(SourceName(m.source)) + "\t" + Field(m.name) + "\t" +
                      Field(m.version) + "\t" + Field(m.author) + "\t" + m.online + "\t" + Join(m.touches, ',') + "\t" + (m.plugins ? "1" : "0") + "\t" +
                      std::to_string(m.files.size()) + "\t" + Field(m.problem) + "\t" + Field(Utf8(m.path)) + "\t" + Join(m.after, ',') + "\t" + Join(m.before, ',') + "\t" + Field(m.description) + "\t" +
-                     m.sha.substr(0, 12) + "\t" + Field(m.tag) + "\t" + Field(Join(m.pluginFiles, ';')) + "\t" + Field(m.warning) + "\n";
+                     m.sha.substr(0, 12) + "\t" + Field(m.tag) + "\t" + Field(Join(m.pluginFiles, ';')) + "\t" + Field(m.warning) + "\t" + (m.isMap ? "map" : "") + "\n";
         state += conflicts;
         if (!WriteText(pdnetDir + L"\\mods-state.txt", state)) log(L"mods: couldn't write mods-state.txt");
 

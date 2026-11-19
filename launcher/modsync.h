@@ -37,5 +37,6 @@ namespace modsync
     // against GitHub's own sha256 of it (or a "sha256 <file> <hex>" line in the release notes, which wins); the newest 3
     // of each mod are kept. Catalog mods that aren't
     // downloaded are listed in the state file too, without a path. net null: no catalog, no downloads.
-    void Sync(const std::wstring& localState, LogFn log, const Net* net, const std::wstring& catalogUrl);
+    // gameDir: the game folder (for new map slots: the game's stage list and MNet.alr, mapslots.h); empty: no map slots.
+    void Sync(const std::wstring& localState, LogFn log, const Net* net, const std::wstring& catalogUrl, const std::wstring& gameDir);
 }

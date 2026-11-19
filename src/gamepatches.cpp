@@ -3205,6 +3205,134 @@ namespace pdnet::gamepatches
             return true;
         }
 
+        // New map slots (Conceptual; docs\CONCEPTUAL.md, "New map slots"). pdlaunch (launcher\mapslots.cpp) gives each map
+        // mod that's on a stage entry from 30 up (entry index = map number), copies its files to st<N>.alr / .dat, and
+        // writes a stage list with the entries and an MNet.alr with a preview sprite per slot, all as loose files PDPL
+        // serves; LocalState\pdnet\map-slots.txt lists them ("slot <entry> <sprite> <mod id> <name>"). The map picker
+        // (livestagesel, menu 47) walks a fixed list of entries 2-26 only, so in that menu pdnet:
+        // - adds a row per slot (menu command 59: id 100 + entry, the entry's name from the stage table) right after the
+        //   script's last row (stage 8, id 108);
+        // - answers the stage query's "unlocked" (menu command 87 kind 0x39) with 1 for the slots: their bits (entry + 27)
+        //   are past the 56 the game keeps, so they always read locked;
+        // - draws the slot's preview (MNet sprite) instead of the script's (menu command 18: sheet 3, sprite, 48, 261)
+        //   while the cursor (window field 9, as menu command 55(window, 9) reads it) is on a slot's row;
+        // - and at the pick (session command 40, FUN_140213c00: entry -> 0x14051775c, its map number -> 0x140527bc8, a
+        //   random layout -> 0x140527c54) with the cursor on a slot's row, passes that slot's entry, whatever the script
+        //   worked out from the row.
+        // A slot counts only if the game's stage table has it with the multiplayer flag (the stage list came from PDPL).
+        MenuCommandFn g_addIdItem = nullptr; // menu command 59 (HookedAddIdItem, below)
+        struct MapSlot { int entry; int sprite; };
+        std::vector<MapSlot> g_mapSlots;
+        std::atomic<int> g_mapWindow{ -1 };   // the window the map picker's rows went into; -1 none yet
+        int8_t g_mapRowSlot[256];             // row -> index into g_mapSlots; -1 a script row
+        constexpr int kStageEntrySize = 0x28; // the stage table at 0x140509ba0 (+0 name, +0x18 map number, +0x20 flag)
+
+        bool MapSlotInTable(int entry)
+        {
+            int count = *reinterpret_cast<int32_t*>(At(0x14050a5d0));
+            return entry > 0 && entry < count && *reinterpret_cast<int32_t*>(At(0x140509ba0) + entry * kStageEntrySize + 0x20) == 1;
+        }
+
+        bool IsMapSlot(int entry)
+        {
+            for (const MapSlot& s : g_mapSlots)
+                if (s.entry == entry) return MapSlotInTable(entry);
+            return false;
+        }
+
+        // The slot under the map picker's cursor (index into g_mapSlots), or -1.
+        int CursorMapSlot()
+        {
+            int window = g_mapWindow;
+            int64_t manager = MenuManager();
+            if (window < 0 || CurrentMenu(manager) != kStageMenu) return -1;
+            int row = *reinterpret_cast<int16_t*>(manager + window * 0x103c + 0x40 + 9 * 2); // as menu command 55(window, 9)
+            return row >= 0 && row < 256 ? g_mapRowSlot[row] : -1;
+        }
+
+        // From HookedAddIdItem, after the game added a row (position = the row's index) to window.
+        void AddMapSlotRows(int64_t* args, int window, int position)
+        {
+            if (g_mapSlots.empty() || CurrentMenu(MenuManager()) != kStageMenu || window < 0 || position < 0) return;
+            if (position == 0) memset(g_mapRowSlot, -1, sizeof(g_mapRowSlot));
+            if (args[0] != 108) return; // stage 8: the script's last row
+            int row = position + 1, added = 0;
+            for (size_t k = 0; k < g_mapSlots.size() && row < 256; ++k)
+            {
+                if (!MapSlotInTable(g_mapSlots[k].entry)) continue;
+                const char* name = *reinterpret_cast<const char**>(At(0x140509ba0) + g_mapSlots[k].entry * kStageEntrySize);
+                int64_t item[8] = { 100 + g_mapSlots[k].entry, reinterpret_cast<int64_t>(name) };
+                g_addIdItem(item);
+                g_mapRowSlot[row++] = static_cast<int8_t>(k);
+                ++added;
+            }
+            g_mapWindow = window;
+            static bool logged = false;
+            if (!logged) { logged = true; Log(L"gamepatch: map picker: %d new map(s) added after row %d (window %d)", added, position, window); }
+        }
+
+        MenuCommandFn g_stageQuery = nullptr;
+        int64_t HookedStageQuery(int64_t* args)
+        {
+            if (args && args[0] == 0x39 && IsMapSlot(static_cast<int32_t>(args[1]))) return 1;
+            return g_stageQuery(args);
+        }
+
+        MenuCommandFn g_drawSheetSprite = nullptr;
+        int64_t HookedDrawSheetSprite(int64_t* args)
+        {
+            if (args && args[0] == 3 && args[2] == 48 && args[3] == 261)
+            {
+                int k = CursorMapSlot();
+                if (k >= 0)
+                {
+                    int64_t a[8] = { args[0], g_mapSlots[k].sprite, args[2], args[3] };
+                    return g_drawSheetSprite(a);
+                }
+            }
+            return g_drawSheetSprite(args);
+        }
+
+        SessionCommandFn g_stagePick = nullptr;
+        int64_t HookedStagePick(int32_t* args)
+        {
+            int k = args ? CursorMapSlot() : -1;
+            if (k >= 0 && MapSlotInTable(g_mapSlots[k].entry))
+            {
+                int32_t a[8] = { g_mapSlots[k].entry };
+                if (args[0] != a[0]) Log(L"gamepatch: map picker: the pick %d is new map %d (the cursor's row)", args[0], a[0]);
+                else Log(L"gamepatch: map picker: new map %d picked", a[0]);
+                return g_stagePick(a);
+            }
+            return g_stagePick(args);
+        }
+
+        void MapSlots()
+        {
+            memset(g_mapRowSlot, -1, sizeof(g_mapRowSlot));
+            if (!GetModuleHandleW(L"pd_loader_core.dll")) return; // no PDPL: the game has its own stage list
+            std::ifstream in(LocalStatePath() + L"\\pdnet\\map-slots.txt", std::ios::binary);
+            std::string line;
+            while (std::getline(in, line))
+            {
+                int entry = 0, sprite = 0;
+                if (sscanf_s(line.c_str(), "slot\t%d\t%d", &entry, &sprite) == 2 && entry >= 30 && entry < 65 && sprite > 0 && sprite < 128)
+                    g_mapSlots.push_back({ entry, sprite });
+            }
+            if (g_mapSlots.empty()) return;
+            int count = *reinterpret_cast<int32_t*>(At(0x14050a5d0));
+            if (!g_addIdItem)
+            {
+                Log(L"gamepatch: map picker: %zu new map(s) NOT added (the row hook isn't in)", g_mapSlots.size());
+                g_mapSlots.clear();
+                return;
+            }
+            bool hooks = WrapCommand<MenuCommandFn>(0x1403eefe0 + 87 * 8, 0x140208340, &HookedStageQuery, g_stageQuery, L"map picker stage query") &&
+                         WrapCommand<MenuCommandFn>(0x1403eefe0 + 18 * 8, 0x140207730, &HookedDrawSheetSprite, g_drawSheetSprite, L"map picker preview") &&
+                         WrapCommand<SessionCommandFn>(0x1403f1150 + 40 * 8, 0x140213c00, &HookedStagePick, g_stagePick, L"map picker pick");
+            Log(L"gamepatch: map picker: %zu new map(s) from map-slots.txt, stage table has %d entries%s", g_mapSlots.size(), count, hooks ? L"" : L" - NOT all hooks in");
+        }
+
         // What each row of a command-59 list does when picked, by window and position. The Laboratory's window reports
         // a pick by POSITION (event 100 + position, label aMAIN_S<position>; its labels are aMAIN_S0-S2 for its rows
         // with ids 0-2), so with the case rows in between a later row moves down: its pick is mapped back to its
@@ -3213,7 +3341,6 @@ namespace pdnet::gamepatches
         constexpr int8_t kRowBuy = 100, kRowSell = 101, kRowTest = 102;
         int8_t g_rowAction[kWindows][kRows]; // the row's id (its label number), kRowBuy / kRowSell; -1 unknown
 
-        MenuCommandFn g_addIdItem = nullptr;
         int64_t HookedAddIdItem(int64_t* args)
         {
             int64_t manager = MenuManager();
@@ -3223,6 +3350,7 @@ namespace pdnet::gamepatches
             if (tracked && position == 0) memset(g_rowAction[window], -1, kRows);
             int64_t result = g_addIdItem(args);
             if (!args) return result;
+            AddMapSlotRows(args, window, tracked ? position : -1);
             if (tracked && position < kRows) g_rowAction[window][position] = static_cast<int8_t>(args[0] >= 0 && args[0] < kRowBuy ? args[0] : -1);
             char text[32];
             if (!CaseItemsReady() || !CopyString(reinterpret_cast<const char*>(args[1]), text, sizeof(text)) || strcmp(text, "View Stock List") != 0) return result;
@@ -5734,6 +5862,7 @@ namespace pdnet::gamepatches
             if (WrapCommand<MenuCommandFn>(0x1403eefe0 + 40 * 8, 0x140207e20, &HookedAddItem, g_addItem, L"menu item names"))
                 Log(L"gamepatch: menu items renamed as they are added (Quick Join, Lobby Browser%s)", GetConfig().scoreboard ? L", Global scoreboards only" : L"");
             SoundOptions(); // Options > Sound: Aura Particle Beeps
+            MapSlots();     // new map slots in the map picker (after SoundOptions: it puts in the row hook)
             SignalPastTitle(); // pdlaunch's start-up volume lasts until then
             bool arsenal = GetConfig().lobbyArsenalEditor; // the Arsenal Lab button for clients too
             if (GetConfig().lobbyGamertagOption || micLabel || arsenal) LobbyScriptPatches(GetConfig().lobbyGamertagOption, micLabel, arsenal);

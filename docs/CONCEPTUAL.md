@@ -235,6 +235,24 @@ test catalog)
 42. A catalog mod with DLLs but no `plugin` flag in the catalog: the list says "has plugins (needs the catalog's plugin
     flag)" and it isn't loaded. With the flag (Mod Admin, Plugin on): it loads.
 
+**New map slots** (turn map-aquarium on in the Mods list, restart; pdlaunch.log shows maps: map-aquarium = st30)
+43. pdnet.log: map picker: 1 new map(s) from map-slots.txt, stage table has 31 entries (31 = the generated stage list
+    is in; 30 = PDPL didn't serve it).
+44. Host a lobby, open the map picker: "Aquarium" is the last row, map picker: 1 new map(s) added after row N. If it
+    isn't there: send pdnet.log (the script's last row may not be stage 8 here).
+45. Cursor on Aquarium: its preview (the mod's preview.png) shows where the arena pictures go. Wrong or no picture: say
+    which (the script may not draw one for rows it doesn't know).
+46. Pick Aquarium: pdnet.log 
+ew map 30 picked (or 	he pick N is new map 30); the lobby shows Aquarium; the match
+    loads the Aquarium stage with its name on the loading screen. Spawns, collision and music as the mod has them.
+47. Other maps still pick and load as before (cursor on a game map: its own preview, its own stage).
+48. A second PC with the same mods joins and loads the same map. A PC without the map mod can't join (mods differ).
+49. Test Arsenal > map picker > Aquarium: does the battle load? (No AI navigation for st30: the AI may stand still or
+    the load may fail. Note what happens.)
+50. Japanese game language: the picker shows the map too (stageset.dat is generated as well).
+51. Turn map-aquarium off, restart: the generated files are gone from RoamingState\mods\Assets (pdlaunch.log), the picker
+    is as before.
+
 ## New map slots (research, 2026-11-21; plan: prebake at game start, live later)
 The user wants map mods (e.g. Nuion's Aquarium: Aquarium.alr / .dat, mod-info.ini, a 256x112 preview.png) to appear as
 new maps in the multiplayer map picker, not replace a stage. Decided: prebake at game start (pdlaunch generates the
@@ -301,6 +319,17 @@ directly with one address per script argument, a PowerShell wrapper passing arra
   camera; st24 has none, so optional), com\st%02d (AI navigation: only AI battles), st%02d_area%02d_%02d.ssb (story).
   The exe's one "bgm" string only sets the sound folder: no music table by map number (music comes with the stage).
   LdCg isn't in the exe (not chosen by map number).
+- **Built (Conceptual 52):** pdlaunch: launcher\mapslots.cpp, run from modsync (a map mod: category Map or none, with a
+  root .alr + .dat; mod-info.ini read for name/version/author/description/category; map mods aren't copied as archives).
+  It writes, as loose files in RoamingState\mods (listed in pdnet\map-generated.txt, deleted when no longer made):
+  Assets\Data\setup\stageset\stageset_en.dat and stageset.dat (the game's Japanese list has no suffix), Map\stNN.alr /
+  .dat, and Menu\MNet.alr with one DXT1 256x1024 texture per 9 previews (254x112 strips, WIC-decoded and scaled,
+  sprites 84+ named mission_map_customNN.tga), plus pdnet\map-slots.txt. Checked with -syncmods and Aquarium: entry 30
+  in both lists, sprite 84 on new texture 12 (MNet9000.dds), the strip decodes to the mod's picture. pdnet
+  (gamepatches.cpp, MapSlots): rows after id 108 in menu 47 (menu command 59 = add row: id, text only), 87 kind 0x39
+  answers 1, menu command 18 at (3, *, 48, 261) swaps the sprite while window field 9 (the cursor) is on a slot row, and
+  **the pick is session command 40** (table 0x1403f1150 + 40 * 8 = FUN_140213c00: args[0] = entry), swapped to the
+  cursor's slot entry. Not yet seen in game.
 - **Plan changes:** custom slots are entry = map number in 30-64 minus numbers ending in 1 or 9 (30, 32-38, 40, 42-48,
   50, 52-58, 60, 62-64: **28 slots**), with blank flag-0 filler entries for the skipped numbers so the entry index stays
   the map number. pdnet also wraps the pick (g4 #576) so the cursor's custom item gives its entry, whatever the script's
@@ -310,6 +339,9 @@ directly with one address per script argument, a PowerShell wrapper passing arra
   the unlocked query. Still to check: the picker's preview choice (next: a run with menu_debug=on through the picker),
   and anything else keyed by map number (BGM, AI navigation com/stNN, lighting, intro camera stNNcam.alr: not needed).
 ## Log
+- 2026-11-21: New map slots built (Conceptual 52): pdlaunch generates the stage lists, map files and MNet previews from
+  the map mods that are on; pdnet adds their rows to the map picker, unlocks them, swaps the preview and the pick.
+  Tested outside the game with -syncmods and Aquarium (slot 30, sprite 84, preview decoded). Checks 43-51 to test.
 - 2026-11-21: New map slot checks (Ghidra): the loading screen indexes the stage table by map number, so custom map number
   = entry index; numbers ending in 1 or 9 are special in the loader, leaving 28 slots (30-64); no map-number tables for
   music; pdnet will wrap the pick too. Plan updated in "New map slots".

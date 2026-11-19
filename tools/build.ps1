@@ -252,7 +252,7 @@ try {
     # ---- pdlaunch.exe: a Windows program, not a console one (it stays running in the background with the game) ----
     Step 'Building pdlaunch.exe'
     $sdl = Join-Path $root 'deps\SDL3'
-    & cl.exe /nologo /std:c++20 /EHsc /MT /O2 /W3 /permissive- /utf-8 /DUNICODE /D_UNICODE "/I$src" "/I$sdl\include" '/Foobj\launcher\' /Fepdlaunch.exe "$root\launcher\pdlaunch.cpp" "$root\launcher\modsync.cpp" /link /SUBSYSTEM:WINDOWS /ENTRY:wmainCRTStartup kernel32.lib psapi.lib ole32.lib user32.lib
+    & cl.exe /nologo /std:c++20 /EHsc /MT /O2 /W3 /permissive- /utf-8 /DUNICODE /D_UNICODE "/I$src" "/I$sdl\include" '/Foobj\launcher\' /Fepdlaunch.exe "$root\launcher\pdlaunch.cpp" "$root\launcher\modsync.cpp" "$root\launcher\mapslots.cpp" /link /SUBSYSTEM:WINDOWS /ENTRY:wmainCRTStartup kernel32.lib psapi.lib ole32.lib user32.lib
     if ($LASTEXITCODE -ne 0) { Fail 'pdlaunch.exe failed to build (see the errors above).' }
     Copy-Item "$sdl\SDL3.dll" $out -Force
 }
