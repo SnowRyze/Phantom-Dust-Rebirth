@@ -817,6 +817,7 @@ namespace pdnet::mpsd
                             Log(L"xsapi-pdnet: not joining lobby %S: its mods (%S) aren't this start's (%S) - %S", lobbyId.c_str(), tag.empty() ? "none" : tag.c_str(),
                                 mods::LobbyTag().empty() ? "none" : mods::LobbyTag().c_str(), asked ? "restart the game and join again" : why.c_str());
                             status = mp::WriteSessionStatus::HandleNotFound; // the game's "couldn't join"
+                            if (asked) gamepatches::ModLobbyRefused(); // its message says why
                             return nullptr;
                         }
                     }

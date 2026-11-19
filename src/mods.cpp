@@ -2,6 +2,7 @@
 #include "mods.h"
 #include "config.h"
 #include "log.h"
+#include <algorithm>
 #include <fstream>
 
 namespace pdnet::mods
@@ -60,6 +61,18 @@ namespace pdnet::mods
     }
 
     size_t Count(const std::string& lobbyTag) { return lobbyTag.empty() ? 0 : Fields(lobbyTag, ',').size(); }
+
+    bool Differs(const std::string& lobbyTag)
+    {
+        auto sorted = [](const std::string& tag)
+        {
+            std::vector<std::string> v;
+            if (!tag.empty()) v = Fields(tag, ',');
+            std::sort(v.begin(), v.end());
+            return v;
+        };
+        return sorted(lobbyTag) != sorted(LobbyTag());
+    }
 
     bool LobbyStart()
     {

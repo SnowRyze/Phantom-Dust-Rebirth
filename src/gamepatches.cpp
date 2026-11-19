@@ -1343,6 +1343,57 @@ namespace pdnet::gamepatches
             }
         }
 
+        // A modded lobby refused (the user, 2026-11-22: "it needs to say that the lobby is modded"). The game only says
+        // "Could not find a session." (too short to hold the reason in place). Its scripts also carry the unused trade
+        // message (Trade is the Theater now), long enough: that one is rewritten with the reason, and for 30 s after a
+        // refusal (ModLobbyRefused) every script's "Could not find a session." push points at it; then they point back.
+        std::atomic<ULONGLONG> g_modRefusedAt{ 0 };
+        constexpr char kNoSession[] = "Could not find a session.";
+        constexpr char kTradeText[] = "You cannot join this game session because it is currently in a trade.";
+        constexpr char kModText[] = "This lobby uses mods. Restart the game\nto load them, then join again.";
+        static_assert(sizeof(kModText) <= sizeof(kTradeText), "written over the trade message");
+
+        std::set<uint32_t*> g_modSwapped; // the pushes ModMessageScript pointed at the modded-lobby message
+        void ModMessageScript(uint8_t* script)
+        {
+            bool on = g_modRefusedAt && GetTickCount64() - g_modRefusedAt < 30000;
+            __try
+            {
+                auto code = reinterpret_cast<uint32_t*>(script);
+                uint32_t labelsAt = code[1], strings = code[3];
+                if (code[0] != 0x20) labelsAt += 4, strings += 12;
+                if (labelsAt <= 0x20 || labelsAt > 0x40000 || strings < labelsAt || strings > 0x80000) return;
+                char* pool = reinterpret_cast<char*>(script + strings);
+                uint32_t noSession = 0, message = 0;
+                bool haveNoSession = false, haveMessage = false;
+                for (uint32_t* w = code + 0x20 / 4; w < code + labelsAt / 4; ++w)
+                {
+                    if ((*w & 0xffff) != 0x0011) continue;
+                    char* text = pool + (*w >> 16);
+                    if (strcmp(text, kTradeText) == 0) memcpy(text, kModText, sizeof(kModText));
+                    if (strcmp(text, kModText) == 0) { message = *w >> 16; haveMessage = true; }
+                    if (strcmp(text, kNoSession) == 0) { noSession = *w >> 16; haveNoSession = true; }
+                }
+                if (!haveMessage) return;
+                // Which pushes were "Could not find a session." is kept in the script itself: they point at kModText
+                // while `on`, and at the original text (found again by searching the pool) otherwise.
+                if (!haveNoSession)
+                    for (uint32_t at = 0; at + sizeof(kNoSession) < 0x10000; ++at)
+                        if (memcmp(pool + at, kNoSession, sizeof(kNoSession)) == 0 && (at == 0 || pool[at - 1] == 0)) { noSession = at; haveNoSession = true; break; }
+                if (!haveNoSession) return;
+                int changed = 0;
+                for (uint32_t* w = code + 0x20 / 4; w < code + labelsAt / 4; ++w)
+                {
+                    if ((*w & 0xffff) != 0x0011) continue;
+                    uint32_t at = *w >> 16;
+                    if (on && at == noSession) { *w = (message << 16) | 0x0011; g_modSwapped.insert(w); ++changed; }
+                    else if (!on && at == message && g_modSwapped.erase(w)) { *w = (noSession << 16) | 0x0011; ++changed; }
+                }
+                if (changed) Log(L"gamepatch: modded-lobby message %s (%d text(s))", on ? L"shown instead of \"Could not find a session.\"" : L"back to the game's", changed);
+            }
+            __except (EXCEPTION_EXECUTE_HANDLER) {}
+        }
+
         // "Xbox Live" -> "Online" in every text a menu script shows (pdnet replaces Xbox Live): screen headers, the main
         // menu item and hint, pause-menu prompts, connection messages. Phrases first, so sentences still read; every
         // replacement is shorter than what it replaces, so it is written in place. Returns how many texts changed.
@@ -1665,6 +1716,7 @@ namespace pdnet::gamepatches
                             };
                             RelabelScript(script, kCaseTexts, std::size(kCaseTexts));
                         }
+                        ModMessageScript(script);
                         if (int renamed = RenameXboxLive(script); fresh && renamed > 0) Log(L"gamepatch: menu %d: %d Xbox Live text(s) now say Online", m, renamed);
                         if (scoreboard && m == kRankingMenu)
                         {
@@ -7924,6 +7976,12 @@ namespace pdnet::gamepatches
     }
 
     bool TestBattle() { return AiBattle(); }
+
+    void ModLobbyRefused()
+    {
+        g_modRefusedAt = GetTickCount64();
+        Log(L"gamepatch: modded lobby refused - its message says to restart");
+    }
 
     bool FilmVariant(int slot, char* out, size_t size)
     {

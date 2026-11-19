@@ -15,8 +15,9 @@ namespace pdnet::mods
     const std::string& LobbyTag();
     inline bool InUse() { return !LobbyTag().empty(); }
 
-    // A lobby whose PD_MODS isn't this start's: true when they differ (an empty tag is a lobby without mods).
-    inline bool Differs(const std::string& lobbyTag) { return lobbyTag != LobbyTag(); }
+    // A lobby whose PD_MODS isn't this start's: true when they name different mods (an empty tag is a lobby without
+    // mods). The order doesn't count (the user, 2026-11-22: the same two map mods in another order refused the join).
+    bool Differs(const std::string& lobbyTag);
 
     // How many mods a lobby's PD_MODS names.
     size_t Count(const std::string& lobbyTag);
