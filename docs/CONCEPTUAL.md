@@ -249,7 +249,8 @@ ew map 30 picked (or 	he pick N is new map 30); the lobby shows Aquarium; the ma
 48. A second PC with the same mods joins and loads the same map. A PC without the map mod can't join (mods differ).
 49. Test Arsenal > map picker > Aquarium: does the battle load? (No AI navigation for st30: the AI may stand still or
     the load may fail. Note what happens.)
-50. Japanese game language: the picker shows the map too (stageset.dat is generated as well).
+50. Japanese game language: the picker shows the map too (stageset.dat is generated as well). **Skipped for now (the user,
+    2026-11-21).**
 51. Turn map-aquarium off, restart: the generated files are gone from RoamingState\mods\Assets (pdlaunch.log), the picker
     is as before.
 
