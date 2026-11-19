@@ -944,6 +944,7 @@ namespace pdnet::gamepatches
                 menu = 68; // the Settings screen, as the Mods list
                 mods = true;
                 Log(L"mods: list opened (in place of Quick Join)");
+                mods::ListOpened(); // its script also starts Quick Join's search: that one finds nothing (MultiplayerService)
             }
             if (menu == 68)
             {

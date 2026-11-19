@@ -165,7 +165,9 @@ Folders: PDPL's = `%LOCALAPPDATA%\Packages\Microsoft.MSEsper_8wekyb3d8bbwe\Roami
 4. The same with a map (`stNN.dat`) and a shader (`.cso` at the zip's root). Shaders are the open question.
 5. The title screen still reads "Rebirth" (pdnet's title art and PDPL both hook file opens).
 6. pdnet.log after 1 and 5 minutes: `pdpl: ... used N ms of CPU`: hundreds of ms is fine, tens of seconds is a busy loop.
-7. `pdpl.log` lists the files the game opened (in blocks; send it, it shows what loads at start vs per match).
+7. `pdpl.log` lists the files the game opened as it opens them (`CreateFile2(): Opening ...`) and PDPL's own messages
+   (`[Virtual Filesystem]: ...`); pdnet.log `pdpl: ready for PDPL (hidden console, read into pdnet\pdpl.log ...)`. Send it:
+   it shows what loads at start vs per match.
 8. Nothing slower: start-up time, menus, match loading.
 
 **Mod folder sync (step 2)**
@@ -178,7 +180,8 @@ Folders: PDPL's = `%LOCALAPPDATA%\Packages\Microsoft.MSEsper_8wekyb3d8bbwe\Roami
 
 **Mods list (step 4)**
 13. Multiplayer menu: the first item reads "Mods" with hint "Turn mods on and off, and choose which wins."; the Lobby
-    Browser still works (search options, then the list).
+    Browser still works (search options, then the list). Opening Mods logs `Quick Join's search skipped` and no lobby is
+    searched or joined.
 14. Mods opens the list (title MODS), rows `[x] name  version  Online / Only you / PDPL`, hint with description, author,
     wins over / loses to.
 15. The button bar: is the X icon right (`\a4#`, a guess)? Y should be right.
@@ -233,6 +236,17 @@ test catalog)
     flag)" and it isn't loaded. With the flag (Mod Admin, Plugin on): it loads.
 
 ## Log
+- 2026-11-19: Test session 1 fixes (Conceptual 49). The user's run on Conceptual 48 (this PC): PDPL's hook in after 15-16 ms,
+  31 ms of CPU, title art fine, Mods list and toggles fine, mod-test downloaded (sha256 ok) and listed by name; but
+  pdpl.log stayed empty and opening Mods still ran Quick Join's lobby search. (1) pdpl.log: a probe outside the game
+  (scratchpad pdplprobe: loads pd_loader_core.dll as pdnet prepares the game, then 300 CreateFile2 opens) showed the
+  pipe works, but PDPL's C runtime buffers a pipe in 4 KB blocks and the game never wrote that much in a minute. Now
+  pdnet's hidden console is PDPL's standard output (a C runtime writes a console at once; VT processing on, so colours
+  aren't kept as text) and pdnet reads its new rows every 100 ms (ReadConsoleText; buffer 400 x 9000, started again
+  near the end); the pipe stays as the fallback without a console. Probe 2 confirmed every line comes through at once.
+  (2) The multiplayer menu's Quick Join script starts the search as well as opening the session list (43), and "the game
+  joins the first result": mods::ListOpened() when the pick becomes the Mods list, and MultiplayerService answers a
+  Quick Join search within 3 s of it with no lobbies. Not yet tried in the game.
 - 2026-11-19: Mod loader step 8, plugins (Conceptual 48). PDPL loads plugins/*.dll from the archives it mounts at start;
   catalog mods with DLLs already needed the catalog's plugin flag (step 5). New: pdlaunch lists each mod's plugin DLLs and
   reads their import tables (extracted with tar / 7-Zip, PeImports); a plugin importing pd_loader_core.dll gets a warning

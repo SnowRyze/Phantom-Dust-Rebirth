@@ -12,20 +12,23 @@ namespace pdnet::pdpl
     namespace
     {
         HANDLE g_inRead = nullptr, g_inWrite = nullptr;   // PDPL's standard input: nothing is ever written
-        HANDLE g_outRead = nullptr, g_outWrite = nullptr; // PDPL's standard output and error
+        HANDLE g_outRead = nullptr, g_outWrite = nullptr; // PDPL's standard output and error when there's no console
+        HANDLE g_console = nullptr;                       // pdnet's hidden console: PDPL's standard output and error
         std::atomic<bool> g_prepared{ false };
         std::atomic<uint32_t> g_lines{ 0 }, g_opens{ 0 };
 
-        // PDPL colours its messages with ANSI escapes ("\033[32m"): left out of the log.
+        // PDPL colours its messages with ANSI escapes ("\033[32m"): left out of the log. (A console without escape
+        // handling keeps them as text, with the escape shown as U+2190, so that form goes too.)
         std::string WithoutEscapes(const std::string& s)
         {
             std::string out;
             out.reserve(s.size());
             for (size_t i = 0; i < s.size(); ++i)
             {
-                if (s[i] == '\033' && i + 1 < s.size() && s[i + 1] == '[')
+                size_t skip = s[i] == '\033' ? 1 : s.compare(i, 3, "\xE2\x86\x90") == 0 ? 3 : 0;
+                if (skip && i + skip < s.size() && s[i + skip] == '[')
                 {
-                    i += 2;
+                    i += skip + 1;
                     while (i < s.size() && !(s[i] >= '@' && s[i] <= '~')) ++i; // up to the final letter
                     continue;
                 }
@@ -34,15 +37,43 @@ namespace pdnet::pdpl
             return out;
         }
 
-        // Copies PDPL's output into LocalState\pdnet\pdpl.log, one timestamped line each (the last start's log is kept
-        // as pdpl.prev.log). Its own messages (not the CreateFile2 lines, one per file the game opens) also go to
-        // pdnet.log, the first 200 of them. PDPL's output is a pipe, so its C runtime buffers it: lines arrive in blocks.
-        void ReadOutput()
+        // LocalState\pdnet\pdpl.log (the last start's is kept as pdpl.prev.log).
+        FILE* OpenLog()
         {
             std::wstring dir = LocalStatePath() + L"\\pdnet";
             CreateDirectoryW(dir.c_str(), nullptr);
             MoveFileExW((dir + L"\\pdpl.log").c_str(), (dir + L"\\pdpl.prev.log").c_str(), MOVEFILE_REPLACE_EXISTING);
-            FILE* file = _wfsopen((dir + L"\\pdpl.log").c_str(), L"wb", _SH_DENYNO);
+            return _wfsopen((dir + L"\\pdpl.log").c_str(), L"wb", _SH_DENYNO);
+        }
+
+        // One line of PDPL's output: into pdpl.log with the time; its own messages (not the CreateFile2 lines, one per
+        // file the game opens) also into pdnet.log, the first 200 of them.
+        void Emit(FILE* file, std::string line, uint32_t& told)
+        {
+            line = WithoutEscapes(line);
+            while (!line.empty() && line.back() == ' ') line.pop_back();
+            while (line.rfind("> ", 0) == 0) line.erase(0, 2); // its command prompt, followed by the next message
+            if (line.empty() || line == ">") return;
+            ++g_lines;
+            bool open = line.rfind("CreateFile2", 0) == 0;
+            if (open) ++g_opens;
+            if (file)
+            {
+                SYSTEMTIME t;
+                GetLocalTime(&t);
+                fprintf(file, "%02u:%02u:%02u.%03u %s\n", t.wHour, t.wMinute, t.wSecond, t.wMilliseconds, line.c_str());
+            }
+            if (!open && told < 200)
+            {
+                ++told;
+                Log(L"pdpl: %S", line.c_str());
+            }
+        }
+
+        // PDPL's output through the pipe (no console could be made). Its C runtime buffers a pipe: lines come in 4 KB blocks.
+        void ReadPipe()
+        {
+            FILE* file = OpenLog();
             std::string pending;
             char buf[8192];
             DWORD got = 0;
@@ -50,29 +81,10 @@ namespace pdnet::pdpl
             while (ReadFile(g_outRead, buf, sizeof(buf), &got, nullptr) && got)
             {
                 pending.append(buf, got);
-                SYSTEMTIME t;
-                GetLocalTime(&t);
-                char stamp[16];
-                sprintf_s(stamp, "%02u:%02u:%02u.%03u ", t.wHour, t.wMinute, t.wSecond, t.wMilliseconds);
                 for (size_t end; (end = pending.find('\n')) != std::string::npos;)
                 {
-                    std::string line = WithoutEscapes(pending.substr(0, end));
+                    Emit(file, pending.substr(0, end), told);
                     pending.erase(0, end + 1);
-                    if (line.empty()) continue;
-                    ++g_lines;
-                    bool open = line.rfind("CreateFile2", 0) == 0;
-                    if (open) ++g_opens;
-                    if (file)
-                    {
-                        fputs(stamp, file);
-                        fputs(line.c_str(), file);
-                        fputc('\n', file);
-                    }
-                    if (!open && line != "> " && told < 200)
-                    {
-                        ++told;
-                        Log(L"pdpl: %S", line.c_str());
-                    }
                 }
                 if (file) fflush(file);
             }
@@ -80,6 +92,46 @@ namespace pdnet::pdpl
             Log(L"pdpl: its output closed (%u lines, %u file opens)", g_lines.load(), g_opens.load());
         }
 
+        // PDPL's output through pdnet's hidden console: a C runtime writes to a console at once (no buffering), so every
+        // 100 ms the rows written since are read and the buffer starts again near its end. (Tested outside the game with a
+        // probe that loads pd_loader_core.dll this way: every line came through, at once; through the pipe the first
+        // lines waited for 4 KB, which the game never reached in a minute.)
+        void ReadConsoleText()
+        {
+            FILE* file = OpenLog();
+            uint32_t told = 0;
+            SHORT lastRow = 0;
+            std::wstring row;
+            auto readRows = [&](SHORT from, SHORT to, SHORT width)
+            {
+                row.resize(width);
+                for (SHORT y = from; y < to; ++y)
+                {
+                    DWORD got = 0;
+                    if (!ReadConsoleOutputCharacterW(g_console, row.data(), width, COORD{ 0, y }, &got)) continue;
+                    Emit(file, winrt::to_string(std::wstring_view(row.data(), got)), told);
+                }
+            };
+            for (;;)
+            {
+                Sleep(100);
+                CONSOLE_SCREEN_BUFFER_INFO info;
+                if (!GetConsoleScreenBufferInfo(g_console, &info)) continue;
+                SHORT cur = info.dwCursorPosition.Y, width = info.dwSize.X;
+                if (cur < lastRow) lastRow = 0;
+                readRows(lastRow, cur, width);
+                lastRow = cur;
+                if (cur > info.dwSize.Y - 300) // near the end: read anything since, then start the buffer again
+                {
+                    if (GetConsoleScreenBufferInfo(g_console, &info)) readRows(lastRow, info.dwCursorPosition.Y, width);
+                    DWORD written = 0;
+                    FillConsoleOutputCharacterW(g_console, L' ', static_cast<DWORD>(width) * info.dwSize.Y, COORD{ 0, 0 }, &written);
+                    SetConsoleCursorPosition(g_console, COORD{ 0, 0 });
+                    lastRow = 0;
+                }
+                if (file) fflush(file);
+            }
+        }
         // CPU time (ms) used so far by the threads that started in pd_loader_core.dll.
         void LogThreadTimes(HMODULE module, const wchar_t* when)
         {
@@ -128,20 +180,40 @@ namespace pdnet::pdpl
             fclose(f);
         }
         // A console of pdnet's own, hidden at once: PDPL's AllocConsole then fails (one console per process), so it
-        // neither shows its window nor reopens its output to it. Where no console can be made (Microsoft Store copies),
-        // PDPL's fails too and the pipes below are all it has.
-        bool console = AllocConsole() != FALSE;
-        if (console)
-            if (HWND window = GetConsoleWindow()) ShowWindow(window, SW_HIDE);
-        bool pipes = CreatePipe(&g_inRead, &g_inWrite, nullptr, 0) && CreatePipe(&g_outRead, &g_outWrite, nullptr, 1u << 20);
-        if (pipes)
+        // neither shows its window nor reopens its output to it. That console is PDPL's standard output, read back into
+        // pdpl.log. Where no console can be made (Microsoft Store copies), PDPL's fails too and a pipe is its output.
+        // Its standard input is an empty pipe either way: its command loop waits there instead of spinning.
+        if (AllocConsole())
         {
-            SetStdHandle(STD_INPUT_HANDLE, g_inRead);
+            if (HWND window = GetConsoleWindow()) ShowWindow(window, SW_HIDE);
+            g_console = CreateFileW(L"CONOUT$", GENERIC_READ | GENERIC_WRITE, FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr, OPEN_EXISTING, 0, nullptr);
+            if (g_console == INVALID_HANDLE_VALUE) g_console = nullptr;
+        }
+        if (g_console)
+        {
+            SetConsoleScreenBufferSize(g_console, COORD{ 400, 9000 });
+            DWORD mode = 0;
+            if (GetConsoleMode(g_console, &mode)) SetConsoleMode(g_console, mode | ENABLE_VIRTUAL_TERMINAL_PROCESSING); // colours applied, not kept as text
+        }
+        bool input = CreatePipe(&g_inRead, &g_inWrite, nullptr, 0) != FALSE;
+        if (input) SetStdHandle(STD_INPUT_HANDLE, g_inRead);
+        bool output = false;
+        if (g_console)
+        {
+            SetStdHandle(STD_OUTPUT_HANDLE, g_console);
+            SetStdHandle(STD_ERROR_HANDLE, g_console);
+            std::thread(ReadConsoleText).detach();
+            output = true;
+        }
+        else if (CreatePipe(&g_outRead, &g_outWrite, nullptr, 1u << 20))
+        {
             SetStdHandle(STD_OUTPUT_HANDLE, g_outWrite);
             SetStdHandle(STD_ERROR_HANDLE, g_outWrite);
-            std::thread(ReadOutput).detach();
+            std::thread(ReadPipe).detach();
+            output = true;
         }
-        Log(L"pdpl: ready for PDPL (%s, %s)", console ? L"hidden console" : L"no console", pipes ? L"its output goes to pdnet\\pdpl.log" : L"pipes NOT made - its output is lost");
+        Log(L"pdpl: ready for PDPL (%s; input %s)", !output ? L"its output is lost" : g_console ? L"hidden console, read into pdnet\\pdpl.log" : L"no console: a pipe into pdnet\\pdpl.log, in 4 KB blocks",
+            input ? L"an empty pipe" : L"NOT replaced");
     }
 
     void TitleReached()

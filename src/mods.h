@@ -29,6 +29,12 @@ namespace pdnet::mods
     // This start uses a lobby's mods (pdlaunch read lobby-mods.txt).
     bool LobbyStart();
 
+    // The Mods list replaces the multiplayer menu's Quick Join, but that item's script still starts Quick Join's lobby
+    // search as it opens the list (the game would join the first result). gamepatches calls ListOpened when it turns the
+    // pick into the Mods list; a Quick Join search within 3 s of that answers no lobbies (MultiplayerService).
+    void ListOpened();
+    bool ListJustOpened();
+
     // The Lobby Browser's search results, in order (MultiplayerService), for SESSION INFO (gamepatches.cpp).
     void SetSearchResults(std::vector<std::string> tags);
     std::string SearchResultTag(size_t index);

@@ -241,6 +241,13 @@ namespace winrt::Microsoft::Xbox::Services::Multiplayer::implementation
                 joinable = ::pdnet::gamepatches::JoinableRules();
                 break;
             }
+        // Conceptual: the Quick Join item opens the Mods list now, but its script still starts this search (and the game
+        // would join the first result): right after the Mods list opened, no lobbies.
+        if (joinable && ::pdnet::mods::ListJustOpened())
+        {
+            ::pdnet::Log(L"xsapi-pdnet: Quick Join's search skipped (its menu item opens the Mods list now)");
+            co_return winrt::single_threaded_vector<Microsoft::Xbox::Services::Multiplayer::MultiplayerSearchHandleDetails>().GetView();
+        }
         // Cross Play plays no part: every player is on pdnet, so the game's "numbers/cross ..." clause (from its hidden
         // Cross Play option, which can end up set differently on two PCs) is dropped.
         filter = std::regex_replace(filter, std::wregex(L"( and )?numbers/cross [a-z]+ -?[0-9]+( and )?"), L"$1$2");

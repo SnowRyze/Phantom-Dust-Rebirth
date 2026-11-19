@@ -98,6 +98,10 @@ namespace pdnet::mods
         return true;
     }
 
+    namespace { std::atomic<ULONGLONG> g_listOpenedAt{ 0 }; }
+    void ListOpened() { g_listOpenedAt = GetTickCount64(); }
+    bool ListJustOpened() { ULONGLONG at = g_listOpenedAt; return at && GetTickCount64() - at < 3000; }
+
     void SetSearchResults(std::vector<std::string> tags)
     {
         std::lock_guard guard(g_resultsLock);
