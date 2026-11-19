@@ -347,6 +347,9 @@ directly with one address per script argument, a PowerShell wrapper passing arra
   the unlocked query. Still to check: the picker's preview choice (next: a run with menu_debug=on through the picker),
   and anything else keyed by map number (BGM, AI navigation com/stNN, lighting, intro camera stNNcam.alr: not needed).
 ## Log
+- 2026-11-21: Merged master (Experimental 190) into Conceptual (492bbc9). Theatre / dead camera: master's files, Lab test
+  keys left on here; lobby Custom Settings stays Conceptual only (the user: keep it purely Conceptual); menu_debug keeps
+  menu_debug=<menu> and logs master's third table (g5). Builds; not yet tested in game.
 - 2026-11-21: The user confirmed on 53: the Aquarium preview shows in the map picker (check 45), the map loads (in Test
   Arsenal), and turning the mod off removes its generated files (check 51). Still open: 46-48 (a lobby match on a new map,
   a second PC joining), 50 (Japanese).
