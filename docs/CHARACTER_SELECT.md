@@ -85,6 +85,11 @@ per start in `LocalState\pdnet\MNet.alr` and handed to the game by the CreateFil
   no X entry. Heading back to "Online" when leaving Advanced.
 - Advanced test list: Freia (jump) at Freia's place, Freia (dodge) at player's place, the rest empty.
 
+## Test 5 (2026-11-20)
+
+All switches work (normal, X monsters, Y Advanced) with the sprite-handle swap. The monster art is now tinted to the
+players' blue-green (teal_tint in make_portraits.py).
+
 ## Testing (Experimental build from this branch)
 
 1. Character select (Lab > Test Arsenal, or a lobby): the game's own player portraits.

@@ -101,6 +101,8 @@ Ideas, not planned (notes in the change log and reference notes):
 
 ## November 2026
 
+Character select monster portraits in the players' colours (2026-11-20, the user's request after test 5, where every switch worked). make_portraits.py's teal_tint matches each monster's brightness spread to the player portraits' and colours it with the players' colour for that brightness (both from portraits\\*.png). Only charsel-portraits.bin changed.
+
 Character select, after test 4 (2026-11-20; not yet seen in game). Test 4 hung the screen: the memory-wide search for the parsed sprite list took 2.5 s and ran again every frame (0 found). Removed. Menu command 95 (FUN_140246c70) draws through a per-slot list of u32 sprite handles (manager + 0x10530 + slot * 32, list at +0x18) passed to FUN_1401983e0; now MNET's (slot 3) handles 38-48 are switched (own / monsters / Advanced, empty places = blank.tga, MNET sprite 95, added to charsel-portraits.bin) and put back on leaving.
 
 Character select, after test 3 (2026-11-20, eradication0; not yet seen in game). Pad Y, the bar and the Advanced names work. No pictures changed: the loaded file's sprite table was found (1, 875 ms) and switched, but the game draws from its own parsed copy, and command 95's sprite swap had been removed with it. Now command 95 again gets the sprite to show (empty Advanced places: not drawn), and the parsed list is searched by the sprites' exact u0 v0 u1 v1 (38, 39, 40 a stride apart) with a texture field found as the 8 bytes equal within each texture's portraits; its entries 38-48 get the shown sprite's coordinates and texture field. Logged: the stride, the field, and the bytes around three entries, for the next step if this doesn't take.

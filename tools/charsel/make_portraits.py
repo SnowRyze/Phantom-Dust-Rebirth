@@ -84,16 +84,50 @@ def crop_guides():
             cutout(im.crop(box), brightest).resize((W, H), Image.LANCZOS).save(os.path.join(out, name + '.png'))
 
 
+def teal_tint(monster_imgs):
+    """The monsters in the players' blue-green: each monster's brightness is matched to the players' portraits'
+    (same spread of dark and light), then coloured by the players' colour for that brightness. Both taken from the
+    player portraits in portraits\\ (the guide's art, the game's look)."""
+    px = []
+    for name in PLAYERS:
+        a = np.asarray(Image.open(os.path.join(HERE, 'portraits', name + '.png')).convert('RGBA')).reshape(-1, 4)
+        px.append(a[a[:, 3] > 200][:, :3])
+    p = np.concatenate(px).astype(np.float64)
+    lum = p @ [0.299, 0.587, 0.114]
+    ramp = np.zeros((256, 3))
+    have = np.zeros(256, bool)
+    for i in range(256):
+        m = np.abs(lum - i) < 4
+        if m.sum() > 20:
+            ramp[i], have[i] = p[m].mean(0), True
+    idx = np.arange(256)
+    for c in range(3):
+        ramp[:, c] = np.interp(idx, idx[have], ramp[have, c])
+    targets = np.percentile(lum, np.linspace(0, 100, 101))
+    out = []
+    for img in monster_imgs:
+        a = np.asarray(img).astype(np.float64)
+        solid = a[..., 3] > 0
+        l = a[..., :3] @ [0.299, 0.587, 0.114]
+        src = np.percentile(l[solid], np.linspace(0, 100, 101))
+        mapped = np.interp(l, src, targets)
+        rgb = ramp[np.clip(mapped, 0, 255).astype(int)]
+        out.append(Image.fromarray(np.dstack([rgb, a[..., 3]]).clip(0, 255).astype(np.uint8), 'RGBA'))
+    return out
+
+
 def pack():
     """The 11 monster portraits go in the 768 x 512 added to the right of MNet0800. The players keep the game's own
     portraits (the user's choice, 2026-11-20); portraits\\<player>.png are kept for later but not packed."""
     art = np.zeros((ART_H, ART_W, 4), np.uint8)
     sprites = []
-    for k, name in enumerate(MONSTERS):
-        x, y = (k % COLUMNS) * CELL_W, (k // COLUMNS) * CELL_H
+    imgs = []
+    for name in MONSTERS:
         img = Image.open(os.path.join(HERE, 'portraits', name + '.png')).convert('RGBA')
-        if img.size != (W, H):
-            img = img.resize((W, H), Image.LANCZOS)
+        imgs.append(img if img.size == (W, H) else img.resize((W, H), Image.LANCZOS))
+    imgs = teal_tint(imgs)
+    for k, (name, img) in enumerate(zip(MONSTERS, imgs)):
+        x, y = (k % COLUMNS) * CELL_W, (k // COLUMNS) * CELL_H
         art[y:y + H, x:x + W] = np.asarray(img)
         sprites.append(('monster_%s.tga' % name, 9, MNET0800_W + x, y))
     # an empty (transparent) portrait-sized sprite after the monsters, for places the Advanced list leaves empty
