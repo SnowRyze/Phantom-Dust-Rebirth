@@ -3918,55 +3918,129 @@ namespace pdnet::gamepatches
             held = down;
         }
 
-        // Test 2 (2026-11-20): replacing the sprite number in menu command 95 drew the monster faintly over the player's
-        // portrait: the grid is also drawn another way from the same sprite records. So the records themselves are
-        // switched: the game's loaded copy of MNet.alr's sprite table (found once per screen by its exact bytes, from
-        // g_mnetSprites) gets, for sprites 38-48, the records of what the grid should show now - the game's own,
-        // each place's monster (kMonsterFor), or the Advanced list's. Restored when the screen closes.
-        std::vector<uint8_t*> g_spriteTables; // the game's loaded sprite records (sprite 0), on this screen
-        int g_gridShown = -1; // what the records hold: 0 own, 1 monsters, 2 Advanced
+        // The grid is drawn twice from MNET sprites 38-48: menu command 95 (the back layer, test 1: swapping its sprite
+        // number changed only that layer) and another way (the front portraits). Test 2 switched the records in the
+        // loaded file's sprite table (1 found, no effect): the game draws from its own parsed copy. So now:
+        // - command 95 gets the sprite to show (CharacterSelectSprite), as in test 1;
+        // - the parsed sprite list is found by the sprites' u0 v0 u1 v1 (exact floats from the copy, sprites 38, 39, 40 a
+        //   stride apart), and each grid place's entry gets the shown sprite's coordinates and texture (the 8 bytes,
+        //   near the coordinates, that are the same within MNet0800 / 0810 / 0820's portraits and differ between them).
+        // Restored when the screen is left. Logged: "N parsed sprite list(s), stride S, texture at +T".
+        bool SameBytes(const uint8_t* at, const uint8_t* want, size_t size)
+        {
+            __try { return memcmp(at, want, size) == 0; }
+            __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+        }
+        void PutBytes(uint8_t* at, const uint8_t* bytes, size_t size)
+        {
+            __try { memcpy(at, bytes, size); }
+            __except (EXCEPTION_EXECUTE_HANDLER) {}
+        }
+
+        struct ParsedSprites { uint8_t* uv; int stride; int texAt; uint8_t own[11][24]; }; // uv: sprite 0's coordinates
+        std::vector<ParsedSprites> g_parsed;
+        int g_gridShown = -1; // what the grid shows: 0 own, 1 monsters, 2 Advanced
         ULONGLONG g_gridLastFrame = 0;
 
-        // Records 38-40 of the copy (exact bytes) in [start, end), with records 0-37 before them: the table's starts go
-        // into `out` (at most `room`). No C++ objects here: __try needs a plain function.
-        int ScanForSpriteTable(uint8_t* start, uint8_t* end, const uint8_t* records, const uint8_t* skip, size_t skipSize, uint8_t** out, int room)
+        const uint8_t* SpriteUv(int sprite) { return &g_mnetSprites[sprite * kSpriteSize + 36]; }
+
+        // Places where sprites 38, 39, 40's coordinates sit `stride` apart in [start, end): their sprite-38 address
+        // into out. A plain function (__try).
+        int ScanParsedSprites(uint8_t* start, uint8_t* end, const uint8_t* uv38, const uint8_t* uv39, const uint8_t* uv40,
+                              const uint8_t* skip, size_t skipSize, uint8_t** out, int* strides, int room)
         {
-            const size_t head = kPortraitFirst * kSpriteSize, length = 3 * kSpriteSize;
             int n = 0;
+            uint32_t anchor;
+            memcpy(&anchor, uv38 + 8, 4); // u1: 134 / 1024 on the widened texture (u0 and v0 are 0, common)
             __try
             {
-                // Searched by the record's name ("player_00.tga" at +4: 'p' is rarer than the texture number's 9).
-                for (uint8_t* q = start + head; n < room && q + length <= end; ++q)
+                for (uint8_t* q = start; n < room && q + 16 <= end; q += 4)
                 {
-                    uint8_t* name = static_cast<uint8_t*>(memchr(q + 4, records[head + 4], end - q - length + 1));
-                    if (!name) break;
-                    q = name - 4;
-                    if (q >= skip && q < skip + skipSize) continue; // pdnet's own copy
-                    if (memcmp(q, records + head, length) == 0 && memcmp(q - head, records, head) == 0) out[n++] = q - head;
+                    if (*reinterpret_cast<const uint32_t*>(q + 8) != anchor || memcmp(q, uv38, 16) != 0) continue;
+                    if (q >= skip && q < skip + skipSize) continue;
+                    for (int d = 16; d <= 1024; d += 4)
+                        if (d != kSpriteSize && q + 2 * d + 16 <= end && memcmp(q + d, uv39, 16) == 0 && memcmp(q + 2 * d, uv40, 16) == 0)
+                        {
+                            out[n] = q;
+                            strides[n++] = d;
+                            break;
+                        }
                 }
             }
             __except (EXCEPTION_EXECUTE_HANDLER) {}
             return n;
         }
 
-        // The game's loaded copies of the sprite table (committed, writable, not image memory).
-        std::vector<uint8_t*> FindSpriteTables()
+        // The texture field: 8 bytes at uv + off (off outside the coordinates) equal within each texture's portraits
+        // (38-41 on MNet0800, 42-46 on 0810, 47-48 on 0820) and different between them. -1000: none.
+        int FindTextureField(uint8_t* uv38, int stride)
         {
-            std::vector<uint8_t*> found;
-            if (g_mnetSprites.size() < (kPortraitLast + 1) * kSpriteSize) return found;
+            for (int off = -stride + 16; off + 8 <= stride; off += 4)
+            {
+                if (off > -8 && off < 16) continue;
+                uint64_t v[11];
+                bool ok = true;
+                for (int k = 0; k < 11 && ok; ++k)
+                {
+                    uint8_t* at = uv38 + k * stride + off;
+                    ok = SameBytes(at, at, 8); // readable
+                    if (ok) memcpy(&v[k], at, 8);
+                }
+                if (!ok) continue;
+                if (v[0] == v[1] && v[0] == v[2] && v[0] == v[3] && v[4] == v[5] && v[4] == v[6] && v[4] == v[7] && v[4] == v[8] && v[9] == v[10] &&
+                    v[0] != v[4] && v[4] != v[9] && v[0] != v[9])
+                    return off;
+            }
+            return -1000;
+        }
+
+        void FindParsedSprites()
+        {
+            g_parsed.clear();
+            if (g_mnetSprites.size() < (kMonsterPortraitFirst + 11) * kSpriteSize) return;
             SYSTEM_INFO info;
             GetSystemInfo(&info);
             MEMORY_BASIC_INFORMATION m;
             uint8_t* hits[8];
-            for (uint8_t* p = static_cast<uint8_t*>(info.lpMinimumApplicationAddress); p < info.lpMaximumApplicationAddress && VirtualQuery(p, &m, sizeof(m)) && found.size() < 8;
+            int strides[8];
+            for (uint8_t* p = static_cast<uint8_t*>(info.lpMinimumApplicationAddress); p < info.lpMaximumApplicationAddress && VirtualQuery(p, &m, sizeof(m)) && g_parsed.size() < 8;
                  p = static_cast<uint8_t*>(m.BaseAddress) + m.RegionSize)
             {
                 if (m.State != MEM_COMMIT || m.Type == MEM_IMAGE || (m.Protect & (PAGE_GUARD | PAGE_NOACCESS)) || !(m.Protect & (PAGE_READWRITE | PAGE_WRITECOPY))) continue;
                 uint8_t* start = static_cast<uint8_t*>(m.BaseAddress);
-                int n = ScanForSpriteTable(start, start + m.RegionSize, g_mnetSprites.data(), g_mnetSprites.data(), g_mnetSprites.size(), hits, 8 - static_cast<int>(found.size()));
-                found.insert(found.end(), hits, hits + n);
+                int n = ScanParsedSprites(start, start + m.RegionSize, SpriteUv(kPortraitFirst), SpriteUv(kPortraitFirst + 1), SpriteUv(kPortraitFirst + 2),
+                                          g_mnetSprites.data(), g_mnetSprites.size(), hits, strides, 8 - static_cast<int>(g_parsed.size()));
+                for (int i = 0; i < n; ++i)
+                {
+                    ParsedSprites t{};
+                    t.stride = strides[i];
+                    t.uv = hits[i] - kPortraitFirst * t.stride;
+                    t.texAt = FindTextureField(hits[i], t.stride);
+                    // The monsters' entries must be there too (sprites 84-94: their coordinates a stride apart).
+                    bool monsters = g_monsterPortraits > 0 && SameBytes(t.uv + kMonsterPortraitFirst * t.stride, SpriteUv(kMonsterPortraitFirst), 16);
+                    Log(L"gamepatch: character select: parsed sprite list, stride %d, texture at %+d%s%s", t.stride, t.texAt,
+                        monsters ? L"" : L", no monster entries", t.texAt == -1000 ? L" (texture field not found)" : L"");
+                    for (int k : { kPortraitFirst, kPortraitFirst + 4, kPortraitFirst + 9 }) // one portrait per texture, around its coordinates
+                    {
+                        uint8_t* from = hits[i] + (k - kPortraitFirst) * t.stride - (std::min)(t.stride, 64);
+                        std::wstring hex;
+                        for (int b = 0; b < (std::min)(t.stride, 64) * 2 && SameBytes(from + b, from + b, 1); ++b)
+                        {
+                            wchar_t two[4];
+                            swprintf_s(two, L"%02x%s", from[b], b % 4 == 3 ? L" " : L"");
+                            hex += two;
+                        }
+                        Log(L"gamepatch: character select: sprite %d entry (from coordinates -%d): %s", k, (std::min)(t.stride, 64), hex.c_str());
+                    }
+                    if (!monsters || t.texAt == -1000) continue;
+                    for (int k = 0; k < 11; ++k)
+                    {
+                        memcpy(t.own[k], t.uv + (kPortraitFirst + k) * t.stride, 16);
+                        memcpy(t.own[k] + 16, t.uv + (kPortraitFirst + k) * t.stride + t.texAt, 8);
+                    }
+                    g_parsed.push_back(t);
+                }
             }
-            return found;
         }
 
         // The Advanced list's test (the user, 2026-11-20): two places, Freia (jump) left and Freia (dodge) in the middle
@@ -3982,41 +4056,43 @@ namespace pdnet::gamepatches
 
         bool CharacterSelectAdvanced() { return g_charselAdvanced; }
 
-        bool SameBytes(const uint8_t* at, const uint8_t* want, size_t size)
+
+        // The sprite a grid place (sprite 38-48) shows now; -1: nothing.
+        int ShownAt(int place, int what)
         {
-            __try { return memcmp(at, want, size) == 0; }
-            __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
-        }
-        void PutBytes(uint8_t* at, const uint8_t* bytes, size_t size)
-        {
-            __try { memcpy(at, bytes, size); }
-            __except (EXCEPTION_EXECUTE_HANDLER) {}
+            if (what == 2) return place == kAdvancedJumpPlace || place == kAdvancedDodgePlace ? 40 /* Freia */ : -1;
+            int monster = kMonsterFor[place - kPortraitFirst];
+            return what == 1 && monster < g_monsterPortraits ? kMonsterPortraitFirst + monster : place;
         }
 
         void ShowGrid(int what)
         {
-            if (g_spriteTables.empty() || g_mnetSprites.empty() || what == g_gridShown) return;
-            const int monsters = g_monsterPortraits;
-            for (uint8_t*& table : g_spriteTables)
+            if (what == g_gridShown) return;
+            for (ParsedSprites& t : g_parsed)
             {
-                // Still the game's table? (Its records 0-37 never change; a freed and reused block won't have them.)
-                if (!table || !SameBytes(table, g_mnetSprites.data(), kPortraitFirst * kSpriteSize)) { table = nullptr; continue; }
-                for (int k = kPortraitFirst; k <= kPortraitLast; ++k)
+                // Still the game's list? (The monsters' entries are never changed: a freed and reused block won't have them.)
+                if (!t.uv || !SameBytes(t.uv + kMonsterPortraitFirst * t.stride, SpriteUv(kMonsterPortraitFirst), 16)) { t.uv = nullptr; continue; }
+                for (int k = 0; k < 11; ++k)
                 {
-                    int from = k; // the game's own
-                    if (what == 1 && kMonsterFor[k - kPortraitFirst] < monsters) from = kMonsterPortraitFirst + kMonsterFor[k - kPortraitFirst];
-                    if (what == 2) from = k == kAdvancedJumpPlace || k == kAdvancedDodgePlace ? 40 /* Freia */ : -1;
-                    uint8_t record[kSpriteSize];
-                    if (from >= 0) memcpy(record, &g_mnetSprites[from * kSpriteSize], kSpriteSize);
+                    int shown = ShownAt(kPortraitFirst + k, what);
+                    uint8_t entry[24];
+                    if (shown == kPortraitFirst + k) memcpy(entry, t.own[k], 24);
+                    else if (shown < 0)
+                    {
+                        // empty: the monster art's last cells have nothing (11 portraits in 5 x 5 cells); MNet0800's texture field
+                        const float empty[4] = { (256.f + 1 * 136) / 1024, 2 * 98.f / 512, (256.f + 1 * 136 + 134) / 1024, (2 * 98.f + 96) / 512 };
+                        memcpy(entry, empty, 16);
+                        memcpy(entry + 16, t.own[0] + 16, 8);
+                    }
+                    else if (shown >= kPortraitFirst && shown <= kPortraitLast) memcpy(entry, t.own[shown - kPortraitFirst], 24);
                     else
                     {
-                        // empty: the monster art's last cell has nothing (11 portraits in 5 x 5 cells), same size as a portrait
-                        memcpy(record, &g_mnetSprites[k * kSpriteSize], kSpriteSize);
-                        const float empty[4] = { (256.f + 1 * 136) / 1024, 2 * 98.f / 512, (256.f + 1 * 136 + 134) / 1024, (2 * 98.f + 96) / 512 };
-                        *reinterpret_cast<uint32_t*>(record) = 9;
-                        memcpy(record + 36, empty, sizeof(empty));
+                        memcpy(entry, SpriteUv(shown), 16);
+                        memcpy(entry + 16, t.own[0] + 16, 8); // the monsters are on MNet0800 like sprite 38
                     }
-                    PutBytes(table + k * kSpriteSize, record, kSpriteSize);
+                    uint8_t* at = t.uv + (kPortraitFirst + k) * t.stride;
+                    PutBytes(at, entry, 16);
+                    PutBytes(at + t.texAt, entry + 16, 8);
                 }
             }
             g_gridShown = what;
@@ -4028,21 +4104,29 @@ namespace pdnet::gamepatches
             if (now - g_gridLastFrame > 1000) // the screen (re)opened: the texture file may have been loaded again
             {
                 ULONGLONG started = GetTickCount64();
-                g_spriteTables = FindSpriteTables();
+                FindParsedSprites();
                 g_gridShown = -1;
                 static int told = 0;
-                if (told++ < 10) Log(L"gamepatch: character select: %d loaded sprite table(s) found (%llu ms)", static_cast<int>(g_spriteTables.size()), GetTickCount64() - started);
+                if (told++ < 10) Log(L"gamepatch: character select: %d parsed sprite list(s) in use (%llu ms)", static_cast<int>(g_parsed.size()), GetTickCount64() - started);
             }
             g_gridLastFrame = now;
             CharacterSelectInput(); // once per drawn sprite: several times a frame, edges only
-            ShowGrid(g_charselAdvanced ? 2 : ShowingMonsters() ? 1 : 0);
+            int what = g_charselAdvanced ? 2 : ShowingMonsters() ? 1 : 0;
+            ShowGrid(what);
             static std::set<std::pair<int64_t, int64_t>> seen;
             if (seen.size() < 60 && seen.emplace(args[0], args[1]).second)
                 Log(L"gamepatch: character select draws sheet %lld sprite %lld at %lld,%lld (name line '%S')", args[0], args[1], args[2], args[3], g_charselName.c_str());
-            return g_drawSprite(args);
+            if (args[0] != 3 || args[1] < kPortraitFirst || args[1] > kPortraitLast) return g_drawSprite(args);
+            int shown = ShownAt(static_cast<int>(args[1]), what);
+            if (shown < 0) return 0; // an empty place
+            if (!g_parsed.empty() || shown == args[1]) return g_drawSprite(args); // the parsed list already shows it
+            int64_t own[8];
+            memcpy(own, args, 5 * sizeof(int64_t));
+            own[1] = shown;
+            return g_drawSprite(own);
         }
 
-        // Leaving the screen: the game's own records back (the lobby list draws the same sheet).
+        // Leaving the screen: the game's own sprites back (the lobby draws the same sheet).
         void CharacterSelectLeft()
         {
             if (g_gridShown > 0 && GetTickCount64() - g_gridLastFrame > 300) ShowGrid(0);
