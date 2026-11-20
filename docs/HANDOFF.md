@@ -101,6 +101,8 @@ Ideas, not planned (notes in the change log and reference notes):
 
 ## November 2026
 
+Advanced list, after menu test 5 (2026-11-21; not yet seen in game). The name plate is back behind pdnet's name: the game still calls command 29 every frame (not drawn on the Advanced list), so its rectangle, the name's width (command 31, also wrapped) and the name line's place (command 23) give the plate's padding, offset, height and colour; pdnet draws one sized for its name under the chosen entry (DrawNamePlate). No name while a pop-up is open (text is drawn over all window backgrounds). Grid 8 px lower (y 58). Pop-ups under 6 rows get one more empty line (the window's height follows its lines).
+
 Advanced list, after menu test 4 (2026-11-21; not yet seen in game). Test 4 (after the user's build had an old gamepatches.cpp): the scanlines stay under the portraits, the game's cursor stays put, no red bar. Changes: the grid at 64 % from y 50 (it touched the top bar), the name under the chosen entry instead of a fixed line, the pop-ups 20 px taller.
 
 Advanced list, after menu test 3 (2026-11-21; not yet seen in game). The red bar still moved: it is menu command 29 (FUN_14029bb60, a filled rectangle drawn at once: the name plate, sized by the name's width from command 31) and the script's hidden cursor still followed the D-pad through HookedButtons. The portraits lay sometimes under, sometimes over the screen's scanlines; the gaps were too big; the name overlapped the game's "Choose the character" line. Now:

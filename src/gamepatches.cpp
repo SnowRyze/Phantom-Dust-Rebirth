@@ -3629,6 +3629,7 @@ namespace pdnet::gamepatches
             { "Scoto", { "Navy", "Red", "White", "Yellow" } },
         };
         const CharacterColours* g_shownCharacter = nullptr;
+        int g_gameNameX = 0, g_gameNameY = 0; // where the game draws the name line (command 23), for the Advanced list's plate
         std::string g_charselName; // the name line's text as drawn ("player" for Alpha), for the portrait (HookedDrawSprite)
         // MNet.alr's portraits (MakeMnetCopy, CharacterSelectSprite).
         constexpr int kMnetGameSprites = 84;
@@ -3702,6 +3703,7 @@ namespace pdnet::gamepatches
                     }
                     g_shownCharacter = nullptr;
                     g_charselName = value;
+                    g_gameNameX = static_cast<int>(args[0]), g_gameNameY = static_cast<int>(args[1]);
                     if (_stricmp(value.c_str(), "player") == 0) value = "Alpha";
                 }
                 for (std::string candidate : { PlainText(text.c_str()), PlainText(value.c_str()) })
@@ -3978,7 +3980,7 @@ namespace pdnet::gamepatches
         // Test 3: off the top bar, room under the bottom row for the name: 64 % = 85 x 61 per entry, 510 x 305 from y 50.
         constexpr float kGridScale = 0.64f;
         constexpr int kGridColumns = 6, kGridRows = 5, kGridPitchX = static_cast<int>(134 * kGridScale), kGridPitchY = static_cast<int>(96 * kGridScale);
-        constexpr int kGridX = (640 - kGridColumns * kGridPitchX) / 2, kGridY = 50;
+        constexpr int kGridX = (640 - kGridColumns * kGridPitchX) / 2, kGridY = 58; // test 5: 8 px lower
         constexpr int kFirstFrameSprite = 66, kNamePlateRight = 72;
         std::atomic<int> g_gridCursor{ 0 };
 
@@ -4201,12 +4203,16 @@ namespace pdnet::gamepatches
             cmd(0x140207d50, kCharselPopupX, PopupY());
             cmd(0x140207d80, reinterpret_cast<int64_t>(""), 0);
             // empty lines as the Settings' save question (test 4: a window with none drew no background)
-            for (int i = 0; i <= PopupRows(); ++i) cmd(0x140207e20, reinterpret_cast<int64_t>(""), 0);
+            // test 5: the window's height follows its lines; the short pop-ups (Color, Movement Type) get one more
+            int lines = PopupRows() + (PopupRows() < 6 ? 2 : 1);
+            for (int i = 0; i < lines; ++i) cmd(0x140207e20, reinterpret_cast<int64_t>(""), 0);
             *reinterpret_cast<int16_t*>(manager + 0x10402) = current;
         }
 
         // After the screen's window (12) is drawn: on the Advanced list the chosen entry's name under pdnet's grid, and the
         // pop-up with its title and rows (the chosen one marked).
+        void DrawNamePlate(const char* name, int centreX, int textY); // (below, with the hooks)
+
         void DrawCharselPopup(int64_t* args)
         {
             int64_t manager = MenuManager();
@@ -4217,11 +4223,13 @@ namespace pdnet::gamepatches
             auto text = [](int x, int y, const char* s) { int64_t a[8] = { x, y, reinterpret_cast<int64_t>(s) }; reinterpret_cast<MenuCommandFn>(At(0x140207870))(a); };
             static char name[64];
             int cursor = g_gridCursor;
-            if (cursor >= 0 && cursor < static_cast<int>(variants::Characters().size()))
+            // test 5: no name while a pop-up is open (text is drawn over every window background)
+            if (g_popup == kNoPopup && cursor >= 0 && cursor < static_cast<int>(variants::Characters().size()))
             {
                 *reinterpret_cast<int64_t*>(manager + 0x10408) = reinterpret_cast<int64_t>(WindowAt(manager, 12));
                 // under the chosen entry (test 3). Text lands ~9 px higher on screen than a sprite at the same y.
                 int x = kGridX + (cursor % kGridColumns) * kGridPitchX + kGridPitchX / 2, y = kGridY + (cursor / kGridColumns + 1) * kGridPitchY + 9;
+                DrawNamePlate(variants::Characters()[cursor].name, x, y);
                 sprintf_s(name, "\a200c%s", variants::Characters()[cursor].name);
                 text(x - 100, y, name);
                 *reinterpret_cast<int64_t*>(manager + 0x10408) = 0;
@@ -4381,11 +4389,39 @@ namespace pdnet::gamepatches
 
         // Menu command 29 (0x140207990 -> FUN_14029bb60: a filled rectangle x, y, w, h, colour, drawn at once): the
         // character select's red name plate behind the name, sized by the name's width (command 31). Not on the Advanced list.
-        MenuCommandFn g_fillRect = nullptr;
+        // Test 5: the plate back behind pdnet's name, measured from the game's own (still called every frame, not drawn):
+        // its rectangle against the name's width (command 31, FUN_140247550(text, font, 0)) and the name line's place.
+        MenuCommandFn g_fillRect = nullptr, g_textWidth = nullptr;
+        int64_t g_plate[5] = {}; // the game's last name plate: x, y, w, h, colour
+        int g_plateFont = 0, g_plateTextWidth = 0;
+        bool g_havePlate = false;
         int64_t HookedFillRect(int64_t* args)
         {
-            if (g_charselAdvanced && CurrentMenu(MenuManager()) == kCharacterMenu) return 0;
+            if (!args || CurrentMenu(MenuManager()) != kCharacterMenu) return g_fillRect(args);
+            memcpy(g_plate, args, sizeof(g_plate));
+            g_havePlate = g_plateTextWidth > 0;
+            static int told = 0;
+            if (told++ < 3) Log(L"gamepatch: character select: name plate %lld,%lld %lldx%lld colour %llX (name at %d,%d, width %d)", args[0], args[1], args[2], args[3], args[4], g_gameNameX, g_gameNameY, g_plateTextWidth);
+            if (g_charselAdvanced) return 0;
             return g_fillRect(args);
+        }
+        int64_t HookedTextWidth(int64_t* args)
+        {
+            int64_t width = g_textWidth(args);
+            if (args && CurrentMenu(MenuManager()) == kCharacterMenu) g_plateFont = static_cast<int>(args[1]), g_plateTextWidth = static_cast<int>(width);
+            return width;
+        }
+
+        // pdnet's name plate: the game's, moved to `centreX` / `textY` and sized for `name`.
+        void DrawNamePlate(const char* name, int centreX, int textY)
+        {
+            if (!g_havePlate || !g_fillRect || !g_textWidth) return;
+            int64_t measure[8] = { reinterpret_cast<int64_t>(name), g_plateFont };
+            int width = static_cast<int>(g_textWidth(measure));
+            int padLeft = static_cast<int>(g_gameNameX + 65 - g_plateTextWidth / 2 - g_plate[0]); // the game's line is "\a130c%s"
+            int padWidth = static_cast<int>(g_plate[2]) - g_plateTextWidth;
+            int64_t rect[8] = { centreX - width / 2 - padLeft, textY + (g_plate[1] - g_gameNameY), width + padWidth, g_plate[3], g_plate[4] };
+            g_fillRect(rect);
         }
 
         void CharacterSelectHooks()
@@ -4394,6 +4430,7 @@ namespace pdnet::gamepatches
             bool sprite = g_drawSprite || WrapCommand<MenuCommandFn>(0x1403eefe0 + 95 * 8, 0x1402077a0, &HookedDrawSprite, g_drawSprite, L"character select portraits");
             bool text = g_drawText || WrapCommand<MenuCommandFn>(0x1403eefe0 + 23 * 8, 0x140207840, &HookedDrawText, g_drawText, L"character select names");
             bool store = WrapCommand<PickFn>(0x1403f0090 + 571 * 8, 0x140213b80, &HookedStorePick, g_storePick, L"Advanced list pick");
+            if (!g_textWidth) WrapCommand<MenuCommandFn>(0x1403eefe0 + 31 * 8, 0x140207a20, &HookedTextWidth, g_textWidth, L"character select name width");
             if (!g_fillRect) WrapCommand<MenuCommandFn>(0x1403eefe0 + 29 * 8, 0x140207990, &HookedFillRect, g_fillRect, L"character select name plate");
             // FUN_140248b50 starts push rbx / sub rsp,40h / mov rbx,rcx (9 position-independent bytes)
             static const std::vector<uint8_t> kInputStart = { 0x40, 0x53, 0x48, 0x83, 0xEC, 0x40, 0x48, 0x8B, 0xD9 };
