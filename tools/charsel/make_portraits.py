@@ -16,7 +16,7 @@ the game's own) to hold the 11 monster portraits; the players keep the game's ow
 
 A sprite whose name the game's file already has would take the new art in its place; any other name is a new sprite
 added after the game's 84 (monster_<name>.tga: the monster portraits the X toggle shows), in this file's order
-(MNET sprites 84-94).
+(MNET sprites 84-94), then blank.tga (95, transparent).
 """
 import os
 import struct
@@ -96,6 +96,9 @@ def pack():
             img = img.resize((W, H), Image.LANCZOS)
         art[y:y + H, x:x + W] = np.asarray(img)
         sprites.append(('monster_%s.tga' % name, 9, MNET0800_W + x, y))
+    # an empty (transparent) portrait-sized sprite after the monsters, for places the Advanced list leaves empty
+    k = len(MONSTERS)
+    sprites.append(('blank.tga', 9, MNET0800_W + (k % COLUMNS) * CELL_W, (k // COLUMNS) * CELL_H))
     fmt, blocks = dxt.encode(art, alpha=True)
     assert fmt == dxt.BC3 and len(blocks) == ART_W * ART_H
     data = bytearray(b'PDCP' + struct.pack('<3I', 1, 1, len(sprites)))
