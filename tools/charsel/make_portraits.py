@@ -43,6 +43,7 @@ MONSTERS = ['vestio', 'ommato', 'anthro', 'guard', 'andro', 'ceno', 'partheno', 
 # by hand-tuned flood fill, see the commit): sprites portrait_<name>.tga after blank.tga.
 EXTRA = ['germano', 'belono', 'n03', 'spokesman', 'ubiquitous', 'kajikawa', 'tetsuya', 'arthur', 'reindeer', 'mac',
          'baroness', 'mikan', 'ai', 'maniac', 'kei']
+DUPLICATES = ['ubiquitous', 'mac', 'baroness', 'reindeer']  # sprites 111-114 (the last that fit: 115)
 
 # Cards in the two guide images (source\characters.png, source\monsters.png, 1000 x 559): left and top of each card's
 # picture, in reading order. The crop leaves out the movement icon (bottom left) and the name bar (bottom).
@@ -137,6 +138,12 @@ def pack():
         if img is not None:  # blank.tga: an empty (transparent) cell, for places the Advanced list leaves empty
             art[y:y + H, x:x + W] = np.asarray(img)
         sprites.append((sprite, 9, MNET0800_W + x, y))
+    # The second models (Mac 2 ...) show the same picture but need sprites of their own (the Advanced list draws all
+    # 30 entries at once, and each sprite is one object on screen): portrait_<name>2.tga, the same pixels.
+    boxes = {s[0]: (s[2], s[3]) for s in sprites}
+    for name in DUPLICATES:
+        x, y = boxes['portrait_%s.tga' % name]
+        sprites.append(('portrait_%s2.tga' % name, 9, x, y))
     fmt, blocks = dxt.encode(art, alpha=True)
     assert fmt == dxt.BC3 and len(blocks) == ART_W * ART_H
     data = bytearray(b'PDCP' + struct.pack('<3I', 1, 1, len(sprites)))

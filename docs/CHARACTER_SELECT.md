@@ -134,11 +134,11 @@ frame, the same poses as the add-on's bake_clip (largest difference 4e-7); the m
 Online: the match setup carries `colour << 16 | carrier record`; each PC needs the pick of each slot (a pdnet P2P
 message, still to do) to build the same files.
 
-### Menu (first version)
+### Menu
 
-Y opens it. The grid's 11 places show the list in pages (LB / RB, Q / E); A on an entry opens the Colour, Dodge type
-and Animation set pop-ups (up / down, A, B). After the last one pdnet hands the pick to the game itself (two A presses:
-the place, then the game's COLORS row) and stores the variant's carrier value instead.
+Y opens it: all 30 entries in one 6 x 5 grid drawn by pdnet (the game's grid is hidden underneath), moved with the
+D-pad, stick, arrow keys or W A S D. A opens the pop-ups Color, Movement Type, Animation Set (up / down, A, B). The last
+A stores the variant's carrier value as the pick and leaves the screen. B on the grid goes back to the normal list.
 
 ## Plan for the Advanced list and movement variants (first notes)
 
