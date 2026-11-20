@@ -1133,9 +1133,10 @@ namespace pdnet::gamepatches
         {
             static std::atomic<int> logged{ 0 };
             uint32_t table = id >> 16, index = id & 0xffff;
-            // The lobby, and (2026-11-14) the Lab's screens: what decides the split-screen "Player 2" warning there.
+            // The lobby, and (2026-11-14) the Lab's screens: what decides the split-screen "Player 2" warning there; (2026-11-20)
+            // the character select: how it builds its list and handles X / Y (the Advanced list).
             int menu = CurrentMenu(MenuManager());
-            if (table > 2 || index > 255 || (menu != kLobbyMenu && menu != kLabMenu && menu != kStockMenu && menu != kEditorMenu) || logged > 5000) return;
+            if (table > 2 || index > 255 || (menu != kLobbyMenu && menu != kLabMenu && menu != kStockMenu && menu != kEditorMenu && menu != kCharacterMenu) || logged > 5000) return;
             int32_t arg = 0;
             if (args && !IsBadReadPtr(args, 4)) arg = args[0];
             // Each command + argument + result once: some are called every frame with alternating arguments.
@@ -2551,6 +2552,7 @@ namespace pdnet::gamepatches
             return 0; // nothing else while asking
         }
         // The button bar (menu command 88 with 2, text): the Options screen's "Change / Back" gets "A Save".
+        bool CharacterSelectBar(const char* text, char* out, size_t size); // (below)
         int64_t HookedButtonBar(int64_t* args)
         {
             const char* kSave = g_theatre ? kTheatreBar : g_confirmingSave ? kConfirmBar : kNormalBar;
@@ -2565,6 +2567,18 @@ namespace pdnet::gamepatches
                 memcpy(changed, args, sizeof(changed));
                 changed[1] = reinterpret_cast<int64_t>(kSave);
                 return g_buttonBar(changed);
+            }
+            static char charselBar[160];
+            if (args && CopyString(reinterpret_cast<const char*>(args[1]), charselBar, sizeof(charselBar)))
+            {
+                static char withY[200];
+                if (CharacterSelectBar(charselBar, withY, sizeof(withY)))
+                {
+                    int64_t changed[8];
+                    memcpy(changed, args, sizeof(changed));
+                    changed[1] = reinterpret_cast<int64_t>(withY);
+                    return g_buttonBar(changed);
+                }
             }
             return g_buttonBar(args);
         }
@@ -3603,6 +3617,14 @@ namespace pdnet::gamepatches
             { "Scoto", { "Navy", "Red", "White", "Yellow" } },
         };
         const CharacterColours* g_shownCharacter = nullptr;
+        std::string g_charselName; // the name line's text as drawn ("player" for Alpha), for the portrait (HookedDrawSprite)
+        // MNet.alr's portraits (MakeMnetCopy, CharacterSelectSprite).
+        constexpr int kMnetGameSprites = 84;
+        constexpr int kPortraitFirst = 38, kPortraitLast = 48, kMonsterPortraitFirst = 84;
+        std::atomic<int> g_monsterPortraits{ 0 }; // sprites added (0: the game's file)
+        // The monsters with a portrait, in charsel-portraits.bin's order (sprites 84 on).
+        constexpr const char* kMonsterPortraitNames[] = { "Vestio", "Ommato", "Anthro", "Guard", "Andro", "Ceno", "Partheno",
+                                                         "Catoptro", "Gyne", "Claustro", "Scoto" };
 
         // The text with the game's \a control codes (\a + digits + one letter) left out.
         std::string PlainText(const char* text)
@@ -3661,6 +3683,7 @@ namespace pdnet::gamepatches
                         lastName = value;
                     }
                     g_shownCharacter = nullptr;
+                    g_charselName = value;
                     if (_stricmp(value.c_str(), "player") == 0) value = "Alpha";
                 }
                 for (std::string candidate : { PlainText(text.c_str()), PlainText(value.c_str()) })
@@ -3757,8 +3780,11 @@ namespace pdnet::gamepatches
             return g_slotStatus(args);
         }
 
+        int64_t CharacterSelectSprite(int64_t* args); // (below)
+
         int64_t HookedDrawSprite(int64_t* args)
         {
+            if (args && CurrentMenu(MenuManager()) == kCharacterMenu) return CharacterSelectSprite(args);
             if (!args || args[0] != 3 || (args[1] != 34 && args[1] != 35) || CurrentMenu(MenuManager()) != kLobbyMenu) return g_drawSprite(args);
             int slot = g_rowSlot;
             int mine = *reinterpret_cast<int32_t*>(At(0x140527bc4));
@@ -3800,6 +3826,89 @@ namespace pdnet::gamepatches
             strcat_s(named[slot], " ");
             strcat_s(named[slot], g_talkMark.c_str());
             return reinterpret_cast<int64_t>(named[slot]);
+        }
+
+        // The character select's portrait (see MakeMnetCopy): MNET sprite 38-48 drawn with menu command 95 while the
+        // name line (ColourNameText) shows a monster becomes that monster's own portrait (sprites 84 on). Every distinct
+        // sprite drawn there is logged once, to check.
+        // The Advanced list (2026-11-20, the user's request; first step): Y (controller) or the Y key on the character
+        // select switches g_charselAdvanced. For now it shows: the heading ADVANCED and the button bar's Y entry
+        // (\a5# is the Y icon: "\a5#Invite" in the lobby). The list itself (Freia (jump) / Freia (dodge), 12 colour
+        // rows "<colour> - <jump>") needs the character list's script commands first: menu_debug=on logs them here.
+        std::atomic<bool> g_charselAdvanced{ false };
+        constexpr uint32_t kPadY = 0x80; // Windows.Gaming.Input.GamepadButtons.Y
+
+        int MonsterPortrait(const std::string& name)
+        {
+            for (int i = 0; i < static_cast<int>(std::size(kMonsterPortraitNames)); ++i)
+                if (_stricmp(name.c_str(), kMonsterPortraitNames[i]) == 0) return i < g_monsterPortraits ? i : -1;
+            return -1;
+        }
+
+        // The heading the screen had: Test Arsenal's (HookedAddItem), else none.
+        const char* CharacterSelectHeading()
+        {
+            return g_testPicking == kPickingOpponentCharacter ? "AI OPPONENT'S CHARACTER" : g_testPicking == kPickingCharacter ? "YOUR CHARACTER" : "";
+        }
+
+        void CharacterSelectInput()
+        {
+            static bool held = false;
+            static ULONGLONG lastFrame = 0;
+            ULONGLONG now = GetTickCount64();
+            if (now - lastFrame > 1000) // the screen just opened: the normal list
+            {
+                if (g_charselAdvanced.exchange(false))
+                {
+                    SetMenuHeading(CharacterSelectHeading());
+                    Log(L"gamepatch: character select: normal list (screen opened)");
+                }
+                held = true; // a Y still held from the last screen doesn't count
+            }
+            lastFrame = now;
+            uint8_t keys[256];
+            bool down = AnyPadHolds(kPadY) || (KeysHeld(keys) && keys['Y']);
+            if (down && !held)
+            {
+                bool advanced = !g_charselAdvanced;
+                g_charselAdvanced = advanced;
+                SetMenuHeading(advanced ? "ADVANCED" : CharacterSelectHeading());
+                Log(L"gamepatch: character select: %s list", advanced ? L"Advanced" : L"normal");
+            }
+            held = down;
+        }
+
+        int64_t CharacterSelectSprite(int64_t* args)
+        {
+            CharacterSelectInput(); // once per drawn sprite: several times a frame, edges only
+            static std::set<std::pair<int64_t, int64_t>> seen;
+            if (seen.size() < 60 && seen.emplace(args[0], args[1]).second)
+                Log(L"gamepatch: character select draws sheet %lld sprite %lld at %lld,%lld (name line '%S')", args[0], args[1], args[2], args[3], g_charselName.c_str());
+            if (args[0] != 3 || args[1] < kPortraitFirst || args[1] > kPortraitLast) return g_drawSprite(args);
+            int monster = MonsterPortrait(g_charselName);
+            if (monster < 0) return g_drawSprite(args);
+            int64_t own[8];
+            memcpy(own, args, 5 * sizeof(int64_t));
+            own[1] = kMonsterPortraitFirst + monster;
+            return g_drawSprite(own);
+        }
+
+        // The button bar: "\a6#Select \a580r\a4#Toggle Monsters \a2#Confirm \a3#Back" ($MONSTER_HINT) gets the Y entry.
+        bool CharacterSelectBar(const char* text, char* out, size_t size)
+        {
+            const char* toggle = strstr(text, "\a4#Toggle Monsters ");
+            if (!toggle || CurrentMenu(MenuManager()) != kCharacterMenu) return false;
+            size_t cut = toggle - text + strlen("\a4#Toggle Monsters ");
+            _snprintf_s(out, size, _TRUNCATE, "%.*s%s%s", static_cast<int>(cut), text, g_charselAdvanced ? "\a5#Normal " : "\a5#Advanced ", text + cut);
+            return true;
+        }
+
+        void CharacterSelectHooks()
+        {
+            if (!GetConfig().charselPortraits) return;
+            bool sprite = g_drawSprite || WrapCommand<MenuCommandFn>(0x1403eefe0 + 95 * 8, 0x1402077a0, &HookedDrawSprite, g_drawSprite, L"character select portraits");
+            bool text = g_drawText || WrapCommand<MenuCommandFn>(0x1403eefe0 + 23 * 8, 0x140207840, &HookedDrawText, g_drawText, L"character select names");
+            Log(L"gamepatch: character select: monster portraits %s, Advanced list (Y) %s", sprite && text ? L"on" : L"off (hook not set)", sprite ? L"on" : L"off");
         }
 
         template <typename Fn>
@@ -4049,6 +4158,162 @@ namespace pdnet::gamepatches
             return true;
         }
 
+
+        // Character select portraits (2026-11-20, the user's art; tools\charsel\make_portraits.py). The character select
+        // (livecharasel, menu 46) draws a 134 x 96 portrait with menu command 95 from MNET (Assets\Data\menu\MNet.alr,
+        // texture slot 3): sprites 38-48 (player_00..player_10). The file has no large monster portraits (only the small window_chara_11..26), so the X toggle
+        // (Toggle Monsters) only changes the names. When the game opens the file it gets a copy (LocalState\pdnet\MNet.alr,
+        // made once per start) with kit\pdnet\charsel-portraits.bin put in (a file, not a folder: the updater copies only
+        // files):
+        // - MNet0800 (texture 9, 256 x 512 DXT5) widened to 1024 x 512: the game's own quarter on the left, the new art
+        //   right of it; MNet0810 / MNet0820 (10, 11), which hold only portraits, replaced.
+        // - The sprite list (the 0x10 record at 0x198: 12 texture infos of 0x14 at 0x338, 84 sprites of 0x3c at 0x428:
+        //   texture, name[32], u0 v0 u1 v1, w, h): player_NN point at the new art, the 11 monsters added as sprites 84-94.
+        //   The record and the sprite count (0x1a4) grow; the record's end marker moves into the padding before 0x2000.
+        // - Texture table (0x34 + 0x1c each: +4 offset in the data, +0xe log2 width << 4 | mips) and the data size (0x14).
+        // charsel_portraits=off leaves the game's file alone.
+
+        std::wstring PdnetDir()
+        {
+            HMODULE self = nullptr;
+            GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT, reinterpret_cast<LPCWSTR>(&PdnetDir), &self);
+            wchar_t path[MAX_PATH];
+            GetModuleFileNameW(self, path, MAX_PATH);
+            std::wstring dir = path;
+            return dir.substr(0, dir.find_last_of(L'\\') + 1);
+        }
+
+        bool ReadWholeFile(const std::wstring& path, std::vector<uint8_t>& data, size_t limit)
+        {
+            HANDLE file = g_createFile2(path.c_str(), GENERIC_READ, FILE_SHARE_READ, OPEN_EXISTING, nullptr);
+            if (file == INVALID_HANDLE_VALUE) return false;
+            LARGE_INTEGER size{};
+            bool ok = GetFileSizeEx(file, &size) && size.QuadPart > 0 && static_cast<uint64_t>(size.QuadPart) <= limit;
+            DWORD got = 0;
+            if (ok)
+            {
+                data.resize(static_cast<size_t>(size.QuadPart));
+                ok = ReadFile(file, data.data(), static_cast<DWORD>(data.size()), &got, nullptr) && got == data.size();
+            }
+            CloseHandle(file);
+            return ok;
+        }
+
+        // Returns the number of sprites added, or -1 (file left as it is; `why` says what didn't match).
+        int MakeMnetCopy(const wchar_t* original, const std::wstring& copy, const char*& why)
+        {
+            constexpr size_t kSize = 863232;
+            constexpr uint32_t kData = 0x2000, kTex = 0x34, kInfo = 0x338, kSprites = 0x428, kSprite = 0x3c;
+            constexpr uint32_t kEnd = kSprites + kMnetGameSprites * kSprite;
+            std::vector<uint8_t> d, p;
+            why = "MNet.alr not read";
+            if (!ReadWholeFile(original, d, kSize)) return -1;
+            auto u32 = [&](size_t at) -> uint32_t& { return *reinterpret_cast<uint32_t*>(&d[at]); };
+            auto u16 = [&](size_t at) -> uint16_t& { return *reinterpret_cast<uint16_t*>(&d[at]); };
+            auto f32 = [&](size_t at) -> float& { return *reinterpret_cast<float*>(&d[at]); };
+            why = "MNet.alr not the expected file";
+            if (d.size() != kSize || u32(0) != 0x11 || u32(0xc) != kData || u32(0x14) != kSize - kData || u32(0x28) != 0x15 || u32(0x30) != 12 ||
+                u32(0x198) != 0x10 || u32(0x19c) != 0x1640 || u32(0x1a4) != kMnetGameSprites || memcmp(&d[0x2d8], "MNet0800.dds", 12) != 0 ||
+                u32(kEnd) != 0 || u32(kEnd + 4) != 8)
+                return -1;
+            why = "kit\\pdnet\\charsel-portraits.bin missing or not readable";
+            if (!ReadWholeFile(PdnetDir() + L"charsel-portraits.bin", p, 8 << 20) || p.size() < 16 || memcmp(p.data(), "PDCP", 4) != 0 ||
+                *reinterpret_cast<uint32_t*>(&p[4]) != 1)
+                return -1;
+            why = "charsel-portraits.bin doesn't fit MNet.alr";
+            uint32_t images = *reinterpret_cast<uint32_t*>(&p[8]), sprites = *reinterpret_cast<uint32_t*>(&p[12]);
+            size_t at = 16;
+            for (uint32_t i = 0; i < images; ++i)
+            {
+                if (at + 16 > p.size()) return -1;
+                uint32_t tex = *reinterpret_cast<uint32_t*>(&p[at]), mode = *reinterpret_cast<uint32_t*>(&p[at + 8]), size = *reinterpret_cast<uint32_t*>(&p[at + 12]);
+                uint32_t w = *reinterpret_cast<uint16_t*>(&p[at + 4]), h = *reinterpret_cast<uint16_t*>(&p[at + 6]);
+                const uint8_t* art = &p[at + 16];
+                at += 16 + size;
+                if (at > p.size() || tex >= 12 || size != w * h) return -1;
+                size_t entry = kTex + tex * 0x1c, info = kInfo + tex * 0x14;
+                uint32_t oldW = u16(info), oldH = u16(info + 2), offset = u32(entry + 4), oldSize = oldW * oldH; // DXT5: a byte per pixel
+                if (d[entry + 0xd] != 0x0f || kData + offset + oldSize > d.size()) return -1;
+                std::vector<uint8_t> image;
+                if (mode == 1) // added to the right: rows of 4 x 4 blocks (16 bytes a block) side by side
+                {
+                    uint32_t newW = oldW + w;
+                    if (h != oldH || (newW & (newW - 1)) != 0 || h % 4) return -1;
+                    for (uint32_t row = 0; row < h / 4; ++row)
+                    {
+                        const uint8_t* own = &d[kData + offset + row * oldW * 4];
+                        image.insert(image.end(), own, own + oldW * 4);
+                        image.insert(image.end(), art + row * w * 4, art + (row + 1) * w * 4);
+                    }
+                    unsigned long log2 = 0;
+                    _BitScanReverse(&log2, newW);
+                    d[entry + 0xe] = static_cast<uint8_t>(log2 << 4 | (d[entry + 0xe] & 0xf));
+                    u16(info) = static_cast<uint16_t>(newW);
+                    memcpy(&d[info + 4], &d[kInfo + 4], 4); // as MNet0400's info, also 1024 x 512
+                    for (int k = 0; k < kMnetGameSprites; ++k) // the game's sprites on it keep their pixels
+                        if (u32(kSprites + k * kSprite) == tex)
+                        {
+                            f32(kSprites + k * kSprite + 36) *= static_cast<float>(oldW) / newW;
+                            f32(kSprites + k * kSprite + 44) *= static_cast<float>(oldW) / newW;
+                        }
+                }
+                else
+                {
+                    if (w != oldW || h != oldH) return -1;
+                    image.assign(art, art + size);
+                }
+                uint32_t grow = static_cast<uint32_t>(image.size()) - oldSize;
+                d.erase(d.begin() + kData + offset, d.begin() + kData + offset + oldSize);
+                d.insert(d.begin() + kData + offset, image.begin(), image.end());
+                u32(0x14) += grow;
+                for (int k = 0; k < 12; ++k)
+                    if (u32(kTex + k * 0x1c + 4) > offset) u32(kTex + k * 0x1c + 4) += grow;
+            }
+            uint8_t end[8];
+            memcpy(end, &d[kEnd], 8);
+            int added = 0;
+            for (uint32_t i = 0; i < sprites; ++i, at += 44)
+            {
+                if (at + 44 > p.size()) return -1;
+                char name[33] = {};
+                memcpy(name, &p[at], 32);
+                uint32_t tex = *reinterpret_cast<uint32_t*>(&p[at + 32]);
+                const uint16_t* box = reinterpret_cast<const uint16_t*>(&p[at + 36]);
+                if (tex >= 12) return -1;
+                float texW = u16(kInfo + tex * 0x14), texH = u16(kInfo + tex * 0x14 + 2);
+                int k = 0;
+                while (k < kMnetGameSprites && strncmp(reinterpret_cast<const char*>(&d[kSprites + k * kSprite + 4]), name, 32) != 0) ++k;
+                if (k == kMnetGameSprites)
+                {
+                    k = kMnetGameSprites + added++;
+                    if (kSprites + (k + 1) * kSprite + 8 > kData) return -1;
+                    for (uint32_t b = kSprites + k * kSprite + 8; b < kSprites + (k + 1) * kSprite + 8; ++b)
+                        if (d[b]) return -1; // only padding may be there
+                }
+                size_t s = kSprites + k * kSprite;
+                u32(s) = tex;
+                memcpy(&d[s + 4], name, 32);
+                f32(s + 36) = box[0] / texW, f32(s + 40) = box[1] / texH, f32(s + 44) = (box[0] + box[2]) / texW, f32(s + 48) = (box[1] + box[3]) / texH;
+                u32(s + 52) = box[2], u32(s + 56) = box[3];
+            }
+            memcpy(&d[kEnd + added * kSprite], end, 8);
+            u32(0x19c) += added * kSprite;
+            u32(0x1a4) += added;
+            uint32_t counts[12] = {}; // each texture's info counts the sprites on it
+            for (int k = 0; k < kMnetGameSprites + added; ++k)
+                if (u32(kSprites + k * kSprite) < 12) ++counts[u32(kSprites + k * kSprite)];
+            for (int t = 0; t < 12; ++t) u32(kInfo + t * 0x14 + 8) = counts[t];
+
+            why = "the copy couldn't be written";
+            CreateDirectoryW((LocalStatePath() + L"\\pdnet").c_str(), nullptr);
+            HANDLE file = g_createFile2(copy.c_str(), GENERIC_WRITE, 0, CREATE_ALWAYS, nullptr);
+            if (file == INVALID_HANDLE_VALUE) return -1;
+            DWORD written = 0;
+            BOOL ok = WriteFile(file, d.data(), static_cast<DWORD>(d.size()), &written, nullptr) && written == d.size();
+            CloseHandle(file);
+            return ok ? added : -1;
+        }
+
         HANDLE WINAPI HookedCreateFile2(LPCWSTR name, DWORD access, DWORD share, DWORD disposition, LPCREATEFILE2_EXTENDED_PARAMETERS params)
         {
             size_t n = name ? wcslen(name) : 0;
@@ -4061,6 +4326,21 @@ namespace pdnet::gamepatches
                     std::wstring path = LocalStatePath() + L"\\pdnet\\FDLogo.alr";
                     if (MakeTitleCopy(name, path) && TallerTitleBoxes()) copy = path;
                     Log(L"gamepatch: title screen %s", copy.empty() ? L"left as it is (logo file not as expected)" : L"reads \"Rebirth\"");
+                });
+                if (!copy.empty()) return g_createFile2(copy.c_str(), access, share, disposition, params);
+            }
+            if (n > 14 && _wcsicmp(name + n - 13, L"menu\\MNet.alr") == 0 && (name[n - 14] == L'/' || name[n - 14] == L'\\') && GetConfig().charselPortraits)
+            {
+                static std::once_flag once;
+                static std::wstring copy;
+                std::call_once(once, [name]
+                {
+                    std::wstring path = LocalStatePath() + L"\\pdnet\\MNet.alr";
+                    const char* why = "";
+                    int added = MakeMnetCopy(name, path, why);
+                    if (added >= 0) copy = path, g_monsterPortraits = added;
+                    if (added >= 0) Log(L"gamepatch: character select portraits: new art, %d monster portraits (MNET sprites %d-%d)", added, kMonsterPortraitFirst, kMonsterPortraitFirst + added - 1);
+                    else Log(L"gamepatch: character select portraits left as they are (%S)", why);
                 });
                 if (!copy.empty()) return g_createFile2(copy.c_str(), access, share, disposition, params);
             }
@@ -5407,6 +5687,7 @@ namespace pdnet::gamepatches
             if (GetConfig().nametagDebug) NametagDebug();
             if (GetConfig().lobbyArsenalEditor) LobbyArsenalEditor();
             if (GetConfig().voiceChat || GetConfig().iconGallery) LobbyTalkIndicator();
+            CharacterSelectHooks(); // after LobbyTalkIndicator: shares its sprite and text hooks
             bool micLabel = GetConfig().voiceChat && !GetConfig().voiceClassic; // classic: the option keeps its "Voice Chat" name
             QuickJoinLabels();
             if (GetConfig().shopMaxOut) ShopMaxOut();

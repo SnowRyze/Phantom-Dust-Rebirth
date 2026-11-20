@@ -147,6 +147,7 @@ namespace pdnet
                 else if (key == "aura_beeps") c.auraBeeps = _stricmp(value.c_str(), "off") != 0;
                 else if (key == "preview_sound") c.previewSound = _stricmp(value.c_str(), "off") != 0;
                 else if (key == "sound_log") c.soundLog = _stricmp(value.c_str(), "on") == 0;
+                else if (key == "charsel_portraits") c.charselPortraits = _stricmp(value.c_str(), "off") != 0;
                 else if (key == "more_controllers") c.moreControllers = _stricmp(value.c_str(), "off") != 0;
                 else if (key == "display_name" && !value.empty())
                 {
