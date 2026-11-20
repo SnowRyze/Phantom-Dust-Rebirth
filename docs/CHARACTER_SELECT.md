@@ -139,6 +139,8 @@ message, still to do) to build the same files.
 Y opens it: all 30 entries in one 6 x 5 grid drawn by pdnet (the game's grid is hidden underneath), moved with the
 D-pad, stick, arrow keys or W A S D. A opens the pop-ups Color, Movement Type, Animation Set (up / down, A, B). The last
 A stores the variant's carrier value as the pick and leaves the screen. B on the grid goes back to the normal list.
+While it's on, the game's own window input (FUN_140248b50) runs with the pad words zeroed, so the hidden grid underneath
+doesn't move, and the game's cursor frames / name plate (sprites 66-72) are blanked.
 
 ## Plan for the Advanced list and movement variants (first notes)
 

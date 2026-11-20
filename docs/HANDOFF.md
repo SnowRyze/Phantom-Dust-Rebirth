@@ -101,6 +101,11 @@ Ideas, not planned (notes in the change log and reference notes):
 
 ## November 2026
 
+Advanced list, after menu test 2 (2026-11-21; not yet seen in game). The grid and its cursor were right, but a white card and red bar at the old portrait size followed the game's hidden cursor, the pop-ups had no background, and up / down in a pop-up still moved the game's cursor. Now:
+- The game's cursor frames and name plate, sprites 66-72, get the blank handle on the Advanced list (was 67, 71, 72 only).
+- The pop-up window gets empty lines (menu command 40) like the Settings' save question, which draws its background.
+- FUN_140248b50 (the game's window input: A / B events and the window cursor from the pads' words at 0x14059b800 + pad * 0x34, + 0 / 4 / 8) is hooked (HookedWindowInput) and runs with those words zero while the Advanced list is on. pdnet reads the pads itself (gamepads.cpp), so its own grid and pop-ups still work.
+
 Advanced list, after menu test 1 (2026-11-21; not yet seen in game). The user's notes: one big grid instead of pages; the game's cursor kept moving under the pop-ups; the pop-up rows ran a row low and had no titles; the two A presses for the script never arrived (the user picked by hand and got the right variant). Now:
 - pdnet draws all 30 entries as one 6 x 5 grid at 55 % (DrawAdvancedGrid) through FUN_1401983e0 (a sprite object's position, scale and colour for the frame; FUN_140246c70 = menu command 95 calls it with no scale) with each entry's own sprite (the second NPC models got portrait_<name>2, sprites 111-114: the sprite record is now full, 115), and its own cursor (the game's cursor frame sprite 67, scaled). The game's grid, cursor frame and name plate get the blank sprite's handle and their command 95 draws are skipped; the name is written under the grid.
 - pdnet takes all input there (D-pad, stick, arrows, W A S D; A; B back to the normal list); the script gets no A / B.

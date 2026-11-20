@@ -3948,8 +3948,11 @@ namespace pdnet::gamepatches
         constexpr int kBlankSprite = kMonsterPortraitFirst + 11; // blank.tga: transparent, after the monsters
         uint32_t g_ownHandles[11], g_putHandles[11]; // the game's, and the last ones pdnet put there
         uint32_t* g_handles = nullptr; // the list the own handles were read from
-        constexpr int kFrameSprites[3] = { 67, 71, 72 }; // the game's cursor frame and name plate ends (hidden on the Advanced list)
-        uint32_t g_ownFrames[3];
+        // the game's cursor frames (66-69), name plate (70-72): hidden on the Advanced list (test 4: the white card and red
+        // bar of 68 / 69 / 70 still followed the game's hidden cursor). [0] is player_cursor2, pdnet's own cursor frame.
+        constexpr int kFrameSprites[7] = { 67, 66, 68, 69, 70, 71, 72 };
+        constexpr int kFrameCount = 7;
+        uint32_t g_ownFrames[kFrameCount];
         int g_gridShown = -1; // what the grid shows: 0 own, 1 monsters, 2 Advanced
         ULONGLONG g_gridLastFrame = 0;
 
@@ -3973,7 +3976,7 @@ namespace pdnet::gamepatches
         // the others portrait_<name> (96-110) and portrait_<name>2 (111-114) for the second models.
         constexpr int kGridColumns = 6, kGridRows = 5, kGridX = 68, kGridY = 66, kGridPitchX = 86, kGridPitchY = 62;
         constexpr float kGridScale = 0.55f;
-        constexpr int kCursorFrameSprite = 67, kNamePlateLeft = 71, kNamePlateRight = 72;
+        constexpr int kFirstFrameSprite = 66, kNamePlateRight = 72;
         std::atomic<int> g_gridCursor{ 0 };
 
         // The grid place (sprite 38-48) of the name the game draws there (a player's or, with Toggle Monsters, a monster's).
@@ -4041,7 +4044,7 @@ namespace pdnet::gamepatches
             {
                 if (!SameBytes(reinterpret_cast<uint8_t*>(list + kPortraitFirst), reinterpret_cast<uint8_t*>(list + kPortraitFirst), sizeof(g_ownHandles))) return;
                 memcpy(g_ownHandles, list + kPortraitFirst, sizeof(g_ownHandles));
-                for (int i = 0; i < 3; ++i) g_ownFrames[i] = list[kFrameSprites[i]];
+                for (int i = 0; i < kFrameCount; ++i) g_ownFrames[i] = list[kFrameSprites[i]];
                 g_handles = list;
                 static int told = 0;
                 if (told++ < 10) Log(L"gamepatch: character select: MNET sprite handles 38-48 %u..%u, monsters from %u", g_ownHandles[0], g_ownHandles[10], list[kMonsterPortraitFirst]);
@@ -4056,7 +4059,7 @@ namespace pdnet::gamepatches
             g_gridShown = what;
             memcpy(g_putHandles, handles, sizeof(handles));
             // the game's cursor frame and name plate: hidden on the Advanced list (pdnet draws its own cursor)
-            for (int i = 0; i < 3; ++i) list[kFrameSprites[i]] = what == 2 ? list[kBlankSprite] : g_ownFrames[i];
+            for (int i = 0; i < kFrameCount; ++i) list[kFrameSprites[i]] = what == 2 ? list[kBlankSprite] : g_ownFrames[i];
         }
 
         // Draws a sprite of MNET by its handle (FUN_1401983e0: the object's position, size and colour for this frame;
@@ -4100,7 +4103,7 @@ namespace pdnet::gamepatches
             if (seen.size() < 60 && seen.emplace(args[0], args[1]).second)
                 Log(L"gamepatch: character select draws sheet %lld sprite %lld at %lld,%lld (name line '%S')", args[0], args[1], args[2], args[3], g_charselName.c_str());
             if (g_charselAdvanced && args[0] == 3 &&
-                ((args[1] >= kPortraitFirst && args[1] <= kPortraitLast) || args[1] == kCursorFrameSprite || args[1] == kNamePlateLeft || args[1] == kNamePlateRight))
+                ((args[1] >= kPortraitFirst && args[1] <= kPortraitLast) || (args[1] >= kFirstFrameSprite && args[1] <= kNamePlateRight)))
             {
                 if (args[1] == 40) DrawAdvancedGrid(); // the first portrait the game draws each frame
                 return 1;
@@ -4115,7 +4118,7 @@ namespace pdnet::gamepatches
             if (MnetHandles() == g_handles && g_handles)
             {
                 PutHandles(g_handles, g_ownHandles);
-                for (int i = 0; i < 3; ++i) g_handles[kFrameSprites[i]] = g_ownFrames[i];
+                for (int i = 0; i < kFrameCount; ++i) g_handles[kFrameSprites[i]] = g_ownFrames[i];
             }
             g_gridShown = 0;
         }
@@ -4197,6 +4200,8 @@ namespace pdnet::gamepatches
             cmd(0x140207d20, kCharselPopupW, PopupHeight());
             cmd(0x140207d50, kCharselPopupX, PopupY());
             cmd(0x140207d80, reinterpret_cast<int64_t>(""), 0);
+            // empty lines as the Settings' save question (test 4: a window with none drew no background)
+            for (int i = 0; i <= PopupRows(); ++i) cmd(0x140207e20, reinterpret_cast<int64_t>(""), 0);
             *reinterpret_cast<int16_t*>(manager + 0x10402) = current;
         }
 
@@ -4237,8 +4242,8 @@ namespace pdnet::gamepatches
         void PopupSound(int which) { int64_t sound[2] = { which, 0 }; reinterpret_cast<InputFn>(At(0x140261750))(sound); }
 
         // The script's button reads on the character select (HookedButtons). A = 0x1010, B = 0x2020 (as the Settings).
-        // On the Advanced list pdnet takes every input: the grid cursor, the pop-ups; the script sees no A / B (its own
-        // hidden grid cursor still follows the D-pad, unseen). The last pop-up's A stores the pick (g4 #571 with the
+        // On the Advanced list pdnet takes every input: the grid cursor, the pop-ups; the script sees no A / B and the game's
+        // window input nothing (HookedWindowInput: its hidden grid cursor stays put). The last pop-up's A stores the pick (g4 #571 with the
         // variant's carrier value, as the script does after its COLORS row) and backs out of the screen (g_forceBack:
         // the B event for the script's next input label, test 1's two A presses for the script never arrived).
         using PickFn = int64_t (*)(int32_t* args);
@@ -4332,6 +4337,25 @@ namespace pdnet::gamepatches
             return buttons & ~0x3030ll; // the script gets nothing while the pop-up is open
         }
 
+        // The game's window input (FUN_140248b50, per window each frame): reads the pads' pressed / held / repeat words
+        // (0x14059b800 + pad * 0x34, + 0 / 4 / 8) for its A / B events and the window's cursor. HookedButtons only filters
+        // the script's own read, so on the Advanced list the game's hidden grid cursor still moved under the pop-ups
+        // (test 4). There the handler runs with those words zero; pdnet reads the pads itself (gamepads.cpp).
+        using WindowInputFn = int64_t (*)(void* window);
+        WindowInputFn g_windowInput = nullptr;
+        int64_t HookedWindowInput(void* window)
+        {
+            if (!g_charselAdvanced || !window || CurrentMenu(MenuManager()) != kCharacterMenu) return g_windowInput(window);
+            uint32_t* pads = reinterpret_cast<uint32_t*>(At(0x14059b800));
+            uint32_t saved[4][3];
+            for (int p = 0; p < 4; ++p)
+                for (int w = 0; w < 3; ++w) saved[p][w] = pads[p * 13 + w], pads[p * 13 + w] = 0;
+            int64_t result = g_windowInput(window);
+            for (int p = 0; p < 4; ++p)
+                for (int w = 0; w < 3; ++w) pads[p * 13 + w] = saved[p][w];
+            return result;
+        }
+
         // g4 #571 stores the character pick (FUN_140213b80: 0x140527bc0 and this PC's lobby slot in 0x140527c20); the
         // Advanced list's pick becomes its carrier's value there, so the lobby and the match see the carrier.
         int64_t HookedStorePick(int32_t* args)
@@ -4356,6 +4380,10 @@ namespace pdnet::gamepatches
             bool sprite = g_drawSprite || WrapCommand<MenuCommandFn>(0x1403eefe0 + 95 * 8, 0x1402077a0, &HookedDrawSprite, g_drawSprite, L"character select portraits");
             bool text = g_drawText || WrapCommand<MenuCommandFn>(0x1403eefe0 + 23 * 8, 0x140207840, &HookedDrawText, g_drawText, L"character select names");
             bool store = WrapCommand<PickFn>(0x1403f0090 + 571 * 8, 0x140213b80, &HookedStorePick, g_storePick, L"Advanced list pick");
+            // FUN_140248b50 starts push rbx / sub rsp,40h / mov rbx,rcx (9 position-independent bytes)
+            static const std::vector<uint8_t> kInputStart = { 0x40, 0x53, 0x48, 0x83, 0xEC, 0x40, 0x48, 0x8B, 0xD9 };
+            if (!g_windowInput)
+                g_windowInput = reinterpret_cast<WindowInputFn>(InlineHookBytes(0x140248b50, kInputStart, kInputStart, reinterpret_cast<void*>(&HookedWindowInput), L"Advanced list input lock"));
             Log(L"gamepatch: character select: monster portraits %s, Advanced list (Y) %s, its picks %s", sprite && text ? L"on" : L"off (hook not set)", sprite ? L"on" : L"off",
                 store ? L"on" : L"off");
         }
