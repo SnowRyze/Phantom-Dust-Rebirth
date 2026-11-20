@@ -3974,11 +3974,11 @@ namespace pdnet::gamepatches
         // its cursor frame / name plate (67, 71, 72) get the blank sprite's handle (ShowGrid), and their command 95 draws
         // are skipped. Each entry has a sprite of its own (one object on screen per sprite): players their player_NN,
         // the others portrait_<name> (96-110) and portrait_<name>2 (111-114) for the second models.
-        // Test 2: no gaps between portraits, as big as fits above the game's "Choose the character" line (y ~ 369):
-        // 66 % = 88 x 63 per entry, 528 x 315 centred.
-        constexpr float kGridScale = 0.66f;
+        // Test 2: no gaps between portraits, as big as fits above the game's "Choose the character" line.
+        // Test 3: off the top bar, room under the bottom row for the name: 64 % = 85 x 61 per entry, 510 x 305 from y 50.
+        constexpr float kGridScale = 0.64f;
         constexpr int kGridColumns = 6, kGridRows = 5, kGridPitchX = static_cast<int>(134 * kGridScale), kGridPitchY = static_cast<int>(96 * kGridScale);
-        constexpr int kGridX = (640 - kGridColumns * kGridPitchX) / 2, kGridY = 42, kNameY = 404; // the name under the game's line
+        constexpr int kGridX = (640 - kGridColumns * kGridPitchX) / 2, kGridY = 50;
         constexpr int kFirstFrameSprite = 66, kNamePlateRight = 72;
         std::atomic<int> g_gridCursor{ 0 };
 
@@ -4185,7 +4185,7 @@ namespace pdnet::gamepatches
         // Layout (test 1: the rows ran one row below the window and its title didn't show): pdnet writes the title itself,
         // rows start one line under it, the window is tall enough for both.
         constexpr int kPopupLine = 22, kPopupTop = 12;
-        int PopupHeight() { return kPopupTop * 2 + (PopupRows() + 1) * kPopupLine + 8; }
+        int PopupHeight() { return kPopupTop * 2 + (PopupRows() + 1) * kPopupLine + 28; } // test 3: more room under the last row
         int PopupY() { return 200 - PopupHeight() / 2; }
 
         void OpenCharselPopup(int step)
@@ -4220,8 +4220,10 @@ namespace pdnet::gamepatches
             if (cursor >= 0 && cursor < static_cast<int>(variants::Characters().size()))
             {
                 *reinterpret_cast<int64_t*>(manager + 0x10408) = reinterpret_cast<int64_t>(WindowAt(manager, 12));
-                sprintf_s(name, "\a640c%s", variants::Characters()[cursor].name);
-                text(0, kNameY, name);
+                // under the chosen entry (test 3). Text lands ~9 px higher on screen than a sprite at the same y.
+                int x = kGridX + (cursor % kGridColumns) * kGridPitchX + kGridPitchX / 2, y = kGridY + (cursor / kGridColumns + 1) * kGridPitchY + 9;
+                sprintf_s(name, "\a200c%s", variants::Characters()[cursor].name);
+                text(x - 100, y, name);
                 *reinterpret_cast<int64_t*>(manager + 0x10408) = 0;
             }
             if (g_popup == kNoPopup) return;
