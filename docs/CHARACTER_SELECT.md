@@ -6,7 +6,7 @@ Change notes also go in [`HANDOFF.md`](HANDOFF.md)'s change log.
 ## Goals
 
 1. **X (pad) / x (key) toggles monsters**: the game only swaps the names; the portrait must swap too.
-2. **Better portraits** for the 11 player characters (cut from the "Characters" guide image).
+2. ~~Better portraits for the 11 player characters~~: dropped after the first test (the user prefers the game's own).
 3. **Y opens an "Advanced" list**, with a Y entry in the bottom button bar.
 4. **Advanced list contents**: every playable character once per movement type. First test: *Freia (jump)* and
    *Freia (dodge)*. Picking a jump entry shows 12 colour rows: 4 colours x 3 jumps (Meister Jump, Freia Jump,
@@ -18,10 +18,10 @@ Change notes also go in [`HANDOFF.md`](HANDOFF.md)'s change log.
 
 | Part | State |
 |---|---|
-| Portrait art (players + 11 monsters) | Done: `tools/charsel/` -> `kit/pdnet/charsel-portraits.bin`. Not yet seen in game. |
+| Monster portrait art (11) | Done: `tools/charsel/` -> `kit/pdnet/charsel-portraits.bin`. Player art was tried and reverted (test 1). |
 | MNet.alr copy with the art (MakeMnetCopy) | Done. Checked off-line: the C++ output is byte-identical to a Python reference whose sprites were decoded and viewed. Not yet seen in game. |
-| Monster portrait on X | Done (CharacterSelectSprite, by the name line). Not yet seen in game. |
-| Y: Advanced on / off, heading, button bar entry | Done (first step). Not yet seen in game. |
+| Monster portraits on X | Test 1: not shown (the name line is `\a130c%s\f`, so the name was never read). Fixed; the grid's 11 places map to their monsters (kMonsterFor). |
+| Y: Advanced on / off, heading, button bar entry | Test 1: no reaction, no bar entry. Now also the Y key from the game's key handler, the bar's text is logged, `$MONSTER_HINT` handled, a 2 s status line while the screen is open. |
 | Advanced list contents (Freia jump / dodge, 12 colour rows) | Not started: needs a menu_debug log of the screen (below). |
 | Movement variants as characters (charaset, Player folders, online) | Not started: design below. |
 
@@ -30,7 +30,7 @@ Change notes also go in [`HANDOFF.md`](HANDOFF.md)'s change log.
 ### Files
 
 - `tools/charsel/source/characters.png`, `monsters.png`: the guide images (1000 x 559) the portraits are cut from.
-- `tools/charsel/portraits/*.png`: the 22 portraits, 134 x 96 RGBA (edit these by hand if a crop is off).
+- `tools/charsel/portraits/*.png`: 22 portraits, 134 x 96 RGBA (edit by hand if a crop is off). Only the 11 monsters are packed.
 - `tools/charsel/make_portraits.py`: crops the guides (unless `--pack`), packs `kit/pdnet/charsel-portraits.bin`.
   `dxt.py` is the DXT5 encoder from the phantom_dust_stage Blender add-on.
 - The .bin sits directly in `kit\pdnet\`: pdlaunch's updater copies only files, not folders.
@@ -49,9 +49,8 @@ Sprites used here: 0-10 window_chara (small player portraits), 11-26 window_char
 Portrait order = the game's character order: player(Alpha), Edgar, Freia, Meister, Chunky, Cuff Button, pH, Know,
 Tsubutaki, JD, Sammah.
 
-The copy: MNet0800 (texture 9) 256 -> 1024 wide (own pixels on the left, new art on the right; its sprites' u scaled),
-MNet0810 / MNet0820 replaced (they hold only portraits 04-10, same boxes), player_00..03 pointed at the new art,
-11 monster sprites appended (the record grows by 0x3c each into the padding), counts and offsets fixed. It's made once
+The copy: MNet0800 (texture 9) 256 -> 1024 wide (own pixels on the left, the monster art on the right; its sprites'
+u scaled), 11 monster sprites appended (the record grows by 0x3c each into the padding), counts and offsets fixed. It's made once
 per start in `LocalState\pdnet\MNet.alr` and handed to the game by the CreateFile2 hook (as FDLogo.alr).
 `charsel_portraits=off` in pdnet.ini turns all of this off.
 
@@ -65,9 +64,21 @@ per start in `LocalState\pdnet\MNet.alr` and handed to the game by the CreateFil
   `\a4#` X, `\a5#` Y (the lobby's Invite).
 - Name line: `\a130c%s`, colour rows `COLOR \a1f%d` (ColourNameText).
 
+## Test 1 (2026-11-20, build from 70ab91c)
+
+- The screen is a grid of all 11 portraits at once (sprites 40, 38, 39 in the top row at y 65; 41-44 at y 163; 45-48 at
+  y 262), plus 67 (cursor frame) and 71 / 72 (name plate ends). Toggle Monsters draws the same 38-48.
+- The patched MNet.alr loaded fine (new player art showed). The user wants the game's own player portraits back.
+- Monster portraits didn't show: the name line's format is `\a130c%s\f`, the code compared it to `\a130c%s`.
+- Y did nothing and no bar entry showed; the log had no Y line. Unknown yet whether AnyPadHolds sees the pad's Y on
+  this screen or what text the bar gets: both are logged now.
+- Grid place -> monster, from the guide images and the logs (Freia -> Vestio, player -> Ommato): player Ommato,
+  Edgar Anthro, Freia Vestio, Meister Guard, Chunky Andro, Cuff Button Ceno, pH Partheno, Know Catoptro,
+  Tsubutaki Gyne, JD Claustro, Sammah Scoto.
+
 ## Testing (Experimental build from this branch)
 
-1. Character select (Lab > Test Arsenal, or a lobby): the 11 portraits should be the new art.
+1. Character select (Lab > Test Arsenal, or a lobby): the game's own player portraits.
 2. Press X: monsters' names *and* portraits (Vestio ... Scoto). Mechano, Euroto, Hedono, Germano and Belono have no
    art yet and keep the old picture.
 3. Press Y: heading ADVANCED, bar shows "Y Normal"; Y again goes back.

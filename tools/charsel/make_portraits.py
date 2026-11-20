@@ -7,15 +7,16 @@ Needs numpy and Pillow (py -m pip install numpy pillow).
 
 The character select draws a 134 x 96 portrait from MNet.alr (sprites player_00..player_10, MNET sprites 38-48). pdnet
 widens that file's texture MNet0800 (256 x 512 DXT5) to 1024 x 512 when the game opens it (the left quarter stays
-the game's own) and replaces MNet0810 / MNet0820, which hold only portraits. Out: kit\\pdnet\\charsel-portraits.bin:
+the game's own) to hold the 11 monster portraits; the players keep the game's own portraits. Out: kit\\pdnet\\charsel-portraits.bin:
 
     'PDCP' u32 version (1) u32 images u32 sprites
     images x { u32 texture (index in MNet.alr), u16 w, u16 h, u32 mode, u32 size, DXT5 blocks (rows of 4 x 4 blocks) }
         mode 1: added to the right of the game's texture (MNet0800: 256 -> 1024 wide); mode 0: replaces it (same size)
     sprites x { char name[32]; u32 texture; u16 x, y, w, h }     pixel box in the finished texture
 
-Sprites named player_NN.tga take the new art in place of the game's; any other name is a new sprite added after the
-game's 84 (monster_<name>.tga: the monster portraits the X toggle shows), in this file's order (MNET sprites 84-94).
+A sprite whose name the game's file already has would take the new art in its place; any other name is a new sprite
+added after the game's 84 (monster_<name>.tga: the monster portraits the X toggle shows), in this file's order
+(MNET sprites 84-94).
 """
 import os
 import struct
@@ -84,30 +85,22 @@ def crop_guides():
 
 
 def pack():
-    """Players 00-03 and the monsters go in the 768 x 512 added to MNet0800; players 04-10 keep their own boxes
-    in MNet0810 / MNet0820, whose whole art (only those portraits) is replaced."""
-    images = {9: np.zeros((ART_H, ART_W, 4), np.uint8), 10: np.zeros((512, 256, 4), np.uint8), 11: np.zeros((256, 256, 4), np.uint8)}
+    """The 11 monster portraits go in the 768 x 512 added to the right of MNet0800. The players keep the game's own
+    portraits (the user's choice, 2026-11-20); portraits\\<player>.png are kept for later but not packed."""
+    art = np.zeros((ART_H, ART_W, 4), np.uint8)
     sprites = []
-    in_widened = [('player_%02d.tga' % i, PLAYERS[i]) for i in range(4)] + [('monster_%s.tga' % n, n) for n in MONSTERS]
-    for k, (sprite, name) in enumerate(in_widened):
+    for k, name in enumerate(MONSTERS):
         x, y = (k % COLUMNS) * CELL_W, (k // COLUMNS) * CELL_H
-        sprites.append((sprite, name, 9, x, y, MNET0800_W + x, y))
-    for i in range(4, 11):  # the game's own boxes: 98 rows apart from the top
-        tex, row = (10, i - 4) if i < 9 else (11, i - 9)
-        sprites.append(('player_%02d.tga' % i, PLAYERS[i], tex, 0, row * 98, 0, row * 98))
-    for sprite, name, tex, x, y, _, _ in sprites:
         img = Image.open(os.path.join(HERE, 'portraits', name + '.png')).convert('RGBA')
         if img.size != (W, H):
             img = img.resize((W, H), Image.LANCZOS)
-        images[tex][y:y + H, x:x + W] = np.asarray(img)
-    data = bytearray(b'PDCP' + struct.pack('<3I', 1, len(images), len(sprites)))
-    for tex, art in images.items():
-        fmt, blocks = dxt.encode(art, alpha=True)
-        assert fmt == dxt.BC3 and len(blocks) == art.shape[0] * art.shape[1]
-        mode = 1 if tex == 9 else 0  # 1: added to the right of the game's texture; 0: replaces it
-        data += struct.pack('<I2HII', tex, art.shape[1], art.shape[0], mode, len(blocks)) + blocks
-        Image.fromarray(art).save(os.path.join(HERE, 'sheet-mnet%d.png' % (800 + (tex - 9) * 10)))
-    for sprite, name, tex, _, _, x, y in sprites:
+        art[y:y + H, x:x + W] = np.asarray(img)
+        sprites.append(('monster_%s.tga' % name, 9, MNET0800_W + x, y))
+    fmt, blocks = dxt.encode(art, alpha=True)
+    assert fmt == dxt.BC3 and len(blocks) == ART_W * ART_H
+    data = bytearray(b'PDCP' + struct.pack('<3I', 1, 1, len(sprites)))
+    data += struct.pack('<I2HII', 9, ART_W, ART_H, 1, len(blocks)) + blocks  # mode 1: added right of the game's texture
+    for sprite, tex, x, y in sprites:
         data += struct.pack('<32sI4H', sprite.encode(), tex, x, y, W, H)
     path = os.path.join(HERE, '..', '..', 'kit', 'pdnet', 'charsel-portraits.bin')
     with open(path, 'wb') as f:

@@ -3671,7 +3671,7 @@ namespace pdnet::gamepatches
             {
                 // The name line is "\a130c%s" with the character's name (Experimental 149, MojoJoey's log); the first
                 // character, Alpha, is drawn as "player". Any other name there is a character without a list entry.
-                if (strcmp(format, "\a130c%s") == 0)
+                if (strncmp(format, "\a130c%s", 7) == 0) // "\a130c%s\f" on the character select (the log shows the \f)
                 {
                     // Diagnostics (151: Alpha still showed the previous character's colours): every change of the name.
                     static std::string lastName;
@@ -3828,21 +3828,33 @@ namespace pdnet::gamepatches
             return reinterpret_cast<int64_t>(named[slot]);
         }
 
-        // The character select's portrait (see MakeMnetCopy): MNET sprite 38-48 drawn with menu command 95 while the
-        // name line (ColourNameText) shows a monster becomes that monster's own portrait (sprites 84 on). Every distinct
-        // sprite drawn there is logged once, to check.
+        // The character select's portraits (see MakeMnetCopy): while the name line (ColourNameText) shows a monster, each
+        // of MNET sprites 38-48 drawn with menu command 95 becomes its grid place's monster (sprites 84 on, kMonsterFor).
+        // Every distinct sprite drawn there is logged once, to check.
         // The Advanced list (2026-11-20, the user's request; first step): Y (controller) or the Y key on the character
         // select switches g_charselAdvanced. For now it shows: the heading ADVANCED and the button bar's Y entry
         // (\a5# is the Y icon: "\a5#Invite" in the lobby). The list itself (Freia (jump) / Freia (dodge), 12 colour
         // rows "<colour> - <jump>") needs the character list's script commands first: menu_debug=on logs them here.
         std::atomic<bool> g_charselAdvanced{ false };
+        std::atomic<bool> g_charselKeyY{ false }; // the Y key went down (HookedKey: the game's window delivers keys)
         constexpr uint32_t kPadY = 0x80; // Windows.Gaming.Input.GamepadButtons.Y
 
-        int MonsterPortrait(const std::string& name)
+        // The screen shows all 11 portraits at once, a grid of sprites 38-48 (player_00..10: player, Edgar, Freia,
+        // Meister, Chunky, Cuff Button, pH, Know, Tsubutaki, JD, Sammah); with Toggle Monsters on it draws the same
+        // sprites. Each grid place has its monster, as in the user's guide images (Freia -> Vestio, player -> Ommato, as
+        // the logs show): kMonsterFor[sprite - 38] = index in kMonsterPortraitNames.
+        constexpr int kMonsterFor[11] = { 1 /* player: Ommato */, 2 /* Edgar: Anthro */, 0 /* Freia: Vestio */, 3 /* Meister: Guard */,
+                                          4 /* Chunky: Andro */, 5 /* Cuff Button: Ceno */, 6 /* pH: Partheno */, 7 /* Know: Catoptro */,
+                                          8 /* Tsubutaki: Gyne */, 9 /* JD: Claustro */, 10 /* Sammah: Scoto */ };
+
+        // True while the name line shows a monster (Toggle Monsters on).
+        bool ShowingMonsters()
         {
-            for (int i = 0; i < static_cast<int>(std::size(kMonsterPortraitNames)); ++i)
-                if (_stricmp(name.c_str(), kMonsterPortraitNames[i]) == 0) return i < g_monsterPortraits ? i : -1;
-            return -1;
+            for (const char* name : kMonsterPortraitNames)
+                if (_stricmp(g_charselName.c_str(), name) == 0) return true;
+            for (const char* name : { "Mechano", "Euroto", "Hedono", "Germano", "Belono" })
+                if (_stricmp(g_charselName.c_str(), name) == 0) return true;
+            return false;
         }
 
         // The heading the screen had: Test Arsenal's (HookedAddItem), else none.
@@ -3867,13 +3879,23 @@ namespace pdnet::gamepatches
             }
             lastFrame = now;
             uint8_t keys[256];
-            bool down = AnyPadHolds(kPadY) || (KeysHeld(keys) && keys['Y']);
+            bool pad = AnyPadHolds(kPadY), key = g_charselKeyY.exchange(false) || (KeysHeld(keys) && keys['Y']);
+            bool down = pad || key;
+            static ULONGLONG nextBeat = 0; // diagnostics while the screen is open: every 2 s, up to 60 lines
+            static int beats = 0;
+            if (now >= nextBeat && beats < 60)
+            {
+                ++beats;
+                nextBeat = now + 2000;
+                Log(L"gamepatch: character select: name '%S', monsters %d, Y pad %d key %d, Advanced %d", g_charselName.c_str(), ShowingMonsters() ? 1 : 0,
+                    pad ? 1 : 0, key ? 1 : 0, g_charselAdvanced ? 1 : 0);
+            }
             if (down && !held)
             {
                 bool advanced = !g_charselAdvanced;
                 g_charselAdvanced = advanced;
+                Log(L"gamepatch: character select: %s list (%s)", advanced ? L"Advanced" : L"normal", pad ? L"pad Y" : L"Y key");
                 SetMenuHeading(advanced ? "ADVANCED" : CharacterSelectHeading());
-                Log(L"gamepatch: character select: %s list", advanced ? L"Advanced" : L"normal");
             }
             held = down;
         }
@@ -3884,9 +3906,9 @@ namespace pdnet::gamepatches
             static std::set<std::pair<int64_t, int64_t>> seen;
             if (seen.size() < 60 && seen.emplace(args[0], args[1]).second)
                 Log(L"gamepatch: character select draws sheet %lld sprite %lld at %lld,%lld (name line '%S')", args[0], args[1], args[2], args[3], g_charselName.c_str());
-            if (args[0] != 3 || args[1] < kPortraitFirst || args[1] > kPortraitLast) return g_drawSprite(args);
-            int monster = MonsterPortrait(g_charselName);
-            if (monster < 0) return g_drawSprite(args);
+            if (args[0] != 3 || args[1] < kPortraitFirst || args[1] > kPortraitLast || !ShowingMonsters()) return g_drawSprite(args);
+            int monster = kMonsterFor[args[1] - kPortraitFirst];
+            if (monster >= g_monsterPortraits) return g_drawSprite(args);
             int64_t own[8];
             memcpy(own, args, 5 * sizeof(int64_t));
             own[1] = kMonsterPortraitFirst + monster;
@@ -3896,8 +3918,17 @@ namespace pdnet::gamepatches
         // The button bar: "\a6#Select \a580r\a4#Toggle Monsters \a2#Confirm \a3#Back" ($MONSTER_HINT) gets the Y entry.
         bool CharacterSelectBar(const char* text, char* out, size_t size)
         {
+            if (CurrentMenu(MenuManager()) != kCharacterMenu) return false;
+            static std::set<std::string> told;
+            if (told.size() < 10 && told.insert(text).second)
+            {
+                std::string shown;
+                for (const char* p = text; *p; ++p) shown += *p == '\a' ? std::string("\\a") : std::string(1, *p);
+                Log(L"gamepatch: character select: button bar '%S'", shown.c_str());
+            }
+            if (strcmp(text, "$MONSTER_HINT") == 0) text = "\a6#Select \a580r\a4#Toggle Monsters \a2#Confirm \a3#Back"; // newstrings.txt monster_hint (English)
             const char* toggle = strstr(text, "\a4#Toggle Monsters ");
-            if (!toggle || CurrentMenu(MenuManager()) != kCharacterMenu) return false;
+            if (!toggle) return false;
             size_t cut = toggle - text + strlen("\a4#Toggle Monsters ");
             _snprintf_s(out, size, _TRUNCATE, "%.*s%s%s", static_cast<int>(cut), text, g_charselAdvanced ? "\a5#Normal " : "\a5#Advanced ", text + cut);
             return true;
@@ -4165,10 +4196,11 @@ namespace pdnet::gamepatches
         // (Toggle Monsters) only changes the names. When the game opens the file it gets a copy (LocalState\pdnet\MNet.alr,
         // made once per start) with kit\pdnet\charsel-portraits.bin put in (a file, not a folder: the updater copies only
         // files):
-        // - MNet0800 (texture 9, 256 x 512 DXT5) widened to 1024 x 512: the game's own quarter on the left, the new art
-        //   right of it; MNet0810 / MNet0820 (10, 11), which hold only portraits, replaced.
+        // - MNet0800 (texture 9, 256 x 512 DXT5) widened to 1024 x 512: the game's own quarter on the left, the monster
+        //   portraits right of it. The players keep the game's own portraits (the user, 2026-11-20). The file format can
+        //   also replace a whole texture or a game sprite's art (tools\charsel\make_portraits.py).
         // - The sprite list (the 0x10 record at 0x198: 12 texture infos of 0x14 at 0x338, 84 sprites of 0x3c at 0x428:
-        //   texture, name[32], u0 v0 u1 v1, w, h): player_NN point at the new art, the 11 monsters added as sprites 84-94.
+        //   texture, name[32], u0 v0 u1 v1, w, h): the 11 monsters added as sprites 84-94.
         //   The record and the sprite count (0x1a4) grow; the record's end marker moves into the padding before 0x2000.
         // - Texture table (0x34 + 0x1c each: +4 offset in the data, +0xe log2 width << 4 | mips) and the data size (0x14).
         // charsel_portraits=off leaves the game's file alone.
@@ -4649,6 +4681,7 @@ namespace pdnet::gamepatches
                 return;
             }
             if (key && key == GetConfig().partnerLockKey) PartnerPress(L"key");
+            if (key == 'Y' && CurrentMenu(MenuManager()) == kCharacterMenu) g_charselKeyY = true; // the Advanced list (CharacterSelectInput)
         }
 
         // KeyEventArgs: get_VirtualKey at vtable +0x30, get_KeyStatus at +0x38 (CorePhysicalKeyStatus: WasKeyDown at byte 10).
