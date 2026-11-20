@@ -4464,6 +4464,7 @@ namespace pdnet::gamepatches
         // - the carrier's charaset entry in memory gets the variant's movement skill, voice, exmot lengths and hitbox.
         //   The game unpacks charaset into 0xa0-byte entries at 0x1404c01e0 (FUN_14017d300; count at 0x1404c0174):
         //   +0 model folder, +0x18..+0x24 capsule height, width, hit radius, hit centre (file value / [0x1402f7f7c]),
+        //   +0x28..+0x68, +0x74, +0x78 movement stats (turning, speeds; taken from the animation set's character),
         //   +0x6C movement skill, +0x80 voice bank name, +0x88 six exmot lengths (ints).
         // variant_test=<character>,<colour>,<dodge>,<set> (pdnet.ini, numbers from variants.cpp's lists) plays your own
         // Test Arsenal character as that variant, before the menu exists.
@@ -4523,6 +4524,14 @@ namespace pdnet::gamepatches
             if (own) memcpy(e + 0x18, own + 0x18, 16);
             float minHeight = 180.0f / *reinterpret_cast<float*>(At(0x1402f7f7c));
             if (*reinterpret_cast<float*>(e + 0x18) < minHeight) *reinterpret_cast<float*>(e + 0x18) = minHeight;
+            // Movement stats (turning, speeds...: +0x28..+0x68, +0x74, +0x78, from the file's +0x14..+0x34, +0x38, +0x3A) from
+            // the animation set's character: test 2 (2026-11-20) kept the carrier's (Mechano: turning as slow as
+            // Catoptro's) with Gyne's animations; Gyne turns like Meister.
+            const uint8_t* stats = CharasetEntry(variants::AnimationSets()[pick.set].record);
+            for (int s = 0; s < 4; ++s)
+                if (g_variants[s].on && variants::AnimationSets()[pick.set].record == kCarriers[s].record) stats = g_variants[s].saved;
+            memcpy(e + 0x28, stats + 0x28, 0x6c - 0x28);
+            memcpy(e + 0x74, stats + 0x74, 8);
             *reinterpret_cast<int32_t*>(e + 0x6c) = variants::Dodges()[pick.dodge].move;
             *reinterpret_cast<const char**>(e + 0x80) = c.voice; // static strings in pdnet
             int16_t lengths[6];

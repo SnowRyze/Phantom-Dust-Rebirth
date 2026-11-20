@@ -101,6 +101,8 @@ Ideas, not planned (notes in the change log and reference notes):
 
 ## November 2026
 
+Variant test 2 (2026-11-20): works in Test Arsenal - Freia's model, Gyne's animations, Edgar's cartwheel, Freia's voice. But turning was as slow as Catoptro's: the carrier (Mechano) kept its own movement stats. The runtime charaset entry's +0x28..+0x68, +0x74, +0x78 (file +0x14..+0x34, +0x38, +0x3A) now come from the animation set's character (Gyne turns like Meister).
+
 Variant test 1 (2026-11-20): the variant was activated (slot 0, character 19 = Mechano's record) but no character file came through the CreateFile2 hook: PDUWP.exe formats the folder as "player\\%s" (lower case; VariantFile looked for "Player\\"), and MeldRelease_UWP.dll, the data layer, imports CreateFile2 itself. Now the search ignores case, Meld's import is hooked as well, and while a variant is on the first 40 file opens with "layer" or ".al" in the name are logged.
 
 Advanced list portraits (2026-11-20): the user's renders of Germano, Belono and the NPCs (tools\charsel\source\npcs), cut out and tinted like the monsters, are MNET sprites 96-110 (portrait_<name>.tga). MNet0800 is now widened to 2048 x 512 for them. The sprite record has room for 115 sprites before the data at 0x2000 (111 used).
