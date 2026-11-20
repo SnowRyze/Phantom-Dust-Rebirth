@@ -6,7 +6,7 @@
 Needs numpy and Pillow (py -m pip install numpy pillow).
 
 The character select draws a 134 x 96 portrait from MNet.alr (sprites player_00..player_10, MNET sprites 38-48). pdnet
-widens that file's texture MNet0800 (256 x 512 DXT5) to 1024 x 512 when the game opens it (the left quarter stays
+widens that file's texture MNet0800 (256 x 512 DXT5) to 2048 x 512 when the game opens it (the left quarter stays
 the game's own) to hold the 11 monster portraits; the players keep the game's own portraits. Out: kit\\pdnet\\charsel-portraits.bin:
 
     'PDCP' u32 version (1) u32 images u32 sprites
@@ -16,7 +16,7 @@ the game's own) to hold the 11 monster portraits; the players keep the game's ow
 
 A sprite whose name the game's file already has would take the new art in its place; any other name is a new sprite
 added after the game's 84 (monster_<name>.tga: the monster portraits the X toggle shows), in this file's order
-(MNET sprites 84-94), then blank.tga (95, transparent).
+(MNET sprites 84-94), then blank.tga (95, transparent), then portrait_<name>.tga (96 on, EXTRA).
 """
 import os
 import struct
@@ -31,7 +31,7 @@ sys.path.insert(0, HERE)
 import dxt  # noqa: E402  (from the phantom_dust_stage Blender add-on)
 
 W, H = 134, 96                 # the game's portrait size
-ART_W, ART_H = 768, 512        # the part of MNet0800 pdnet adds
+ART_W, ART_H = 1792, 512       # the part of MNet0800 pdnet adds (256 -> 2048 wide: 13 x 5 portraits)
 CELL_W, CELL_H = 136, 98       # portrait + 2 px gap (no filtering bleed between portraits)
 MNET0800_W = 256               # the game's width of MNet0800
 COLUMNS = ART_W // CELL_W
@@ -39,6 +39,10 @@ COLUMNS = ART_W // CELL_W
 # The game's order of player_NN (the character select's order); the file name in portraits\ for each.
 PLAYERS = ['player', 'edgar', 'freia', 'meister', 'chunky', 'cuff_button', 'ph', 'know', 'tsubutaki', 'jd', 'sammah']
 MONSTERS = ['vestio', 'ommato', 'anthro', 'guard', 'andro', 'ceno', 'partheno', 'catoptro', 'gyne', 'claustro', 'scoto']
+# The Advanced list's portraits for characters the game has none of (the user's renders, 2026-11-20; source\npcs, cut out
+# by hand-tuned flood fill, see the commit): sprites portrait_<name>.tga after blank.tga.
+EXTRA = ['germano', 'belono', 'n03', 'spokesman', 'ubiquitous', 'kajikawa', 'tetsuya', 'arthur', 'reindeer', 'mac',
+         'baroness', 'mikan', 'ai', 'maniac', 'kei']
 
 # Cards in the two guide images (source\characters.png, source\monsters.png, 1000 x 559): left and top of each card's
 # picture, in reading order. The crop leaves out the movement icon (bottom left) and the name bar (bottom).
@@ -122,17 +126,17 @@ def pack():
     art = np.zeros((ART_H, ART_W, 4), np.uint8)
     sprites = []
     imgs = []
-    for name in MONSTERS:
+    for name in MONSTERS + EXTRA:
         img = Image.open(os.path.join(HERE, 'portraits', name + '.png')).convert('RGBA')
         imgs.append(img if img.size == (W, H) else img.resize((W, H), Image.LANCZOS))
     imgs = teal_tint(imgs)
-    for k, (name, img) in enumerate(zip(MONSTERS, imgs)):
+    cells = [('monster_%s.tga' % n, img) for n, img in zip(MONSTERS, imgs)] + [('blank.tga', None)] + \
+            [('portrait_%s.tga' % n, img) for n, img in zip(EXTRA, imgs[len(MONSTERS):])]
+    for k, (sprite, img) in enumerate(cells):
         x, y = (k % COLUMNS) * CELL_W, (k // COLUMNS) * CELL_H
-        art[y:y + H, x:x + W] = np.asarray(img)
-        sprites.append(('monster_%s.tga' % name, 9, MNET0800_W + x, y))
-    # an empty (transparent) portrait-sized sprite after the monsters, for places the Advanced list leaves empty
-    k = len(MONSTERS)
-    sprites.append(('blank.tga', 9, MNET0800_W + (k % COLUMNS) * CELL_W, (k // COLUMNS) * CELL_H))
+        if img is not None:  # blank.tga: an empty (transparent) cell, for places the Advanced list leaves empty
+            art[y:y + H, x:x + W] = np.asarray(img)
+        sprites.append((sprite, 9, MNET0800_W + x, y))
     fmt, blocks = dxt.encode(art, alpha=True)
     assert fmt == dxt.BC3 and len(blocks) == ART_W * ART_H
     data = bytearray(b'PDCP' + struct.pack('<3I', 1, 1, len(sprites)))

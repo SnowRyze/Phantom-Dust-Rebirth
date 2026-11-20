@@ -4426,7 +4426,7 @@ namespace pdnet::gamepatches
                 if (k == kMnetGameSprites)
                 {
                     k = kMnetGameSprites + added++;
-                    if (kSprites + (k + 1) * kSprite + 8 > kData) return -1;
+                    if (kSprites + (k + 1) * kSprite + 8 > kData) return -1; // room for 115 sprites in all (111 used, 2026-11-20)
                     for (uint32_t b = kSprites + k * kSprite + 8; b < kSprites + (k + 1) * kSprite + 8; ++b)
                         if (d[b]) return -1; // only padding may be there
                 }
@@ -4638,7 +4638,7 @@ namespace pdnet::gamepatches
                     const char* why = "";
                     int added = MakeMnetCopy(name, path, why);
                     if (added >= 0) copy = path, g_monsterPortraits = added;
-                    if (added >= 0) Log(L"gamepatch: character select portraits: new art, %d monster portraits (MNET sprites %d-%d)", added, kMonsterPortraitFirst, kMonsterPortraitFirst + added - 1);
+                    if (added >= 0) Log(L"gamepatch: character select portraits: %d sprites added (MNET sprites %d-%d: monsters, blank, Advanced list portraits)", added, kMonsterPortraitFirst, kMonsterPortraitFirst + added - 1);
                     else Log(L"gamepatch: character select portraits left as they are (%S)", why);
                 });
                 if (!copy.empty()) return g_createFile2(copy.c_str(), access, share, disposition, params);

@@ -101,6 +101,8 @@ Ideas, not planned (notes in the change log and reference notes):
 
 ## November 2026
 
+Advanced list portraits (2026-11-20): the user's renders of Germano, Belono and the NPCs (tools\charsel\source\npcs), cut out and tinted like the monsters, are MNET sprites 96-110 (portrait_<name>.tga). MNet0800 is now widened to 2048 x 512 for them. The sprite record has room for 115 sprites before the data at 0x2000 (111 used).
+
 Character variants, back end (2026-11-20, eradication0's design; not yet seen in game; docs/CHARACTER_SELECT.md). variants.cpp builds a variant's battle file and exmots from the game's own files (model + dodge motions 33-39 + animation set), checked off-line against the Blender add-on's retargeting. A variant plays as a carrier record per lobby slot (Mechano, Euroto, Hedono, Belono): HookedCreateFile2 hands over the built files for the carrier's Player folder, and the carrier's runtime charaset entry (0x1404c01e0 + record * 0xa0; +0x6C movement, +0x80 voice, +0x88 exmot lengths, +0x18 hitbox; FUN_14017d300 unpacks the file into it) gets the variant's values. First test: variant_test=character,colour,dodge,set in pdnet.ini plays your Test Arsenal character as that variant (slot 0, Mechano's record).
 
 Character select monster portraits in the players' colours (2026-11-20, the user's request after test 5, where every switch worked). make_portraits.py's teal_tint matches each monster's brightness spread to the player portraits' and colours it with the players' colour for that brightness (both from portraits\\*.png). Only charsel-portraits.bin changed.
