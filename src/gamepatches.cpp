@@ -3974,8 +3974,11 @@ namespace pdnet::gamepatches
         // its cursor frame / name plate (67, 71, 72) get the blank sprite's handle (ShowGrid), and their command 95 draws
         // are skipped. Each entry has a sprite of its own (one object on screen per sprite): players their player_NN,
         // the others portrait_<name> (96-110) and portrait_<name>2 (111-114) for the second models.
-        constexpr int kGridColumns = 6, kGridRows = 5, kGridX = 68, kGridY = 66, kGridPitchX = 86, kGridPitchY = 62;
-        constexpr float kGridScale = 0.55f;
+        // Test 2: no gaps between portraits, as big as fits above the game's "Choose the character" line (y ~ 369):
+        // 66 % = 88 x 63 per entry, 528 x 315 centred.
+        constexpr float kGridScale = 0.66f;
+        constexpr int kGridColumns = 6, kGridRows = 5, kGridPitchX = static_cast<int>(134 * kGridScale), kGridPitchY = static_cast<int>(96 * kGridScale);
+        constexpr int kGridX = (640 - kGridColumns * kGridPitchX) / 2, kGridY = 42, kNameY = 404; // the name under the game's line
         constexpr int kFirstFrameSprite = 66, kNamePlateRight = 72;
         std::atomic<int> g_gridCursor{ 0 };
 
@@ -4104,10 +4107,7 @@ namespace pdnet::gamepatches
                 Log(L"gamepatch: character select draws sheet %lld sprite %lld at %lld,%lld (name line '%S')", args[0], args[1], args[2], args[3], g_charselName.c_str());
             if (g_charselAdvanced && args[0] == 3 &&
                 ((args[1] >= kPortraitFirst && args[1] <= kPortraitLast) || (args[1] >= kFirstFrameSprite && args[1] <= kNamePlateRight)))
-            {
-                if (args[1] == 40) DrawAdvancedGrid(); // the first portrait the game draws each frame
-                return 1;
-            }
+                return 1; // pdnet's grid is drawn after the screen's window (DrawCharselPopup)
             return g_drawSprite(args);
         }
 
@@ -4211,6 +4211,9 @@ namespace pdnet::gamepatches
         {
             int64_t manager = MenuManager();
             if (!g_charselAdvanced || !args || args[0] != 12 || !manager || !g_drawWindow) return;
+            // Test 2: drawn with the portraits (command 95 of sprite 40) the grid sometimes lay under the screen's scanlines,
+            // sometimes over them. After window 12 it should always be over them.
+            DrawAdvancedGrid();
             auto text = [](int x, int y, const char* s) { int64_t a[8] = { x, y, reinterpret_cast<int64_t>(s) }; reinterpret_cast<MenuCommandFn>(At(0x140207870))(a); };
             static char name[64];
             int cursor = g_gridCursor;
@@ -4218,7 +4221,7 @@ namespace pdnet::gamepatches
             {
                 *reinterpret_cast<int64_t*>(manager + 0x10408) = reinterpret_cast<int64_t>(WindowAt(manager, 12));
                 sprintf_s(name, "\a640c%s", variants::Characters()[cursor].name);
-                text(0, kGridY + kGridRows * kGridPitchY + 2, name);
+                text(0, kNameY, name);
                 *reinterpret_cast<int64_t*>(manager + 0x10408) = 0;
             }
             if (g_popup == kNoPopup) return;
@@ -4313,7 +4316,7 @@ namespace pdnet::gamepatches
                     OpenCharselPopup(kColourStep);
                     Log(L"gamepatch: Advanced list: %S chosen", variants::Characters()[g_gridCursor].name);
                 }
-                return buttons & ~0x3030ll;
+                return 0; // the script gets nothing (test 2: its hidden cursor, and the name plate with it, followed the D-pad)
             }
             if (press[0]) { g_popupRow = (g_popupRow + PopupRows() - 1) % PopupRows(); PopupSound(37); }
             if (press[1]) { g_popupRow = (g_popupRow + 1) % PopupRows(); PopupSound(37); }
@@ -4334,7 +4337,7 @@ namespace pdnet::gamepatches
                     FinishAdvancedPick();
                 }
             }
-            return buttons & ~0x3030ll; // the script gets nothing while the pop-up is open
+            return 0; // the script gets nothing while the pop-up is open
         }
 
         // The game's window input (FUN_140248b50, per window each frame): reads the pads' pressed / held / repeat words
@@ -4374,12 +4377,22 @@ namespace pdnet::gamepatches
             return g_storePick(args);
         }
 
+        // Menu command 29 (0x140207990 -> FUN_14029bb60: a filled rectangle x, y, w, h, colour, drawn at once): the
+        // character select's red name plate behind the name, sized by the name's width (command 31). Not on the Advanced list.
+        MenuCommandFn g_fillRect = nullptr;
+        int64_t HookedFillRect(int64_t* args)
+        {
+            if (g_charselAdvanced && CurrentMenu(MenuManager()) == kCharacterMenu) return 0;
+            return g_fillRect(args);
+        }
+
         void CharacterSelectHooks()
         {
             if (!GetConfig().charselPortraits) return;
             bool sprite = g_drawSprite || WrapCommand<MenuCommandFn>(0x1403eefe0 + 95 * 8, 0x1402077a0, &HookedDrawSprite, g_drawSprite, L"character select portraits");
             bool text = g_drawText || WrapCommand<MenuCommandFn>(0x1403eefe0 + 23 * 8, 0x140207840, &HookedDrawText, g_drawText, L"character select names");
             bool store = WrapCommand<PickFn>(0x1403f0090 + 571 * 8, 0x140213b80, &HookedStorePick, g_storePick, L"Advanced list pick");
+            if (!g_fillRect) WrapCommand<MenuCommandFn>(0x1403eefe0 + 29 * 8, 0x140207990, &HookedFillRect, g_fillRect, L"character select name plate");
             // FUN_140248b50 starts push rbx / sub rsp,40h / mov rbx,rcx (9 position-independent bytes)
             static const std::vector<uint8_t> kInputStart = { 0x40, 0x53, 0x48, 0x83, 0xEC, 0x40, 0x48, 0x8B, 0xD9 };
             if (!g_windowInput)

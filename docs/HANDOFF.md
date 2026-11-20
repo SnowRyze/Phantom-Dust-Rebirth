@@ -101,6 +101,11 @@ Ideas, not planned (notes in the change log and reference notes):
 
 ## November 2026
 
+Advanced list, after menu test 3 (2026-11-21; not yet seen in game). The red bar still moved: it is menu command 29 (FUN_14029bb60, a filled rectangle drawn at once: the name plate, sized by the name's width from command 31) and the script's hidden cursor still followed the D-pad through HookedButtons. The portraits lay sometimes under, sometimes over the screen's scanlines; the gaps were too big; the name overlapped the game's "Choose the character" line. Now:
+- Command 29 is skipped on the Advanced list (HookedFillRect); the script gets no buttons at all there.
+- The grid is drawn after window 12 (DrawCharselPopup), to be over the scanlines every frame.
+- No gaps: 66 % (88 x 63 per entry), 528 x 315 centred from y 42; the name at y 404, under the game's line.
+
 Advanced list, after menu test 2 (2026-11-21; not yet seen in game). The grid and its cursor were right, but a white card and red bar at the old portrait size followed the game's hidden cursor, the pop-ups had no background, and up / down in a pop-up still moved the game's cursor. Now:
 - The game's cursor frames and name plate, sprites 66-72, get the blank handle on the Advanced list (was 67, 71, 72 only).
 - The pop-up window gets empty lines (menu command 40) like the Settings' save question, which draws its background.
