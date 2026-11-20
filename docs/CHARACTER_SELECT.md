@@ -102,7 +102,39 @@ players' blue-green (teal_tint in make_portraits.py).
    characters, press X twice, Y twice, pick one, then send the log (menu-debug lines for menu 46 show which commands
    build the list and handle input).
 
-## Plan for the Advanced list and movement variants
+## The Advanced list (the user's design, 2026-11-20)
+
+Entries (30): the 11 characters; NPCs Spokesman, Mikan, Ai, Kei, Kajikawa, 03, Maniac, Arthur, Mac 1, Mac 2,
+Baroness 1, Baroness 2, Tetsuya, Reindeer 1, Reindeer 2, Ubiquitous 1, Ubiquitous 2 (the "1 / 2" are an NPC's two
+models; both playable for now); extra monsters Germano, Belono. Portrait: the player's as a placeholder where there is none.
+
+After the pick, three menus in a row:
+1. **Colour**: the character's colour names (one-model characters: "Color 1").
+2. **Dodge type** (motions 33-39, charaset +0x36): Jumper (Meister, 750), Cartwheeler (Edgar, 751), Roller (JD, 751).
+3. **Animation set** (every other motion and the exmots): Jumper (player), Cartwheeler (Edgar), Roller (JD),
+   Female Jumper (Freia), Gyne, Guard (to be tested).
+
+Voices: the character's own; Mikan, Mac 1 / 2 Freia's; Ai, Baroness 1 / 2 Tsubutaki's; the other (male) NPCs a fixed
+pick among the playable men's voices (variants.cpp); monsters their own.
+
+### Build on pick (variants.cpp)
+
+Nothing is written to the game folder. A variant plays as a *carrier*: a charaset record the normal lists don't
+offer, one per lobby slot (Mechano, Euroto, Hedono, Belono). For an active slot pdnet
+- builds the carrier's files when the game opens them: the model file of the colour (Player\<id>\<id>N.alr, or
+  the NPC's model from Event\*.mk) with motions 33-39 from the dodge's file and the others from the set's file,
+  each moved onto the model's skeleton (joints matched like the Blender add-on; rotations copied, translations
+  rest + (key - source rest) x length ratio); exmot0..5 from the set the same way. Kept in LocalState\pdnet\variants.
+- sets the carrier's charaset entry in memory (0x1404c01e0 + record x 0xa0): movement skill, voice, exmot lengths,
+  hitbox (the character's own, height at least 18).
+
+Checked off-line (2026-11-20): Freia + Cartwheeler + Gyne built by the C++ code gives, for every keyed joint and
+frame, the same poses as the add-on's bake_clip (largest difference 4e-7); the model runs and data are the model's own.
+
+Online: the match setup carries `colour << 16 | carrier record`; each PC needs the pick of each slot (a pdnet P2P
+message, still to do) to build the same files.
+
+## Plan for the Advanced list and movement variants (first notes)
 
 **Menu.** The list is the game's own screen with pdnet in front of it while `g_charselAdvanced` is on: the names,
 portraits and colour rows are swapped as they are drawn (like ColourNameText), the cursor is limited to the variant

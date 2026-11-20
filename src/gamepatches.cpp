@@ -9,6 +9,7 @@
 #include "gamepads.h"
 #include "labtests.h"
 #include "film.h"
+#include "variants.h"
 #include "p2p.h"
 #include <fstream>
 #include <winrt/Windows.ApplicationModel.Core.h>
@@ -4454,9 +4455,167 @@ namespace pdnet::gamepatches
             return ok ? added : -1;
         }
 
+
+        // Character variants (variants.h; the Advanced list, docs/CHARACTER_SELECT.md). A picked variant plays as a
+        // "carrier": a charaset record the normal lists don't offer, one per lobby slot, so every PC can tell whose
+        // files are whose (kCarriers). While a slot's variant is active:
+        // - the game's files for the carrier (Player\<folder>\<folder><colour>.alr, exmot0..5.ala) are built by
+        //   variants::BuildModel / BuildExmot from the game's own files and handed over instead (LocalState\pdnet\variants);
+        // - the carrier's charaset entry in memory gets the variant's movement skill, voice, exmot lengths and hitbox.
+        //   The game unpacks charaset into 0xa0-byte entries at 0x1404c01e0 (FUN_14017d300; count at 0x1404c0174):
+        //   +0 model folder, +0x18..+0x24 capsule height, width, hit radius, hit centre (file value / [0x1402f7f7c]),
+        //   +0x6C movement skill, +0x80 voice bank name, +0x88 six exmot lengths (ints).
+        // variant_test=<character>,<colour>,<dodge>,<set> (pdnet.ini, numbers from variants.cpp's lists) plays your own
+        // Test Arsenal character as that variant, before the menu exists.
+        struct Carrier { int record; const char* folder; };
+        constexpr Carrier kCarriers[4] = { { 19, "enm04a" }, { 21, "enm06a" }, { 22, "enm07a" }, { 26, "enm15a" } }; // Mechano, Euroto, Hedono, Belono
+        struct ActiveVariant { bool on = false; variants::Pick pick; uint8_t saved[0xa0]; };
+        ActiveVariant g_variants[4];
+        std::mutex g_variantLock;
+        std::wstring g_dataPrefix = L"Assets\\Data\\"; // how the game names its data folder (taken from its own file opens)
+
+        uint8_t* CharasetEntry(int record) { return At(0x1404c01e0) + static_cast<size_t>(record) * 0xa0; }
+
+        std::vector<uint8_t> ReadGameFile(const std::string& relative)
+        {
+            std::vector<uint8_t> data;
+            ReadWholeFile(g_dataPrefix + std::wstring(relative.begin(), relative.end()), data, 64 << 20);
+            return data;
+        }
+
+        bool CarrierFolderIs(int slot)
+        {
+            int count = *reinterpret_cast<int32_t*>(At(0x1404c0174));
+            const char* folder = *reinterpret_cast<const char**>(CharasetEntry(kCarriers[slot].record));
+            char text[16];
+            return kCarriers[slot].record < count && folder && CopyString(folder, text, sizeof(text)) && strcmp(text, kCarriers[slot].folder) == 0;
+        }
+
+        void ClearVariant(int slot)
+        {
+            std::lock_guard guard(g_variantLock);
+            if (!g_variants[slot].on) return;
+            memcpy(CharasetEntry(kCarriers[slot].record), g_variants[slot].saved, 0xa0);
+            g_variants[slot].on = false;
+            Log(L"variants: slot %d back to the game's %S", slot, kCarriers[slot].folder);
+        }
+
+        // The game value for the match setup (colour << 16 | record), or -1.
+        int ActivateVariant(int slot, const variants::Pick& pick)
+        {
+            const auto& list = variants::Characters();
+            if (slot < 0 || slot >= 4 || pick.character < 0 || pick.character >= static_cast<int>(list.size())) return -1;
+            if (!CarrierFolderIs(slot))
+            {
+                Log(L"variants: carrier record %d isn't %S - variants off", kCarriers[slot].record, kCarriers[slot].folder);
+                return -1;
+            }
+            ClearVariant(slot);
+            std::lock_guard guard(g_variantLock);
+            ActiveVariant& v = g_variants[slot];
+            uint8_t* e = CharasetEntry(kCarriers[slot].record);
+            memcpy(v.saved, e, 0xa0);
+            const variants::Character& c = list[pick.character];
+            // hitbox: the character's own (its record, or the saved original if that record is a carrier now), height at least 18
+            const uint8_t* own = c.record >= 0 ? CharasetEntry(c.record) : nullptr;
+            for (int s = 0; s < 4; ++s)
+                if (g_variants[s].on && c.record == kCarriers[s].record) own = g_variants[s].saved;
+            if (own) memcpy(e + 0x18, own + 0x18, 16);
+            float minHeight = 180.0f / *reinterpret_cast<float*>(At(0x1402f7f7c));
+            if (*reinterpret_cast<float*>(e + 0x18) < minHeight) *reinterpret_cast<float*>(e + 0x18) = minHeight;
+            *reinterpret_cast<int32_t*>(e + 0x6c) = variants::Dodges()[pick.dodge].move;
+            *reinterpret_cast<const char**>(e + 0x80) = c.voice; // static strings in pdnet
+            int16_t lengths[6];
+            variants::SetLengths(pick, lengths);
+            for (int k = 0; k < 6; ++k) reinterpret_cast<int32_t*>(e + 0x88)[k] = lengths[k];
+            v.pick = pick;
+            v.on = true;
+            Log(L"variants: slot %d plays %S (%S, %S dodge, %S set) as %S, movement %d, voice %S", slot, c.name,
+                c.colours[pick.colour < variants::ColourCount(c) ? pick.colour : 0], variants::Dodges()[pick.dodge].name,
+                variants::AnimationSets()[pick.set].name, kCarriers[slot].folder, variants::Dodges()[pick.dodge].move, c.voice);
+            return (pick.colour & 0xffff) << 16 | kCarriers[slot].record;
+        }
+
+        // A carrier file the game opens: built for the active variant (cached by pick), or empty.
+        std::wstring VariantFile(LPCWSTR name)
+        {
+            std::wstring path(name);
+            for (wchar_t& ch : path) if (ch == L'/') ch = L'\\';
+            size_t player = 0;
+            for (size_t at = path.find(L"Player\\"); at != std::wstring::npos; at = path.find(L"Player\\", at + 1)) player = at;
+            if (player == 0 && path.compare(0, 7, L"Player\\") != 0) return L"";
+            std::wstring rest = path.substr(player + 7); // <folder>\<file>
+            size_t slash = rest.find(L'\\');
+            if (slash == std::wstring::npos) return L"";
+            std::string folder(rest.begin(), rest.begin() + slash), file(rest.begin() + slash + 1, rest.end());
+            for (char& ch : file) ch = static_cast<char>(tolower(static_cast<unsigned char>(ch)));
+            for (int slot = 0; slot < 4; ++slot)
+            {
+                variants::Pick pick;
+                {
+                    std::lock_guard guard(g_variantLock);
+                    if (!g_variants[slot].on || _stricmp(folder.c_str(), kCarriers[slot].folder) != 0) continue;
+                    pick = g_variants[slot].pick;
+                }
+                g_dataPrefix = std::wstring(name, name + player); // up to Player\ (the game's own spelling)
+                std::string key = std::to_string(pick.character) + "-" + std::to_string(pick.dodge) + "-" + std::to_string(pick.set);
+                std::string out, error;
+                std::vector<uint8_t> bytes;
+                ULONGLONG started = GetTickCount64();
+                if (file.size() == 10 && file.compare(0, 5, "exmot") == 0 && file.compare(6, 4, ".ala") == 0 && isdigit(static_cast<unsigned char>(file[5])))
+                {
+                    out = key + "-exmot" + file.substr(5, 1) + ".ala";
+                    bytes = variants::BuildExmot(pick, file[5] - '0', ReadGameFile, error);
+                }
+                else if (file.size() == strlen(kCarriers[slot].folder) + 5 && file.compare(file.size() - 4, 4, ".alr") == 0 && isdigit(static_cast<unsigned char>(file[file.size() - 5])))
+                {
+                    out = key + "-" + std::to_string(pick.colour) + ".alr";
+                    bytes = variants::BuildModel(pick, ReadGameFile, error);
+                }
+                else continue;
+                if (bytes.empty())
+                {
+                    Log(L"variants: %s left as the game's (%S)", name, error.c_str());
+                    return L"";
+                }
+                std::wstring dir = LocalStatePath() + L"\\pdnet\\variants";
+                CreateDirectoryW((LocalStatePath() + L"\\pdnet").c_str(), nullptr);
+                CreateDirectoryW(dir.c_str(), nullptr);
+                std::wstring target = dir + L"\\" + std::wstring(out.begin(), out.end());
+                HANDLE f = g_createFile2(target.c_str(), GENERIC_WRITE, 0, CREATE_ALWAYS, nullptr);
+                if (f == INVALID_HANDLE_VALUE) return L"";
+                DWORD written = 0;
+                BOOL ok = WriteFile(f, bytes.data(), static_cast<DWORD>(bytes.size()), &written, nullptr) && written == bytes.size();
+                CloseHandle(f);
+                variants::Stats st = variants::LastStats();
+                Log(L"variants: %s -> %s (%u bytes, %llu ms; %d runs, %d tracks, %d dropped, %d joints)", name, target.c_str(), static_cast<unsigned>(bytes.size()),
+                    GetTickCount64() - started, st.runs, st.tracks, st.dropped, st.joints);
+                return ok ? target : L"";
+            }
+            return L"";
+        }
+
+        // variant_test=c,colour,dodge,set (numbers)
+        bool VariantTestPick(variants::Pick& pick)
+        {
+            const std::string& text = GetConfig().variantTest;
+            if (text.empty()) return false;
+            int v[4] = { -1, 0, 0, 0 };
+            if (sscanf_s(text.c_str(), "%d,%d,%d,%d", &v[0], &v[1], &v[2], &v[3]) < 1) return false;
+            pick = { v[0], v[1], v[2], v[3] };
+            return true;
+        }
+
         HANDLE WINAPI HookedCreateFile2(LPCWSTR name, DWORD access, DWORD share, DWORD disposition, LPCREATEFILE2_EXTENDED_PARAMETERS params)
         {
             size_t n = name ? wcslen(name) : 0;
+            bool anyVariant = false;
+            for (const ActiveVariant& v : g_variants) anyVariant = anyVariant || v.on;
+            if (anyVariant && n > 12 && (access & GENERIC_READ) && !(access & GENERIC_WRITE))
+            {
+                std::wstring built = VariantFile(name);
+                if (!built.empty()) return g_createFile2(built.c_str(), access, share, disposition, params);
+            }
             if (n > 16 && _wcsicmp(name + n - 15, L"menu\\FDLogo.alr") == 0 && (name[n - 16] == L'/' || name[n - 16] == L'\\')) // "Assets/Data/menu\FDLogo.alr"
             {
                 static std::once_flag once;
@@ -4696,6 +4855,12 @@ namespace pdnet::gamepatches
             {
                 if (g_testStage >= 0) { stage = g_testStage; layout = g_testLayout; }
                 if (g_testCharacter >= 0) *reinterpret_cast<int32_t*>(setup + 8) = g_testCharacter;
+                variants::Pick test;
+                if (VariantTestPick(test))
+                {
+                    int value = ActivateVariant(0, test);
+                    if (value >= 0) *reinterpret_cast<int32_t*>(setup + 8) = value;
+                }
                 if (g_testOpponentCharacter >= 0) *reinterpret_cast<int32_t*>(setup + 0x48 + 8) = g_testOpponentCharacter;
                 Log(L"gamepatch: Test Arsenal: battle on map %d, layout %u, character %d, opponent's %d", stage, layout, *reinterpret_cast<int32_t*>(setup + 8), *reinterpret_cast<int32_t*>(setup + 0x48 + 8));
                 // A film with 3 or 4 players: the setup has 4 entries of 0x48 (FUN_140128990 copies them; a player is
