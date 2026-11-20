@@ -2462,9 +2462,13 @@ namespace pdnet::gamepatches
             *reinterpret_cast<int16_t*>(manager + 0x10402) = current;
         }
 
+        int64_t CharacterSelectButtons(int64_t buttons); // (below)
+        void DrawCharselPopup(int64_t* args);
+
         int64_t HookedDrawWindow(int64_t* args)
         {
             int64_t result = g_drawWindow(args);
+            if (CurrentMenu(MenuManager()) == kCharacterMenu) { DrawCharselPopup(args); return result; }
             int64_t manager = MenuManager();
             if (!args || !g_confirmingSave || !InSettings() || !manager) return result;
             int16_t* list = WindowAt(manager, static_cast<int>(args[0]));
@@ -2489,6 +2493,7 @@ namespace pdnet::gamepatches
         int64_t HookedButtons(int64_t* args)
         {
             int64_t buttons = g_buttons(args);
+            if ((!args || args[0] == 0) && CurrentMenu(MenuManager()) == kCharacterMenu) return CharacterSelectButtons(buttons);
             if (InSettings() && g_theatre && (!args || args[0] == 0))
             {
                 static bool held[2] = {};
@@ -3855,6 +3860,9 @@ namespace pdnet::gamepatches
         // and the test list: Freia (jump) / Freia (dodge) in two grid places (ShowGrid, AdvancedName). Still to come: the
         // 12 colour rows "<colour> - <jump>", and the pick itself (the variant characters don't exist yet).
         std::atomic<bool> g_charselAdvanced{ false };
+        enum PopupStep { kNoPopup, kColourStep, kDodgeStep, kSetStep }; // the Advanced list's pop-ups (CharacterSelectButtons)
+        std::atomic<int> g_popup{ kNoPopup };
+        std::atomic<int> g_advancedPage{ 0 };
         std::atomic<bool> g_charselKeyY{ false }; // the Y key went down (HookedKey: the game's window delivers keys)
         constexpr uint32_t kPadY = 0x20; // Windows.Gaming.Input.GamepadButtons.Y (A 4, B 8, X 0x10, Y 0x20; 0x80 is D-pad down)
 
@@ -3909,12 +3917,14 @@ namespace pdnet::gamepatches
                 Log(L"gamepatch: character select: name '%S', monsters %d, Y pad %d key %d, Advanced %d", g_charselName.c_str(), ShowingMonsters() ? 1 : 0,
                     pad ? 1 : 0, key ? 1 : 0, g_charselAdvanced ? 1 : 0);
             }
-            if (down && !held)
+            if (down && !held && g_popup == kNoPopup)
             {
                 bool advanced = !g_charselAdvanced;
                 g_charselAdvanced = advanced;
                 Log(L"gamepatch: character select: %s list (%s)", advanced ? L"Advanced" : L"normal", pad ? L"pad Y" : L"Y key");
-                SetMenuHeading(advanced ? "ADVANCED" : CharacterSelectHeading());
+                g_advancedPage = 0;
+                g_popup = kNoPopup;
+                SetMenuHeading(advanced ? "ADVANCED 1/3" : CharacterSelectHeading());
             }
             held = down;
         }
@@ -3949,15 +3959,59 @@ namespace pdnet::gamepatches
             return loaded && list ? reinterpret_cast<uint32_t*>(list) : nullptr;
         }
 
-        // The Advanced list's test (the user, 2026-11-20): two places, Freia (jump) left and Freia (dodge) in the middle
-        // of the top row; the other places empty (a transparent spot of the monster art).
-        constexpr int kAdvancedJumpPlace = 40, kAdvancedDodgePlace = 38; // the sprites drawn at those places (Freia's, player's)
+        // The Advanced list (the user's design, 2026-11-20; docs/CHARACTER_SELECT.md): variants::Characters() in pages of
+        // the grid's 11 places, in reading order (top row left to right, then the rows below); LB / RB or Q / E turn the
+        // page. A place shows its entry's portrait (players: the game's own; the others: charsel-portraits.bin's
+        // portrait_<name>, MNET sprites 96-110) and the name line its name. Places past the list's end are empty.
+        constexpr int kPlacesInReadingOrder[11] = { 40, 38, 39, 41, 42, 43, 44, 45, 46, 47, 48 };
+
+        int AdvancedPages() { return static_cast<int>((variants::Characters().size() + 10) / 11); }
+
+        // The grid place (sprite 38-48) of the name the game draws there (a player's or, with Toggle Monsters, a monster's).
+        int PlaceOfName(const std::string& shown)
+        {
+            static const char* kPlayers[11] = { "player", "Edgar", "Freia", "Meister", "Chunky", "Cuff Button", "pH", "Know", "Tsubutaki", "JD", "Sammah" };
+            for (int k = 0; k < 11; ++k)
+            {
+                if (_stricmp(shown.c_str(), kPlayers[k]) == 0) return kPortraitFirst + k;
+                if (_stricmp(shown.c_str(), kMonsterPortraitNames[kMonsterFor[k]]) == 0) return kPortraitFirst + k;
+            }
+            return -1;
+        }
+
+        // The Advanced list's entry at a place on the current page, or -1.
+        int EntryAt(int place)
+        {
+            for (int r = 0; r < 11; ++r)
+                if (kPlacesInReadingOrder[r] == place)
+                {
+                    int entry = g_advancedPage * 11 + r;
+                    return entry < static_cast<int>(variants::Characters().size()) ? entry : -1;
+                }
+            return -1;
+        }
+
+        // An entry's portrait sprite: a player's own (player_00..10 in the game's character order), else portrait_<name>.
+        int EntrySprite(int entry)
+        {
+            static const char* kPlayers[11] = { "player", "Edgar", "Freia", "Meister", "Chunky", "Cuff Button", "pH", "Know", "Tsubutaki", "JD", "Sammah" };
+            // charsel-portraits.bin's EXTRA order (tools\charsel\make_portraits.py), sprites 96 on
+            static const char* kExtra[15] = { "Germano", "Belono", "03", "Spokesman", "Ubiquitous", "Kajikawa", "Tetsuya", "Arthur",
+                                              "Reindeer", "Mac", "Baroness", "Mikan", "Ai", "Maniac", "Kei" };
+            if (entry < 0 || entry >= static_cast<int>(variants::Characters().size())) return kBlankSprite;
+            std::string name = variants::Characters()[entry].name;
+            for (int k = 0; k < 11; ++k) if (_stricmp(name.c_str(), kPlayers[k]) == 0) return kPortraitFirst + k;
+            if (size_t space = name.find(" 1"); space != std::string::npos && space + 2 == name.size()) name.resize(space); // "Mac 1" -> Mac
+            if (size_t space = name.find(" 2"); space != std::string::npos && space + 2 == name.size()) name.resize(space);
+            for (int k = 0; k < 15; ++k)
+                if (_stricmp(name.c_str(), kExtra[k]) == 0 && kBlankSprite + 1 + k < kMonsterPortraitFirst + g_monsterPortraits) return kBlankSprite + 1 + k;
+            return kPortraitFirst; // placeholder: the player's portrait
+        }
+
         const char* AdvancedName(const std::string& shown)
         {
-            // The place under the cursor, by the name the game draws there (normal or Toggle Monsters).
-            if (_stricmp(shown.c_str(), "Freia") == 0 || _stricmp(shown.c_str(), "Vestio") == 0) return "Freia (jump)";
-            if (_stricmp(shown.c_str(), "player") == 0 || _stricmp(shown.c_str(), "Ommato") == 0) return "Freia (dodge)";
-            return "";
+            int entry = EntryAt(PlaceOfName(shown));
+            return entry >= 0 ? variants::Characters()[entry].name : "";
         }
 
         bool CharacterSelectAdvanced() { return g_charselAdvanced; }
@@ -3966,7 +4020,8 @@ namespace pdnet::gamepatches
         // The sprite a grid place (sprite 38-48) shows now.
         int ShownAt(int place, int what)
         {
-            if (what == 2) return place == kAdvancedJumpPlace || place == kAdvancedDodgePlace ? 40 /* Freia */ : kBlankSprite;
+            if (what > 2) what = 2; // the Advanced list's pages (2 + page in g_gridShown)
+            if (what == 2) return EntrySprite(EntryAt(place));
             int monster = kMonsterFor[place - kPortraitFirst];
             return what == 1 && monster < g_monsterPortraits ? kMonsterPortraitFirst + monster : place;
         }
@@ -4005,7 +4060,7 @@ namespace pdnet::gamepatches
         {
             g_gridLastFrame = GetTickCount64();
             CharacterSelectInput(); // once per drawn sprite: several times a frame, edges only
-            ShowGrid(g_charselAdvanced ? 2 : ShowingMonsters() ? 1 : 0);
+            ShowGrid(g_charselAdvanced ? 2 + g_advancedPage : ShowingMonsters() ? 1 : 0);
             static std::set<std::pair<int64_t, int64_t>> seen;
             if (seen.size() < 60 && seen.emplace(args[0], args[1]).second)
                 Log(L"gamepatch: character select draws sheet %lld sprite %lld at %lld,%lld (name line '%S')", args[0], args[1], args[2], args[3], g_charselName.c_str());
@@ -4042,12 +4097,191 @@ namespace pdnet::gamepatches
             return true;
         }
 
+        // The Advanced list's three menus after a pick (the user, 2026-11-20): Colour, Dodge type, Animation set, one after
+        // the other in a pop-up window (window 8, set up like the Settings' save question: menu commands 33 / 36 / 37 /
+        // 38 / 40, drawn after the screen's window 12 with command 42, its rows with command 24). While it's open the
+        // script gets no buttons (CharacterSelectButtons): up / down (D-pad, stick, arrow keys, W / S) move, A picks, B
+        // goes back. The last A hands the pick to the game: pdnet presses A twice for the script (the grid place, then
+        // the game's own COLORS row) and the store (g4 #571) gets the variant's carrier value (ActivateVariant).
+        std::atomic<int> g_popupRow{ 0 };
+        variants::Pick g_popupPick;
+        std::atomic<bool> g_variantPending{ false }; // the next pick store is the Advanced list's
+        std::atomic<int> g_injectA{ 0 };               // A presses still to hand to the script
+        ULONGLONG g_injectAt = 0;
+        std::atomic<int> g_charselKeyMove{ 0 };        // arrow keys / W S from the game's key handler: -1 up, +1 down
+        std::atomic<int> g_charselKeyPage{ 0 };        // Q / E, Page Up / Down: -1 / +1
+        constexpr int kCharselPopupWindow = 8, kCharselPopupX = 170, kCharselPopupW = 300;
+        constexpr uint32_t kPadUp = 0x40, kPadDown = 0x80, kPadLB = 0x400, kPadRB = 0x800;
+
+        int PopupRows()
+        {
+            switch (g_popup.load())
+            {
+            case kColourStep: return (std::max)(1, variants::ColourCount(variants::Characters()[g_popupPick.character]));
+            case kDodgeStep: return static_cast<int>(variants::Dodges().size());
+            case kSetStep: return static_cast<int>(variants::AnimationSets().size());
+            default: return 0;
+            }
+        }
+
+        const char* PopupTitle()
+        {
+            return g_popup == kColourStep ? "COLOR" : g_popup == kDodgeStep ? "DODGE TYPE" : "ANIMATION SET";
+        }
+
+        std::string PopupRowText(int row)
+        {
+            const variants::Character& c = variants::Characters()[g_popupPick.character];
+            if (g_popup == kColourStep) return c.colours[row] ? c.colours[row] : "Color 1";
+            if (g_popup == kDodgeStep) return variants::Dodges()[row].name;
+            return variants::AnimationSets()[row].name;
+        }
+
+        int PopupY() { return 210 - (PopupRows() * 22 + 40) / 2; }
+
+        void OpenCharselPopup(int step)
+        {
+            g_popup = step;
+            g_popupRow = 0;
+            int64_t manager = MenuManager();
+            if (!manager || step == kNoPopup) return;
+            int16_t current = *reinterpret_cast<int16_t*>(manager + 0x10402); // the script's own window stays current
+            auto cmd = [](uint64_t fn, int64_t a0, int64_t a1) { int64_t args[8] = { a0, a1 }; reinterpret_cast<MenuCommandFn>(At(fn))(args); };
+            cmd(0x140207cd0, kCharselPopupWindow, 2);
+            cmd(0x140207d20, kCharselPopupW, PopupRows() * 22 + 40);
+            cmd(0x140207d50, kCharselPopupX, PopupY());
+            cmd(0x140207d80, reinterpret_cast<int64_t>(PopupTitle()), 0);
+            for (int i = 0; i < PopupRows(); ++i) cmd(0x140207e20, reinterpret_cast<int64_t>(""), 0);
+            *reinterpret_cast<int16_t*>(manager + 0x10402) = current;
+        }
+
+        // After the screen's window (12) is drawn: the pop-up, its rows (the chosen one marked) and what's picked so far.
+        void DrawCharselPopup(int64_t* args)
+        {
+            int64_t manager = MenuManager();
+            if (g_popup == kNoPopup || !args || args[0] != 12 || !manager || !g_drawWindow) return;
+            int64_t popup[8] = { kCharselPopupWindow };
+            g_drawWindow(popup);
+            *reinterpret_cast<int64_t*>(manager + 0x10408) = reinterpret_cast<int64_t>(WindowAt(manager, kCharselPopupWindow));
+            auto text = [](int x, int y, const char* s) { int64_t a[8] = { x, y, reinterpret_cast<int64_t>(s) }; reinterpret_cast<MenuCommandFn>(At(0x140207870))(a); };
+            static char lines[8][96];
+            int y = PopupY() + 30;
+            for (int r = 0; r < PopupRows() && r < 8; ++r, y += 22)
+            {
+                std::string row = PopupRowText(r);
+                _snprintf_s(lines[r], _TRUNCATE, r == g_popupRow ? "\a%dc> %s <" : "\a%dc%s", kCharselPopupW, row.c_str());
+                text(kCharselPopupX, y, lines[r]);
+            }
+            *reinterpret_cast<int64_t*>(manager + 0x10408) = 0;
+        }
+
+        void PopupSound(int which) { int64_t sound[2] = { which, 0 }; reinterpret_cast<InputFn>(At(0x140261750))(sound); }
+
+        // The script's button reads on the character select (HookedButtons). A = 0x1010, B = 0x2020 (as the Settings).
+        int64_t CharacterSelectButtons(int64_t buttons)
+        {
+            ULONGLONG now = GetTickCount64();
+            // pdnet's own A presses for the script, after the pop-ups (grid place, then the game's COLORS row)
+            if (g_injectA > 0 && g_popup == kNoPopup)
+            {
+                if (now >= g_injectAt && now < g_injectAt + 60) return buttons | 0x1010;
+                if (now >= g_injectAt + 60) { --g_injectA; g_injectAt = now + 350; }
+                return buttons & ~0x3030ll;
+            }
+            static bool heldA = false, heldB = false, heldUp = false, heldDown = false, heldPage[2] = {};
+            bool a = (buttons & 0x1010) != 0, b = (buttons & 0x2020) != 0;
+            float lx = 0, ly = 0, rx = 0, ry = 0;
+            PadSticks(lx, ly, rx, ry);
+            bool up = AnyPadHolds(kPadUp) || ly > 0.6f, down = AnyPadHolds(kPadDown) || ly < -0.6f;
+            int keyMove = g_charselKeyMove.exchange(0), keyPage = g_charselKeyPage.exchange(0);
+            bool pageNext = AnyPadHolds(kPadRB), pagePrevious = AnyPadHolds(kPadLB);
+            bool pressA = a && !heldA, pressB = b && !heldB, pressUp = (up && !heldUp) || keyMove < 0, pressDown = (down && !heldDown) || keyMove > 0;
+            int page = (pageNext && !heldPage[0]) || keyPage > 0 ? 1 : (pagePrevious && !heldPage[1]) || keyPage < 0 ? -1 : 0;
+            heldA = a, heldB = b, heldUp = up, heldDown = down, heldPage[0] = pageNext, heldPage[1] = pagePrevious;
+            if (!g_charselAdvanced) return buttons;
+
+            if (g_popup == kNoPopup)
+            {
+                if (page)
+                {
+                    int pages = AdvancedPages();
+                    g_advancedPage = (g_advancedPage + page + pages) % pages;
+                    static char heading[32];
+                    sprintf_s(heading, "ADVANCED %d/%d", g_advancedPage + 1, pages);
+                    SetMenuHeading(heading);
+                    PopupSound(37);
+                }
+                if (!a) return buttons;
+                if (pressA)
+                {
+                    int entry = EntryAt(PlaceOfName(g_charselName));
+                    if (entry < 0) { PopupSound(1); return buttons & ~0x1010ll; } // an empty place
+                    g_popupPick = { entry, 0, 0, 0 };
+                    PopupSound(0);
+                    OpenCharselPopup(kColourStep);
+                    Log(L"gamepatch: Advanced list: %S picked", variants::Characters()[entry].name);
+                }
+                return buttons & ~0x1010ll;
+            }
+            if (pressUp) { g_popupRow = (g_popupRow + PopupRows() - 1) % PopupRows(); PopupSound(37); }
+            if (pressDown) { g_popupRow = (g_popupRow + 1) % PopupRows(); PopupSound(37); }
+            if (pressB)
+            {
+                PopupSound(1);
+                OpenCharselPopup(g_popup == kColourStep ? kNoPopup : g_popup - 1);
+            }
+            else if (pressA)
+            {
+                PopupSound(0);
+                if (g_popup == kColourStep) g_popupPick.colour = g_popupRow, OpenCharselPopup(kDodgeStep);
+                else if (g_popup == kDodgeStep) g_popupPick.dodge = g_popupRow, OpenCharselPopup(kSetStep);
+                else
+                {
+                    g_popupPick.set = g_popupRow;
+                    g_popup = kNoPopup;
+                    g_variantPending = true;
+                    g_injectA = 2;
+                    g_injectAt = now + 150;
+                    const variants::Pick& k = g_popupPick;
+                    Log(L"gamepatch: Advanced list: %S, colour %d, %S, %S set - handing the pick to the game", variants::Characters()[k.character].name, k.colour,
+                        variants::Dodges()[k.dodge].name, variants::AnimationSets()[k.set].name);
+                }
+            }
+            return buttons & ~0x3030ll; // the script gets nothing while the pop-up is open
+        }
+
+        // g4 #571 stores the character pick (FUN_140213b80: 0x140527bc0 and this PC's lobby slot in 0x140527c20); the
+        // Advanced list's pick becomes its carrier's value there, so the lobby and the match see the carrier.
+        int ActivateVariant(int slot, const variants::Pick& pick); // (below, with the carriers)
+        void ClearVariant(int slot);
+        using PickFn = int64_t (*)(int32_t* args);
+        PickFn g_storePick = nullptr;
+        int64_t HookedStorePick(int32_t* args)
+        {
+            int slot = *reinterpret_cast<int32_t*>(At(0x140527bc4));
+            if (g_testPicking == kPickingOpponentCharacter) slot = 1; // Test Arsenal: the AI opponent's pick on this screen too
+            if (g_testPicking == kPickingCharacter) slot = 0;
+            if (args && slot >= 0 && slot < 4)
+            {
+                if (g_variantPending.exchange(false))
+                {
+                    int value = ActivateVariant(slot, g_popupPick);
+                    Log(L"gamepatch: Advanced list: pick %X -> %X (slot %d)", args[0], value, slot);
+                    if (value >= 0) args[0] = value;
+                }
+                else ClearVariant(slot);
+            }
+            return g_storePick(args);
+        }
+
         void CharacterSelectHooks()
         {
             if (!GetConfig().charselPortraits) return;
             bool sprite = g_drawSprite || WrapCommand<MenuCommandFn>(0x1403eefe0 + 95 * 8, 0x1402077a0, &HookedDrawSprite, g_drawSprite, L"character select portraits");
             bool text = g_drawText || WrapCommand<MenuCommandFn>(0x1403eefe0 + 23 * 8, 0x140207840, &HookedDrawText, g_drawText, L"character select names");
-            Log(L"gamepatch: character select: monster portraits %s, Advanced list (Y) %s", sprite && text ? L"on" : L"off (hook not set)", sprite ? L"on" : L"off");
+            bool store = WrapCommand<PickFn>(0x1403f0090 + 571 * 8, 0x140213b80, &HookedStorePick, g_storePick, L"Advanced list pick");
+            Log(L"gamepatch: character select: monster portraits %s, Advanced list (Y) %s, its picks %s", sprite && text ? L"on" : L"off (hook not set)", sprite ? L"on" : L"off",
+                store ? L"on" : L"off");
         }
 
         template <typename Fn>
@@ -4980,7 +5214,14 @@ namespace pdnet::gamepatches
                 return;
             }
             if (key && key == GetConfig().partnerLockKey) PartnerPress(L"key");
-            if (key == 'Y' && CurrentMenu(MenuManager()) == kCharacterMenu) g_charselKeyY = true; // the Advanced list (CharacterSelectInput)
+            if (CurrentMenu(MenuManager()) == kCharacterMenu) // the Advanced list (CharacterSelectInput / CharacterSelectButtons)
+            {
+                if (key == 'Y') g_charselKeyY = true;
+                if (key == VK_UP || key == 'W') g_charselKeyMove = -1;
+                if (key == VK_DOWN || key == 'S') g_charselKeyMove = 1;
+                if (key == 'Q' || key == VK_PRIOR) g_charselKeyPage = -1;
+                if (key == 'E' || key == VK_NEXT) g_charselKeyPage = 1;
+            }
         }
 
         // KeyEventArgs: get_VirtualKey at vtable +0x30, get_KeyStatus at +0x38 (CorePhysicalKeyStatus: WasKeyDown at byte 10).
