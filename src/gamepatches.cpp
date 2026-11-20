@@ -3622,6 +3622,8 @@ namespace pdnet::gamepatches
         constexpr int kMnetGameSprites = 84;
         constexpr int kPortraitFirst = 38, kPortraitLast = 48, kMonsterPortraitFirst = 84;
         std::atomic<int> g_monsterPortraits{ 0 }; // sprites added (0: the game's file)
+        constexpr int kSpriteSize = 0x3c;
+        std::vector<uint8_t> g_mnetSprites; // the copy's sprite records (MakeMnetCopy), to find the game's loaded table
         // The monsters with a portrait, in charsel-portraits.bin's order (sprites 84 on).
         constexpr const char* kMonsterPortraitNames[] = { "Vestio", "Ommato", "Anthro", "Guard", "Andro", "Ceno", "Partheno",
                                                          "Catoptro", "Gyne", "Claustro", "Scoto" };
@@ -3642,6 +3644,9 @@ namespace pdnet::gamepatches
             }
             return plain;
         }
+
+        bool CharacterSelectAdvanced(); // (below)
+        const char* AdvancedName(const std::string& shown);
 
         bool ColourNameText(int64_t* args, int64_t* changed)
         {
@@ -3671,7 +3676,8 @@ namespace pdnet::gamepatches
             {
                 // The name line is "\a130c%s" with the character's name (Experimental 149, MojoJoey's log); the first
                 // character, Alpha, is drawn as "player". Any other name there is a character without a list entry.
-                if (strncmp(format, "\a130c%s", 7) == 0) // "\a130c%s\f" on the character select (the log shows the \f)
+                bool nameLine = strncmp(format, "\a130c%s", 7) == 0;
+                if (nameLine) // "\a130c%s\f" on the character select (the log shows the \f)
                 {
                     // Diagnostics (151: Alpha still showed the previous character's colours): every change of the name.
                     static std::string lastName;
@@ -3692,6 +3698,16 @@ namespace pdnet::gamepatches
                     while (!candidate.empty() && candidate.front() == ' ') candidate.erase(0, 1);
                     for (const auto& character : kCharacterColours)
                         if (!candidate.empty() && _stricmp(candidate.c_str(), character.name) == 0) g_shownCharacter = &character;
+                }
+                if (nameLine && CharacterSelectAdvanced())
+                {
+                    // The Advanced list: the place's entry instead (empty places: no name); its colours are Freia's.
+                    static char advancedName[48];
+                    strcpy_s(advancedName, AdvancedName(g_charselName));
+                    g_shownCharacter = advancedName[0] ? &kCharacterColours[0] : nullptr;
+                    memcpy(changed, args, 8 * sizeof(int64_t));
+                    changed[3] = reinterpret_cast<int64_t>(advancedName);
+                    return true;
                 }
                 return false;
             }
@@ -3781,10 +3797,12 @@ namespace pdnet::gamepatches
         }
 
         int64_t CharacterSelectSprite(int64_t* args); // (below)
+        void CharacterSelectLeft();
 
         int64_t HookedDrawSprite(int64_t* args)
         {
             if (args && CurrentMenu(MenuManager()) == kCharacterMenu) return CharacterSelectSprite(args);
+            CharacterSelectLeft();
             if (!args || args[0] != 3 || (args[1] != 34 && args[1] != 35) || CurrentMenu(MenuManager()) != kLobbyMenu) return g_drawSprite(args);
             int slot = g_rowSlot;
             int mine = *reinterpret_cast<int32_t*>(At(0x140527bc4));
@@ -3828,16 +3846,16 @@ namespace pdnet::gamepatches
             return reinterpret_cast<int64_t>(named[slot]);
         }
 
-        // The character select's portraits (see MakeMnetCopy): while the name line (ColourNameText) shows a monster, each
-        // of MNET sprites 38-48 drawn with menu command 95 becomes its grid place's monster (sprites 84 on, kMonsterFor).
-        // Every distinct sprite drawn there is logged once, to check.
-        // The Advanced list (2026-11-20, the user's request; first step): Y (controller) or the Y key on the character
-        // select switches g_charselAdvanced. For now it shows: the heading ADVANCED and the button bar's Y entry
-        // (\a5# is the Y icon: "\a5#Invite" in the lobby). The list itself (Freia (jump) / Freia (dodge), 12 colour
-        // rows "<colour> - <jump>") needs the character list's script commands first: menu_debug=on logs them here.
+        // The character select's portraits (see MakeMnetCopy, ShowGrid): while the name line (ColourNameText) shows a
+        // monster, the grid shows each place's monster (sprites 84 on, kMonsterFor). Every distinct sprite drawn there is
+        // logged once, to check.
+        // The Advanced list (2026-11-20, the user's request): Y (controller) or the Y key on the character select switches
+        // g_charselAdvanced: heading ADVANCED, the button bar's Y entry (\a5# is the Y icon: "\a5#Invite" in the lobby),
+        // and the test list: Freia (jump) / Freia (dodge) in two grid places (ShowGrid, AdvancedName). Still to come: the
+        // 12 colour rows "<colour> - <jump>", and the pick itself (the variant characters don't exist yet).
         std::atomic<bool> g_charselAdvanced{ false };
         std::atomic<bool> g_charselKeyY{ false }; // the Y key went down (HookedKey: the game's window delivers keys)
-        constexpr uint32_t kPadY = 0x80; // Windows.Gaming.Input.GamepadButtons.Y
+        constexpr uint32_t kPadY = 0x20; // Windows.Gaming.Input.GamepadButtons.Y (A 4, B 8, X 0x10, Y 0x20; 0x80 is D-pad down)
 
         // The screen shows all 11 portraits at once, a grid of sprites 38-48 (player_00..10: player, Edgar, Freia,
         // Meister, Chunky, Cuff Button, pH, Know, Tsubutaki, JD, Sammah); with Toggle Monsters on it draws the same
@@ -3857,10 +3875,10 @@ namespace pdnet::gamepatches
             return false;
         }
 
-        // The heading the screen had: Test Arsenal's (HookedAddItem), else none.
+        // The heading the screen had: Test Arsenal's (HookedAddItem), else the multiplayer menus' "Online".
         const char* CharacterSelectHeading()
         {
-            return g_testPicking == kPickingOpponentCharacter ? "AI OPPONENT'S CHARACTER" : g_testPicking == kPickingCharacter ? "YOUR CHARACTER" : "";
+            return g_testPicking == kPickingOpponentCharacter ? "AI OPPONENT'S CHARACTER" : g_testPicking == kPickingCharacter ? "YOUR CHARACTER" : "Online";
         }
 
         void CharacterSelectInput()
@@ -3900,19 +3918,134 @@ namespace pdnet::gamepatches
             held = down;
         }
 
+        // Test 2 (2026-11-20): replacing the sprite number in menu command 95 drew the monster faintly over the player's
+        // portrait: the grid is also drawn another way from the same sprite records. So the records themselves are
+        // switched: the game's loaded copy of MNet.alr's sprite table (found once per screen by its exact bytes, from
+        // g_mnetSprites) gets, for sprites 38-48, the records of what the grid should show now - the game's own,
+        // each place's monster (kMonsterFor), or the Advanced list's. Restored when the screen closes.
+        std::vector<uint8_t*> g_spriteTables; // the game's loaded sprite records (sprite 0), on this screen
+        int g_gridShown = -1; // what the records hold: 0 own, 1 monsters, 2 Advanced
+        ULONGLONG g_gridLastFrame = 0;
+
+        // Records 38-40 of the copy (exact bytes) in [start, end), with records 0-37 before them: the table's starts go
+        // into `out` (at most `room`). No C++ objects here: __try needs a plain function.
+        int ScanForSpriteTable(uint8_t* start, uint8_t* end, const uint8_t* records, const uint8_t* skip, size_t skipSize, uint8_t** out, int room)
+        {
+            const size_t head = kPortraitFirst * kSpriteSize, length = 3 * kSpriteSize;
+            int n = 0;
+            __try
+            {
+                // Searched by the record's name ("player_00.tga" at +4: 'p' is rarer than the texture number's 9).
+                for (uint8_t* q = start + head; n < room && q + length <= end; ++q)
+                {
+                    uint8_t* name = static_cast<uint8_t*>(memchr(q + 4, records[head + 4], end - q - length + 1));
+                    if (!name) break;
+                    q = name - 4;
+                    if (q >= skip && q < skip + skipSize) continue; // pdnet's own copy
+                    if (memcmp(q, records + head, length) == 0 && memcmp(q - head, records, head) == 0) out[n++] = q - head;
+                }
+            }
+            __except (EXCEPTION_EXECUTE_HANDLER) {}
+            return n;
+        }
+
+        // The game's loaded copies of the sprite table (committed, writable, not image memory).
+        std::vector<uint8_t*> FindSpriteTables()
+        {
+            std::vector<uint8_t*> found;
+            if (g_mnetSprites.size() < (kPortraitLast + 1) * kSpriteSize) return found;
+            SYSTEM_INFO info;
+            GetSystemInfo(&info);
+            MEMORY_BASIC_INFORMATION m;
+            uint8_t* hits[8];
+            for (uint8_t* p = static_cast<uint8_t*>(info.lpMinimumApplicationAddress); p < info.lpMaximumApplicationAddress && VirtualQuery(p, &m, sizeof(m)) && found.size() < 8;
+                 p = static_cast<uint8_t*>(m.BaseAddress) + m.RegionSize)
+            {
+                if (m.State != MEM_COMMIT || m.Type == MEM_IMAGE || (m.Protect & (PAGE_GUARD | PAGE_NOACCESS)) || !(m.Protect & (PAGE_READWRITE | PAGE_WRITECOPY))) continue;
+                uint8_t* start = static_cast<uint8_t*>(m.BaseAddress);
+                int n = ScanForSpriteTable(start, start + m.RegionSize, g_mnetSprites.data(), g_mnetSprites.data(), g_mnetSprites.size(), hits, 8 - static_cast<int>(found.size()));
+                found.insert(found.end(), hits, hits + n);
+            }
+            return found;
+        }
+
+        // The Advanced list's test (the user, 2026-11-20): two places, Freia (jump) left and Freia (dodge) in the middle
+        // of the top row; the other places empty (a transparent spot of the monster art).
+        constexpr int kAdvancedJumpPlace = 40, kAdvancedDodgePlace = 38; // the sprites drawn at those places (Freia's, player's)
+        const char* AdvancedName(const std::string& shown)
+        {
+            // The place under the cursor, by the name the game draws there (normal or Toggle Monsters).
+            if (_stricmp(shown.c_str(), "Freia") == 0 || _stricmp(shown.c_str(), "Vestio") == 0) return "Freia (jump)";
+            if (_stricmp(shown.c_str(), "player") == 0 || _stricmp(shown.c_str(), "Ommato") == 0) return "Freia (dodge)";
+            return "";
+        }
+
+        bool CharacterSelectAdvanced() { return g_charselAdvanced; }
+
+        bool SameBytes(const uint8_t* at, const uint8_t* want, size_t size)
+        {
+            __try { return memcmp(at, want, size) == 0; }
+            __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+        }
+        void PutBytes(uint8_t* at, const uint8_t* bytes, size_t size)
+        {
+            __try { memcpy(at, bytes, size); }
+            __except (EXCEPTION_EXECUTE_HANDLER) {}
+        }
+
+        void ShowGrid(int what)
+        {
+            if (g_spriteTables.empty() || g_mnetSprites.empty() || what == g_gridShown) return;
+            const int monsters = g_monsterPortraits;
+            for (uint8_t*& table : g_spriteTables)
+            {
+                // Still the game's table? (Its records 0-37 never change; a freed and reused block won't have them.)
+                if (!table || !SameBytes(table, g_mnetSprites.data(), kPortraitFirst * kSpriteSize)) { table = nullptr; continue; }
+                for (int k = kPortraitFirst; k <= kPortraitLast; ++k)
+                {
+                    int from = k; // the game's own
+                    if (what == 1 && kMonsterFor[k - kPortraitFirst] < monsters) from = kMonsterPortraitFirst + kMonsterFor[k - kPortraitFirst];
+                    if (what == 2) from = k == kAdvancedJumpPlace || k == kAdvancedDodgePlace ? 40 /* Freia */ : -1;
+                    uint8_t record[kSpriteSize];
+                    if (from >= 0) memcpy(record, &g_mnetSprites[from * kSpriteSize], kSpriteSize);
+                    else
+                    {
+                        // empty: the monster art's last cell has nothing (11 portraits in 5 x 5 cells), same size as a portrait
+                        memcpy(record, &g_mnetSprites[k * kSpriteSize], kSpriteSize);
+                        const float empty[4] = { (256.f + 1 * 136) / 1024, 2 * 98.f / 512, (256.f + 1 * 136 + 134) / 1024, (2 * 98.f + 96) / 512 };
+                        *reinterpret_cast<uint32_t*>(record) = 9;
+                        memcpy(record + 36, empty, sizeof(empty));
+                    }
+                    PutBytes(table + k * kSpriteSize, record, kSpriteSize);
+                }
+            }
+            g_gridShown = what;
+        }
+
         int64_t CharacterSelectSprite(int64_t* args)
         {
+            ULONGLONG now = GetTickCount64();
+            if (now - g_gridLastFrame > 1000) // the screen (re)opened: the texture file may have been loaded again
+            {
+                ULONGLONG started = GetTickCount64();
+                g_spriteTables = FindSpriteTables();
+                g_gridShown = -1;
+                static int told = 0;
+                if (told++ < 10) Log(L"gamepatch: character select: %d loaded sprite table(s) found (%llu ms)", static_cast<int>(g_spriteTables.size()), GetTickCount64() - started);
+            }
+            g_gridLastFrame = now;
             CharacterSelectInput(); // once per drawn sprite: several times a frame, edges only
+            ShowGrid(g_charselAdvanced ? 2 : ShowingMonsters() ? 1 : 0);
             static std::set<std::pair<int64_t, int64_t>> seen;
             if (seen.size() < 60 && seen.emplace(args[0], args[1]).second)
                 Log(L"gamepatch: character select draws sheet %lld sprite %lld at %lld,%lld (name line '%S')", args[0], args[1], args[2], args[3], g_charselName.c_str());
-            if (args[0] != 3 || args[1] < kPortraitFirst || args[1] > kPortraitLast || !ShowingMonsters()) return g_drawSprite(args);
-            int monster = kMonsterFor[args[1] - kPortraitFirst];
-            if (monster >= g_monsterPortraits) return g_drawSprite(args);
-            int64_t own[8];
-            memcpy(own, args, 5 * sizeof(int64_t));
-            own[1] = kMonsterPortraitFirst + monster;
-            return g_drawSprite(own);
+            return g_drawSprite(args);
+        }
+
+        // Leaving the screen: the game's own records back (the lobby list draws the same sheet).
+        void CharacterSelectLeft()
+        {
+            if (g_gridShown > 0 && GetTickCount64() - g_gridLastFrame > 300) ShowGrid(0);
         }
 
         // The button bar: "\a6#Select \a580r\a4#Toggle Monsters \a2#Confirm \a3#Back" ($MONSTER_HINT) gets the Y entry.
@@ -3929,8 +4062,11 @@ namespace pdnet::gamepatches
             if (strcmp(text, "$MONSTER_HINT") == 0) text = "\a6#Select \a580r\a4#Toggle Monsters \a2#Confirm \a3#Back"; // newstrings.txt monster_hint (English)
             const char* toggle = strstr(text, "\a4#Toggle Monsters ");
             if (!toggle) return false;
-            size_t cut = toggle - text + strlen("\a4#Toggle Monsters ");
-            _snprintf_s(out, size, _TRUNCATE, "%.*s%s%s", static_cast<int>(cut), text, g_charselAdvanced ? "\a5#Normal " : "\a5#Advanced ", text + cut);
+            // Normal: "... X Toggle Monsters  Y Advanced  A Confirm  B Back". Advanced: X does nothing there, so its entry goes:
+            // "... Y All Characters  A Confirm  B Back" (the name of the list Y goes back to).
+            size_t before = toggle - text, after = before + strlen("\a4#Toggle Monsters ");
+            if (g_charselAdvanced) _snprintf_s(out, size, _TRUNCATE, "%.*s\a5#All Characters %s", static_cast<int>(before), text, text + after);
+            else _snprintf_s(out, size, _TRUNCATE, "%.*s\a5#Advanced %s", static_cast<int>(after), text, text + after);
             return true;
         }
 
@@ -4331,6 +4467,7 @@ namespace pdnet::gamepatches
             memcpy(&d[kEnd + added * kSprite], end, 8);
             u32(0x19c) += added * kSprite;
             u32(0x1a4) += added;
+            g_mnetSprites.assign(&d[kSprites], &d[kSprites + (kMnetGameSprites + added) * kSprite]);
             uint32_t counts[12] = {}; // each texture's info counts the sprites on it
             for (int k = 0; k < kMnetGameSprites + added; ++k)
                 if (u32(kSprites + k * kSprite) < 12) ++counts[u32(kSprites + k * kSprite)];

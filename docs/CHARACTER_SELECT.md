@@ -76,6 +76,15 @@ per start in `LocalState\pdnet\MNet.alr` and handed to the game by the CreateFil
   Edgar Anthro, Freia Vestio, Meister Guard, Chunky Andro, Cuff Button Ceno, pH Partheno, Know Catoptro,
   Tsubutaki Gyne, JD Claustro, Sammah Scoto.
 
+## Test 2 (2026-11-20)
+
+- Monster pictures showed only as a faint layer behind the players' portraits: the grid is drawn twice from sprites
+  38-48 and only menu command 95's layer was swapped. Now the loaded sprite table's records are switched (ShowGrid).
+- Y worked from the keyboard only: the pad check used 0x80 (D-pad down); Y is 0x20.
+- The bar arrives as `$MONSTER_HINT`; the Y entry is inserted after the English text. Advanced: "Y All Characters",
+  no X entry. Heading back to "Online" when leaving Advanced.
+- Advanced test list: Freia (jump) at Freia's place, Freia (dodge) at player's place, the rest empty.
+
 ## Testing (Experimental build from this branch)
 
 1. Character select (Lab > Test Arsenal, or a lobby): the game's own player portraits.
