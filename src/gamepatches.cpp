@@ -4540,10 +4540,10 @@ namespace pdnet::gamepatches
         std::wstring VariantFile(LPCWSTR name)
         {
             std::wstring path(name);
-            for (wchar_t& ch : path) if (ch == L'/') ch = L'\\';
+            for (wchar_t& ch : path) ch = ch == L'/' ? L'\\' : static_cast<wchar_t>(towlower(ch)); // the game writes "player\%s"
             size_t player = 0;
-            for (size_t at = path.find(L"Player\\"); at != std::wstring::npos; at = path.find(L"Player\\", at + 1)) player = at;
-            if (player == 0 && path.compare(0, 7, L"Player\\") != 0) return L"";
+            for (size_t at = path.find(L"player\\"); at != std::wstring::npos; at = path.find(L"player\\", at + 1)) player = at;
+            if (player == 0 && path.compare(0, 7, L"player\\") != 0) return L"";
             std::wstring rest = path.substr(player + 7); // <folder>\<file>
             size_t slash = rest.find(L'\\');
             if (slash == std::wstring::npos) return L"";
@@ -4611,6 +4611,11 @@ namespace pdnet::gamepatches
             size_t n = name ? wcslen(name) : 0;
             bool anyVariant = false;
             for (const ActiveVariant& v : g_variants) anyVariant = anyVariant || v.on;
+            if (anyVariant && n > 12)
+            {
+                static std::atomic<int> told{ 0 };
+                if (told < 40 && (wcsstr(name, L"layer") || wcsstr(name, L".al"))) { ++told; Log(L"variants: the game opens %s (access %X)", name, access); }
+            }
             if (anyVariant && n > 12 && (access & GENERIC_READ) && !(access & GENERIC_WRITE))
             {
                 std::wstring built = VariantFile(name);
@@ -4669,9 +4674,11 @@ namespace pdnet::gamepatches
             return g_createFile2(name, access, share, disposition, params);
         }
         // Returns false until Windows has filled in PDUWP.exe's imports (pdlaunch injects pdnet before that).
-        bool PatchCreateFile2()
+        // CreateFile2 in a module's import table -> HookedCreateFile2. PDUWP.exe's (the menus, FDLogo / MNet) and, for the
+        // character files (test 6, 2026-11-20: none of them came through PDUWP.exe's), MeldRelease_UWP.dll's, the data
+        // layer, which imports CreateFile2 too.
+        bool PatchCreateFile2In(uint8_t* base)
         {
-            auto base = Image();
             auto nt = reinterpret_cast<IMAGE_NT_HEADERS*>(base + reinterpret_cast<IMAGE_DOS_HEADER*>(base)->e_lfanew);
             auto& dir = nt->OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_IMPORT];
             for (auto desc = reinterpret_cast<IMAGE_IMPORT_DESCRIPTOR*>(base + dir.VirtualAddress); dir.VirtualAddress && desc->Name; ++desc)
@@ -4685,7 +4692,8 @@ namespace pdnet::gamepatches
                         strcmp(reinterpret_cast<IMAGE_IMPORT_BY_NAME*>(base + names->u1.AddressOfData)->Name, "CreateFile2") != 0)
                         continue;
                     if (slots->u1.Function == names->u1.AddressOfData) return false; // not filled in yet
-                    g_createFile2 = reinterpret_cast<CreateFile2Fn>(slots->u1.Function);
+                    if (slots->u1.Function == reinterpret_cast<ULONG_PTR>(&HookedCreateFile2)) return true;
+                    if (!g_createFile2) g_createFile2 = reinterpret_cast<CreateFile2Fn>(slots->u1.Function);
                     DWORD old;
                     VirtualProtect(&slots->u1.Function, sizeof(ULONG_PTR), PAGE_READWRITE, &old);
                     slots->u1.Function = reinterpret_cast<ULONG_PTR>(&HookedCreateFile2);
@@ -4694,6 +4702,15 @@ namespace pdnet::gamepatches
                 }
             }
             return false;
+        }
+
+        bool PatchCreateFile2()
+        {
+            if (!PatchCreateFile2In(Image())) return false;
+            if (HMODULE meld = GetModuleHandleW(L"MeldRelease_UWP.dll"))
+                Log(L"gamepatch: MeldRelease_UWP.dll file opens %s", PatchCreateFile2In(reinterpret_cast<uint8_t*>(meld)) ? L"hooked" : L"NOT hooked");
+            else Log(L"gamepatch: MeldRelease_UWP.dll not loaded yet - its file opens not hooked");
+            return true;
         }
     }
 

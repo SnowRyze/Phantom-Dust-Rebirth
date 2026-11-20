@@ -101,6 +101,8 @@ Ideas, not planned (notes in the change log and reference notes):
 
 ## November 2026
 
+Variant test 1 (2026-11-20): the variant was activated (slot 0, character 19 = Mechano's record) but no character file came through the CreateFile2 hook: PDUWP.exe formats the folder as "player\\%s" (lower case; VariantFile looked for "Player\\"), and MeldRelease_UWP.dll, the data layer, imports CreateFile2 itself. Now the search ignores case, Meld's import is hooked as well, and while a variant is on the first 40 file opens with "layer" or ".al" in the name are logged.
+
 Advanced list portraits (2026-11-20): the user's renders of Germano, Belono and the NPCs (tools\charsel\source\npcs), cut out and tinted like the monsters, are MNET sprites 96-110 (portrait_<name>.tga). MNet0800 is now widened to 2048 x 512 for them. The sprite record has room for 115 sprites before the data at 0x2000 (111 used).
 
 Character variants, back end (2026-11-20, eradication0's design; not yet seen in game; docs/CHARACTER_SELECT.md). variants.cpp builds a variant's battle file and exmots from the game's own files (model + dodge motions 33-39 + animation set), checked off-line against the Blender add-on's retargeting. A variant plays as a carrier record per lobby slot (Mechano, Euroto, Hedono, Belono): HookedCreateFile2 hands over the built files for the carrier's Player folder, and the carrier's runtime charaset entry (0x1404c01e0 + record * 0xa0; +0x6C movement, +0x80 voice, +0x88 exmot lengths, +0x18 hitbox; FUN_14017d300 unpacks the file into it) gets the variant's values. First test: variant_test=character,colour,dodge,set in pdnet.ini plays your Test Arsenal character as that variant (slot 0, Mechano's record).
