@@ -4980,12 +4980,19 @@ namespace pdnet::gamepatches
             memcpy(v.saved, e, 0xa0);
             const variants::Character& c = list[pick.character];
             // hitbox: the character's own (its record, or the saved original if that record is a carrier now), height at least 18
-            const uint8_t* own = c.record >= 0 ? CharasetEntry(c.record) : nullptr;
+            // Ai and Mikan (charaset height 16) get Freia's hitbox exactly (the user, 2026-11-21: played competitively, no
+            // smaller target than Freia's).
+            int hitboxRecord = c.record;
+            if (strcmp(c.name, "Ai") == 0 || strcmp(c.name, "Mikan") == 0) hitboxRecord = 2; // Freia
+            const uint8_t* own = hitboxRecord >= 0 ? CharasetEntry(hitboxRecord) : nullptr;
             for (int s = 0; s < 4; ++s)
-                if (g_variants[s].on && c.record == kCarriers[s].record) own = g_variants[s].saved;
+                if (g_variants[s].on && hitboxRecord == kCarriers[s].record) own = g_variants[s].saved;
             if (own) memcpy(e + 0x18, own + 0x18, 16);
             float minHeight = 180.0f / *reinterpret_cast<float*>(At(0x1402f7f7c));
             if (*reinterpret_cast<float*>(e + 0x18) < minHeight) *reinterpret_cast<float*>(e + 0x18) = minHeight;
+            const float* box = reinterpret_cast<const float*>(e + 0x18);
+            Log(L"variants: slot %d hitbox %.1f / %.1f / %.1f / %.1f (from record %d%s)", slot, box[0], box[1], box[2], box[3], hitboxRecord,
+                hitboxRecord != c.record ? L", Freia's" : L"");
             // Movement stats (turning, speeds...: +0x28..+0x68, +0x74, +0x78, from the file's +0x14..+0x34, +0x38, +0x3A) from
             // the animation set's character: test 2 (2026-11-20) kept the carrier's (Mechano: turning as slow as
             // Catoptro's) with Gyne's animations; Gyne turns like Meister.
