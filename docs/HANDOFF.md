@@ -101,6 +101,8 @@ Ideas, not planned (notes in the change log and reference notes):
 
 ## November 2026
 
+Advanced list in a lobby (2026-11-21, the user's first online test with Toaf; their builds had no online code yet): the forced B after the pick goes back to the lobby setup (menu 48 via 47 / 39) and the lobby opens the character select again - a loop, unless a normal pick was made first. In a lobby pdnet now confirms the game's own way: the A event (5, window 12) at the script's next input label, A again (window 2) once its COLORS window draws its rows, and the store (g4 #571) gets pdnet's value (g_pendingPick); the script then finishes as after any pick (menu cmd 55 / 9, the store, session cmd 35, back to the lobby, arsenal pick 67). Test Arsenal keeps the direct store + B. Logged as `variants: Advanced list: A for the script ...` / `the script stores ...` / WARNING after 5 s.
+
 Advanced list online (2026-11-21; not yet tested): picks are shared as the lobby member attribute PD_VARIANT and applied by every other PC to that slot's carrier, files built in the background (docs/CHARACTER_SELECT.md, "Online"). Germano / Belono: Color only, picked as the game's own records. Ubiquitous Keyboard / Ubiquitous side by side. Logs: `variants:` lines.
 
 Advanced list, after menu test 8 (2026-11-21; not yet seen in game): the plate sprites were over the portraits but white, the name white and too low. The plate now takes the colour the game draws its sprite 71 with (command 95's colour argument), the name the text colours at 0x14054c9b0 (set by command 27) as they are when the game draws its name line, and its y the game's own name-to-plate offset.

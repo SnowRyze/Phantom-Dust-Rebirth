@@ -688,6 +688,14 @@ namespace pdnet::gamepatches
         // passes the picks to its FUN_140128990 (the match setup, 0x48 per player: the character at +8; online, the same field).
         constexpr int kArsenalPickMenu = 67, kCharacterMenu = 46, kStageMenu = 47;
         std::atomic<bool> g_forceBack{ false }; // the character select backs out at its next input label (the Advanced list, HookedSetState)
+        // In a lobby the B event goes back to the lobby setup (menu 48) and the lobby sends the player to the character
+        // select again (the user's test, 2026-11-21: a loop). There the Advanced list confirms the game's own way: the A
+        // event on the grid (the script opens its COLORS window, 2), then A on its first row; the store (g4 #571) then
+        // gets pdnet's value (g_pendingPick) and the script finishes as after any pick (session cmd 35, back to the lobby).
+        enum ForceConfirm { kConfirmNone, kConfirmGrid, kConfirmWaitColours, kConfirmColours };
+        std::atomic<int> g_forceConfirm{ kConfirmNone };
+        std::atomic<ULONGLONG> g_forceConfirmSince{ 0 };
+        std::atomic<int> g_pendingPick{ -1 }; // the value the next store (g4 #571) writes instead of the script's
         enum TestPick { kPickingNone, kPickingCharacter, kPickingArsenal, kPickingOpponentCharacter, kPickingOpponentArsenal, kPickingStage };
         std::atomic<int> g_testPicking{ kPickingNone };
         std::atomic<int> g_testStage{ -1 }, g_testLayout{ 0 }, g_testCharacter{ -1 }, g_testOpponentCharacter{ -1 }, g_testArsenal{ 0 };
@@ -3287,6 +3295,25 @@ namespace pdnet::gamepatches
                 *reinterpret_cast<int32_t*>(manager + 0x10414) = 6; // the B event: the script runs its back (the Advanced list's pick is stored)
                 Log(L"gamepatch: Advanced list: leaving the character select");
             }
+            if (manager && CurrentMenu(manager) == kCharacterMenu && g_forceConfirm != kConfirmNone)
+            {
+                char state[16] = "?";
+                if (args) CopyString(reinterpret_cast<const char*>(args[0]), state, sizeof(state));
+                int step = g_forceConfirm;
+                if (step == kConfirmGrid || step == kConfirmColours)
+                {
+                    *reinterpret_cast<int32_t*>(manager + 0x10414) = 5;                         // the A event
+                    *reinterpret_cast<int32_t*>(manager + 0x10418) = step == kConfirmGrid ? 12 : 2; // on the grid (window 12) / COLORS (window 2)
+                    g_forceConfirm = step == kConfirmGrid ? kConfirmWaitColours : kConfirmNone;
+                    Log(L"variants: Advanced list: A for the script on %s (state label '%S')", step == kConfirmGrid ? L"the grid" : L"its COLORS window", state);
+                }
+                else if (GetTickCount64() - g_forceConfirmSince > 5000)
+                {
+                    Log(L"variants: Advanced list: WARNING the script's COLORS window didn't come within 5 s (state label '%S') - given up", state);
+                    g_forceConfirm = kConfirmNone;
+                    g_pendingPick = -1;
+                }
+            }
             int32_t event = manager ? *reinterpret_cast<int32_t*>(manager + 0x10414) : 0;
             int64_t result = g_setState(args);
             CheckSendLogPick(event);
@@ -3729,6 +3756,7 @@ namespace pdnet::gamepatches
                 }
                 return false;
             }
+            if (g_forceConfirm == kConfirmWaitColours) g_forceConfirm = kConfirmColours; // its COLORS window is up: the second A
             int colour = static_cast<int>(args[3]);
             static const CharacterColours* lastUsed = reinterpret_cast<const CharacterColours*>(1);
             static int uses = 0;
@@ -4326,7 +4354,16 @@ namespace pdnet::gamepatches
             }
             LogPickTable("after the Advanced pick");
             if (value < 0 || !g_storePick) return;
-            int32_t args[16] = { value };
+            if (g_testPicking == kPickingNone)
+            {
+                // a lobby: the game's own confirm (see g_forceConfirm)
+                g_pendingPick = value;
+                g_forceConfirmSince = GetTickCount64();
+                g_forceConfirm = kConfirmGrid;
+                Log(L"variants: Advanced list: confirming through the script (value %X waits for its store)", value);
+                return;
+            }
+            int32_t args[16] = { value }; // Test Arsenal: stored here, the screen left with B (works there)
             g_variantPending = false;
             g_storePick(args);
             g_forceBack = true;
@@ -4430,6 +4467,14 @@ namespace pdnet::gamepatches
             int slot = PickSlot();
             if (args && slot >= 0 && slot < 4)
             {
+                if (int pending = g_pendingPick.exchange(-1); pending >= 0)
+                {
+                    Log(L"variants: Advanced list: the script stores %X for slot %d - pdnet's %X instead", args[0], slot, pending);
+                    args[0] = pending;
+                    int64_t result = g_storePick(args);
+                    LogPickTable("the script's store");
+                    return result;
+                }
                 if (g_variantPending.exchange(false))
                 {
                     int value = ActivateVariant(slot, g_popupPick);
