@@ -54,8 +54,8 @@ c.version = 0;                    // NPCs only: which copy in Event\*.mk
 c.record = 2;                     // charaset record whose hitbox to use (2 = Freia's); -1 = keep the carrier's
 c.colours[0] = "Red";             // one name per colour file 0..3; leave the rest nullptr
 c.voice = "BattleVo_Freia.bin";   // a voice bank the game has
-c.portrait = 128;                 // MNET sprite numbers from tools\charsel\sprites.txt (step 3); -1 = placeholder
-c.banner = 129;
+c.portrait = 112;                 // MNET sprite number from tools\charsel\sprites.txt (step 3); -1 = placeholder
+c.banner = 13;                    // banner number k from sprites.txt ("banner k <name>"); -1 = the carrier's
 int index = variants::AddCharacter(c); // strings are copied; returns the entry's index
 ```
 
@@ -74,13 +74,16 @@ into the game's `menu\MNet.alr` at start (`MakeMnetCopy`).
 2. Add `'<name>': (x, y, width)` to `ADDED` in make_portraits.py. That is the banner's box in the portrait (around the
    face, height = width x 24 / 74); the tool cuts it and colours it like the game's red banners.
 3. Run `py -I tools\charsel\make_portraits.py --pack` (needs numpy and Pillow).
-4. Read `tools\charsel\sprites.txt` for the new `portrait_<name>.tga` and `banner_<name>.tga` numbers. Put them in the
-   entry's `portrait` / `banner`.
+4. Read `tools\charsel\sprites.txt`: the new `portrait_<name>.tga` sprite number goes in `portrait`, the
+   `banner k <name>` number k in `banner`.
 5. Ship the new `charsel-portraits.bin` with the dll (it sits in the kit's root, next to pdnet.dll).
 
-Room: 25 more portraits, 33 more banners, 186 sprites in all (MakeMnetCopy grows MNet.alr's metadata to 0x3000; more
-would need another page there and more art space, see make_portraits.py). Without pictures, the grid shows the
-placeholder (Alpha's portrait) and the lobby shows the carrier's monster.
+Room: **3 more portraits** and 33 more banners. MNet.alr's sprite list has to end before 0x2000 (115 sprites; a test
+that moved its data to 0x3000 for more crashed the game on the online menu), and 112 are used. Banners need no sprite:
+the lobby shows each slot's banner through the game's unused sprites dummy001-004 (27-30), whose source rectangle pdnet
+moves to the banner's pixels (`LobbyBanner`). More portraits would need the same trick (one sprite per grid place,
+rectangle moved per page) or another texture file. Without pictures, the grid shows the placeholder (Alpha's portrait)
+and the lobby shows the carrier's monster.
 
 ### 4. More movement types or animation sets (optional)
 
@@ -101,5 +104,5 @@ names are shared online, so every PC needs the same lists.
 
 - The carriers (`kCarriers`) and the lobby slot order: every PC must agree on them.
 - The MNet.alr sprite layout (sprites 84 on come from charsel-portraits.bin in its order; the code finds the built-in
-  ones by name, and added ones by the numbers in their entries).
+  ones by name, and added ones by the numbers in their entries) and its size limit (115 sprites, before 0x2000).
 - Entry names of characters already released: they are what other PCs look up.

@@ -27,19 +27,21 @@
 109 portrait_maniac.tga
 110 portrait_kei.tga
 111 portrait_ubiquitous2.tga
-112 portrait_mac2.tga
-113 portrait_baroness2.tga
-114 portrait_reindeer2.tga
-115 banner_spokesman.tga
-116 banner_mikan.tga
-117 banner_ai.tga
-118 banner_kei.tga
-119 banner_kajikawa.tga
-120 banner_n03.tga
-121 banner_maniac.tga
-122 banner_arthur.tga
-123 banner_mac.tga
-124 banner_baroness.tga
-125 banner_tetsuya.tga
-126 banner_reindeer.tga
-127 banner_ubiquitous.tga
+27 dummy001.tga (lobby banner of slot 0)
+28 dummy002.tga (lobby banner of slot 1)
+29 dummy003.tga (lobby banner of slot 2)
+30 dummy004.tga (lobby banner of slot 3)
+# banners (variants::Character::banner = k): k name x y in MNet0800
+banner 0 spokesman 256 294
+banner 1 mikan 332 294
+banner 2 ai 408 294
+banner 3 kei 484 294
+banner 4 kajikawa 560 294
+banner 5 n03 636 294
+banner 6 maniac 712 294
+banner 7 arthur 788 294
+banner 8 mac 864 294
+banner 9 baroness 940 294
+banner 10 tetsuya 1016 294
+banner 11 reindeer 1092 294
+banner 12 ubiquitous 1168 294

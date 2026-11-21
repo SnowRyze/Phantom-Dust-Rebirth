@@ -4058,7 +4058,7 @@ namespace pdnet::gamepatches
             // charsel-portraits.bin's EXTRA (96 on) and DUPLICATES (111 on) orders, tools\charsel\make_portraits.py
             static const char* kExtra[15] = { "Germano", "Belono", "03", "Spokesman", "Ubiquitous", "Kajikawa", "Tetsuya", "Arthur",
                                               "Reindeer", "Mac", "Baroness", "Mikan", "Ai", "Maniac", "Kei" };
-            static const char* kSecond[4] = { "Ubiquitous", "Mac", "Baroness", "Reindeer" };
+            static const char* kSecond[1] = { "Ubiquitous" }; // DUPLICATES (Mac / Baroness / Reindeer 2 are gone)
             if (entry < 0 || entry >= static_cast<int>(variants::Characters().size())) return kBlankSprite;
             const variants::Character& c = variants::Characters()[entry];
             if (c.portrait >= 0 && c.portrait < kMonsterPortraitFirst + g_monsterPortraits) return c.portrait; // an added character's own
@@ -4068,7 +4068,7 @@ namespace pdnet::gamepatches
             if (c.kind == variants::Kind::Npc) name = name.substr(0, name.find(' ')); // "Ubiquitous Keyboard" -> its portrait's name
             int last = kMonsterPortraitFirst + g_monsterPortraits - 1;
             if (second)
-                for (int k = 0; k < 4; ++k)
+                for (int k = 0; k < 1; ++k)
                     if (_stricmp(name.c_str(), kSecond[k]) == 0 && kBlankSprite + 16 + k <= last) return kBlankSprite + 16 + k;
             for (int k = 0; k < 15; ++k)
                 if (_stricmp(name.c_str(), kExtra[k]) == 0 && kBlankSprite + 1 + k <= last) return kBlankSprite + 1 + k;
@@ -4899,7 +4899,7 @@ namespace pdnet::gamepatches
         int MakeMnetCopy(const wchar_t* original, const std::wstring& copy, const char*& why)
         {
             constexpr size_t kSize = 863232;
-            uint32_t kData = 0x2000; // the data's start (header +0xc): moved to 0x3000 below, for more sprite records
+            constexpr uint32_t kData = 0x2000; // the data's start (header +0xc)
             constexpr uint32_t kTex = 0x34, kInfo = 0x338, kSprites = 0x428, kSprite = 0x3c;
             constexpr uint32_t kEnd = kSprites + kMnetGameSprites * kSprite;
             std::vector<uint8_t> d, p;
@@ -4917,12 +4917,9 @@ namespace pdnet::gamepatches
             if (!ReadWholeFile(PdnetDir() + L"charsel-portraits.bin", p, 8 << 20) || p.size() < 16 || memcmp(p.data(), "PDCP", 4) != 0 ||
                 *reinterpret_cast<uint32_t*>(&p[4]) != 1)
                 return -1;
-            // 2026-11-21 (the lobby banners): more sprites than fit before 0x2000 (115). The metadata grows by a page: the
-            // data starts at 0x3000 (header +0xc; texture offsets are relative to it, as phantom_dust_stage rebuilds
-            // files), room for 186 sprites.
-            d.insert(d.begin() + kData, 0x1000, 0);
-            kData += 0x1000;
-            u32(0xc) = kData;
+            // The sprite list must end before 0x2000 (115 sprites): a test build that moved the data to 0x3000 for more
+            // (2026-11-21) crashed the game on the online menu. The lobby banners therefore have no sprites of their own
+            // (LobbyBanner).
             why = "charsel-portraits.bin doesn't fit MNet.alr";
             uint32_t images = *reinterpret_cast<uint32_t*>(&p[8]), sprites = *reinterpret_cast<uint32_t*>(&p[12]);
             size_t at = 16;
@@ -4989,7 +4986,7 @@ namespace pdnet::gamepatches
                 if (k == kMnetGameSprites)
                 {
                     k = kMnetGameSprites + added++;
-                    if (kSprites + (k + 1) * kSprite + 8 > kData) return -1; // room for 186 sprites in all (128 used, 2026-11-21)
+                    if (kSprites + (k + 1) * kSprite + 8 > kData) return -1; // room for 115 sprites in all (112 used, 2026-11-21)
                     for (uint32_t b = kSprites + k * kSprite + 8; b < kSprites + (k + 1) * kSprite + 8; ++b)
                         if (d[b]) return -1; // only padding may be there
                 }
@@ -5198,23 +5195,59 @@ namespace pdnet::gamepatches
         }
 
         // The lobby's banner (window_chara_NN: sprite NN = the pick's charaset record) of a carrier whose slot has a variant:
-        // the character's own banner (players), or banner_<name> (NPCs; tools\charsel\make_portraits.py BANNERS, sprites
-        // after the portraits: blank + 15 + 4 + k). -1: the game's.
-        int LobbyBanner(int sprite)
+        // the character's own banner (players), or an NPC's banner from tools\charsel\make_portraits.py. Those banners are
+        // art in MNet0800 (texture 9) without sprites of their own (MNet.alr has no room): each lobby slot shows its banner
+        // through one of the game's unused sprites dummy001-004 (27-30; charsel-portraits.bin gives them texture 9 and a
+        // 74 x 24 box), whose source rectangle pdnet moves to banner k. The rectangle table: [0x140527c78] + 0x3a8 + group *
+        // 8 -> per object -> idx * 8: s16 x, y, w, h (FUN_1401983e0; handle = group << 16 | object << 8 | idx). -1: the game's.
+        constexpr int kLobbyBannerSprite = 27;
+        int16_t* SpriteRect(uint32_t handle)
+        {
+            __try
+            {
+                uint8_t* base = *reinterpret_cast<uint8_t**>(At(0x140527c78));
+                uint8_t* groups = *reinterpret_cast<uint8_t**>(base + 0x3a8 + ((handle >> 16) & 0xff) * 8);
+                uint8_t* rects = *reinterpret_cast<uint8_t**>(groups + ((handle >> 8) & 0xff) * 8);
+                return reinterpret_cast<int16_t*>(rects + (handle & 0xff) * 8);
+            }
+            __except (EXCEPTION_EXECUTE_HANDLER) { return nullptr; }
+        }
+
+        int BannerNumber(const variants::Character& c)
         {
             static const char* kBanners[13] = { "Spokesman", "Mikan", "Ai", "Kei", "Kajikawa", "03", "Maniac", "Arthur", "Mac", "Baroness",
                                                 "Tetsuya", "Reindeer", "Ubiquitous" };
+            if (c.banner >= 0) return c.banner; // an added character's (sprites.txt "banner k")
+            std::string name = c.name;
+            name = name.substr(0, name.find(' ')); // "Ubiquitous Keyboard"
+            for (int k = 0; k < 13; ++k)
+                if (name == kBanners[k]) return k;
+            return -1;
+        }
+
+        int LobbyBanner(int sprite)
+        {
             for (int s = 0; s < 4; ++s)
             {
                 if (kCarriers[s].record != sprite || !g_variants[s].on) continue;
                 const variants::Character& c = variants::Characters()[g_variants[s].pick.character];
-                if (c.banner >= 0 && c.banner < kMonsterPortraitFirst + g_monsterPortraits) return c.banner; // an added character's own
-                if (c.kind == variants::Kind::Player && c.record >= 0 && c.record <= 10) return c.record;
-                std::string name = c.name;
-                name = name.substr(0, name.find(' ')); // "Ubiquitous Keyboard"
-                for (int k = 0; k < 13; ++k)
-                    if (name == kBanners[k] && kBlankSprite + 20 + k <= kMonsterPortraitFirst + g_monsterPortraits - 1) return kBlankSprite + 20 + k;
-                return -1;
+                if (c.kind == variants::Kind::Player && c.record >= 0 && c.record <= 10 && c.banner < 0) return c.record;
+                int k = BannerNumber(c);
+                uint32_t* list = MnetHandles();
+                if (k < 0 || !list || g_monsterPortraits <= 0) return -1;
+                int16_t* rect = SpriteRect(list[kLobbyBannerSprite + s]);
+                if (!rect) return -1;
+                int16_t x = static_cast<int16_t>(256 + (k % 23) * 76), y = static_cast<int16_t>(294 + (k / 23) * 26);
+                static int told = 0;
+                if (told < 8 && (rect[0] != x || rect[1] != y))
+                {
+                    ++told;
+                    Log(L"variants: lobby banner of slot %d: %S (banner %d) - sprite %d's rectangle %d,%d %dx%d -> %d,%d", s, c.name, k,
+                        kLobbyBannerSprite + s, rect[0], rect[1], rect[2], rect[3], x, y);
+                }
+                __try { rect[0] = x, rect[1] = y; }
+                __except (EXCEPTION_EXECUTE_HANDLER) { return -1; }
+                return kLobbyBannerSprite + s;
             }
             return -1;
         }

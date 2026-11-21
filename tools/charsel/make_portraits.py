@@ -43,21 +43,27 @@ MONSTERS = ['vestio', 'ommato', 'anthro', 'guard', 'andro', 'ceno', 'partheno', 
 # by hand-tuned flood fill, see the commit): sprites portrait_<name>.tga after blank.tga.
 EXTRA = ['germano', 'belono', 'n03', 'spokesman', 'ubiquitous', 'kajikawa', 'tetsuya', 'arthur', 'reindeer', 'mac',
          'baroness', 'mikan', 'ai', 'maniac', 'kei']
-DUPLICATES = ['ubiquitous', 'mac', 'baroness', 'reindeer']  # sprites 111-114 (the record then grows, pdnet's MakeMnetCopy)
+DUPLICATES = ['ubiquitous']  # sprite 111 (Ubiquitous Keyboard and Ubiquitous share the picture)
+# MNet.alr's sprite list must stay inside its first 0x2000 bytes (115 sprites): pdnet grew it to 0x3000 for a test on
+# 2026-11-21 and the game crashed on the online menu. 112 are used, 3 left (ADDED portraits).
+MAX_SPRITES = 115
 # The lobby's small red banners (window_chara_NN, 74 x 24, one per charaset record) for the Advanced list's NPCs
-# (the user, 2026-11-21): banner_<name>.tga (sprites 115 on), cut from portraits\<name>.png around the face
-# (x, y, width of the box; height = width * 24 / 74) and coloured like the game's own banners (source\window_chara.png,
-# the 11 players' banners from MNet0400).
+# (the user, 2026-11-21), cut from portraits\<name>.png around the face (x, y, width of the box; height = width * 24 /
+# 74) and coloured like the game's own banners (source\window_chara.png, the 11 players' banners from MNet0400).
+# They are art only: no sprite each. The lobby shows one banner per slot through the game's unused sprites
+# dummy001-004 (27-30, LOBBY_SLOTS), which pdnet points at banner k's pixels at run time (gamepatches.cpp LobbyBanner):
+# banner k is at x = 256 + (k % 23) * 76, y = 294 + (k // 23) * 26 in MNet0800 (texture 9).
 BANNERS = {'spokesman': (35, 12, 74), 'mikan': (25, 50, 86), 'ai': (28, 48, 80), 'kei': (28, 40, 80),
            'kajikawa': (32, 36, 86), 'n03': (33, 24, 80), 'maniac': (18, 52, 80), 'arthur': (30, 44, 86),
            'mac': (19, 30, 86), 'baroness': (20, 26, 86), 'tetsuya': (25, 28, 80), 'reindeer': (34, 38, 86),
            'ubiquitous': (44, 28, 80)}
 # Added (imported / modded) characters: name -> banner box, as BANNERS. Each needs portraits\<name>.png (134 x 96, cut
 # out, untinted: it gets the players' blue-green like the others). They get portrait_<name>.tga and banner_<name>.tga
-# after everything above; sprites.txt lists every sprite's MNET number for variants::Character::portrait / banner
-# (docs/ADDING_CHARACTERS.md). Room: 25 more portraits (cells of rows 2 and 4), 33 more banners, 186 sprites in all.
+# after everything above; sprites.txt lists the portrait's MNET sprite number and the banner's number k for
+# variants::Character::portrait / banner (docs/ADDING_CHARACTERS.md). Room: 3 more portraits (MAX_SPRITES), 33 more banners.
 ADDED = {}
 BANNER_W, BANNER_H = 74, 24
+LOBBY_SLOTS = ['dummy001.tga', 'dummy002.tga', 'dummy003.tga', 'dummy004.tga']  # the game's sprites 27-30
 BANNER_Y = 3 * 98  # in the added art: row 3 of the portrait cells (free), 76 px apart
 
 # Cards in the two guide images (source\characters.png, source\monsters.png, 1000 x 559): left and top of each card's
@@ -206,10 +212,15 @@ def pack():
     for name in DUPLICATES:
         x, y = boxes['portrait_%s.tga' % name]
         sprites.append(('portrait_%s2.tga' % name, 9, x, y, W, H))
-    for k, (name, card) in enumerate(zip(*banners())):
-        x = k * (BANNER_W + 2)
-        art[BANNER_Y:BANNER_Y + BANNER_H, x:x + BANNER_W] = np.asarray(card)
-        sprites.append(('banner_%s.tga' % name, 9, MNET0800_W + x, BANNER_Y, BANNER_W, BANNER_H))
+    per_row = ART_W // (BANNER_W + 2)
+    banner_list = []
+    for k, (name, card) in enumerate(list(zip(*banners())) + list(zip(*banners(ADDED)))):
+        x, y = (k % per_row) * (BANNER_W + 2), BANNER_Y + (k // per_row) * (BANNER_H + 2)
+        assert y + BANNER_H <= 4 * CELL_H, 'no room for more banners'
+        art[y:y + BANNER_H, x:x + BANNER_W] = np.asarray(card)
+        banner_list.append((k, name, MNET0800_W + x, y))
+    for slot in LOBBY_SLOTS:  # the game's names: these replace sprites 27-30 (pointed at banner 0 until pdnet moves them)
+        sprites.append((slot, 9, MNET0800_W, BANNER_Y, BANNER_W, BANNER_H))
     # added characters: portraits in the free cells (row 2 after the NPCs, row 4; row 3 holds the banners), banners
     # after the NPCs' (a second banner row under the first)
     free = [k for k in range(len(cells), 5 * COLUMNS) if k // COLUMNS != 3]
@@ -219,13 +230,8 @@ def pack():
         art[y:y + H, x:x + W] = np.asarray(img)
         sprites.append((sprite, 9, MNET0800_W + x, y))
         sprites[-1] += (W, H)
-    per_row = ART_W // (BANNER_W + 2)
-    for k, (name, card) in enumerate(zip(*banners(ADDED)), start=len(BANNERS)):
-        x, y = (k % per_row) * (BANNER_W + 2), BANNER_Y + (k // per_row) * (BANNER_H + 2)
-        assert y + BANNER_H <= 4 * CELL_H, 'no room for more banners'
-        art[y:y + BANNER_H, x:x + BANNER_W] = np.asarray(card)
-        sprites.append(('banner_%s.tga' % name, 9, MNET0800_W + x, y, BANNER_W, BANNER_H))
-    assert 84 + len(sprites) <= 186, 'more sprites than MNet.alr has room for (pdnet MakeMnetCopy)'
+    added_sprites = [s for s in sprites if s[0] not in LOBBY_SLOTS]
+    assert 84 + len(added_sprites) <= MAX_SPRITES, 'more sprites than MNet.alr has room for (pdnet MakeMnetCopy)'
     fmt, blocks = dxt.encode(art, alpha=True)
     assert fmt == dxt.BC3 and len(blocks) == ART_W * ART_H
     data = bytearray(b'PDCP' + struct.pack('<3I', 1, 1, len(sprites)))
@@ -239,8 +245,13 @@ def pack():
     # the MNET sprite numbers (the game's 84 first; a name the game already has keeps its own number, none so far)
     with open(os.path.join(HERE, 'sprites.txt'), 'w') as f:
         f.write('# MNET sprite numbers of charsel-portraits.bin (make_portraits.py writes this; for variants::Character)\n')
-        for k, s in enumerate(sprites):
+        for k, s in enumerate(added_sprites):
             f.write('%d %s\n' % (84 + k, s[0]))
+        for k, slot in enumerate(LOBBY_SLOTS):
+            f.write('%d %s (lobby banner of slot %d)\n' % (27 + k, slot, k))
+        f.write('# banners (variants::Character::banner = k): k name x y in MNet0800\n')
+        for k, name, x, y in banner_list:
+            f.write('banner %d %s %d %d\n' % (k, name, x, y))
 
 
 if __name__ == '__main__':
