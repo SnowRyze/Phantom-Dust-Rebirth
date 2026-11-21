@@ -4525,6 +4525,9 @@ namespace pdnet::gamepatches
             {
                 if (int pending = g_pendingPick.exchange(-1); pending >= 0)
                 {
+                    // the store came (often right after the grid's A): no second A. Test 10: left waiting, it gave up
+                    // 5 s later on the next character select, and would have pressed A on a COLORS row there.
+                    g_forceConfirm = kConfirmNone;
                     Log(L"variants: Advanced list: the script stores %X for slot %d - pdnet's %X instead", args[0], slot, pending);
                     args[0] = pending;
                     int64_t result = g_storePick(args);
