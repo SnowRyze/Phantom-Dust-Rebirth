@@ -4005,10 +4005,11 @@ namespace pdnet::gamepatches
                                               "Reindeer", "Mac", "Baroness", "Mikan", "Ai", "Maniac", "Kei" };
             static const char* kSecond[4] = { "Ubiquitous", "Mac", "Baroness", "Reindeer" };
             if (entry < 0 || entry >= static_cast<int>(variants::Characters().size())) return kBlankSprite;
-            std::string name = variants::Characters()[entry].name;
+            const variants::Character& c = variants::Characters()[entry];
+            std::string name = c.name;
             for (int k = 0; k < 11; ++k) if (_stricmp(name.c_str(), kPlayers[k]) == 0) return kPortraitFirst + k;
-            bool second = name.size() > 2 && name.compare(name.size() - 2, 2, " 2") == 0;
-            if (name.size() > 2 && (second || name.compare(name.size() - 2, 2, " 1") == 0)) name.resize(name.size() - 2);
+            bool second = c.version == 1; // a second model: portrait_<name>2
+            if (c.kind == variants::Kind::Npc) name = name.substr(0, name.find(' ')); // "Ubiquitous Keyboard" -> its portrait's name
             int last = kMonsterPortraitFirst + g_monsterPortraits - 1;
             if (second)
                 for (int k = 0; k < 4; ++k)

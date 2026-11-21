@@ -104,9 +104,9 @@ players' blue-green (teal_tint in make_portraits.py).
 
 ## The Advanced list (the user's design, 2026-11-20)
 
-Entries (30): the 11 characters; NPCs Spokesman, Mikan, Ai, Kei, Kajikawa, 03, Maniac, Arthur, Mac 1, Mac 2,
-Baroness 1, Baroness 2, Tetsuya, Reindeer 1, Reindeer 2, Ubiquitous 1, Ubiquitous 2 (the "1 / 2" are an NPC's two
-models; both playable for now); extra monsters Germano, Belono. Portrait: the player's as a placeholder where there is none.
+Entries (27): the 11 characters; NPCs Spokesman, Mikan, Ai, Kei, Kajikawa, 03, Maniac, Arthur, Mac, Baroness,
+Tetsuya, Reindeer, Ubiquitous Keyboard, Ubiquitous (2026-11-21: Mac, Baroness and Reindeer keep only their first model;
+Ubiquitous's first model is "Ubiquitous Keyboard", its second "Ubiquitous"); extra monsters Germano, Belono. Portrait: the player's as a placeholder where there is none.
 
 After the pick, three menus in a row:
 1. **Colour**: the character's colour names (one-model characters: "Color 1").
@@ -114,7 +114,7 @@ After the pick, three menus in a row:
 3. **Animation set** (every other motion and the exmots): Jumper (player), Cartwheeler (Edgar), Roller (JD),
    Female Jumper (Freia), Gyne, Guard (to be tested).
 
-Voices: the character's own; Mikan, Mac 1 / 2 Freia's; Ai, Baroness 1 / 2 Tsubutaki's; the other (male) NPCs a fixed
+Voices: the character's own; Mikan, Mac Freia's; Ai, Baroness Tsubutaki's; the other (male) NPCs a fixed
 pick among the playable men's voices (variants.cpp); monsters their own.
 
 ### Build on pick (variants.cpp)

@@ -101,6 +101,8 @@ Ideas, not planned (notes in the change log and reference notes):
 
 ## November 2026
 
+Advanced list entries (2026-11-21, the user): Mac 2, Baroness 2 and Reindeer 2 removed (the others lose their "1"); Ubiquitous 1 / 2 are now "Ubiquitous Keyboard" / "Ubiquitous". 27 entries; EntrySprite picks the second portrait by the entry's model version, not its name.
+
 Advanced list, after menu test 5 (2026-11-21; not yet seen in game). The name plate is back behind pdnet's name: the game still calls command 29 every frame (not drawn on the Advanced list), so its rectangle, the name's width (command 31, also wrapped) and the name line's place (command 23) give the plate's padding, offset, height and colour; pdnet draws one sized for its name under the chosen entry (DrawNamePlate). No name while a pop-up is open (text is drawn over all window backgrounds). Grid 8 px lower (y 58). Pop-ups under 6 rows get one more empty line (the window's height follows its lines).
 
 Advanced list, after menu test 4 (2026-11-21; not yet seen in game). Test 4 (after the user's build had an old gamepatches.cpp): the scanlines stay under the portraits, the game's cursor stays put, no red bar. Changes: the grid at 64 % from y 50 (it touched the top bar), the name under the chosen entry instead of a fixed line, the pop-ups 20 px taller.

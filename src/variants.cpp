@@ -50,7 +50,8 @@ namespace pdnet::variants
             { "JD", Kind::Player, "pc09a", 0, 9, { "Purple", "Green", "White", "Black" }, "BattleVo_JD.bin" },
             { "Sammah", Kind::Player, "pc10a", 0, 10, { "Yellow", "Blue", "Red", "White" }, "BattleVo_Sammah.bin" },
             { "pH", Kind::Player, "pc06a", 0, 6, { "Black", "White", "Yellow", "Red" }, "BattleVo_PH.bin" },
-            // NPCs (no voice of their own: Mikan, Mac and the women Freia / Tsubutaki as the user asked; the men a fixed
+            // NPCs (2026-11-21, the user: only Mac / Baroness / Reindeer's first models; Ubiquitous's first model is
+            // "Ubiquitous Keyboard", its second plain "Ubiquitous") (no voice of their own: Mikan, Mac and the women Freia / Tsubutaki as the user asked; the men a fixed
             // pick among the playable men's voices, made once, 2026-11-20)
             { "Spokesman", Kind::Npc, "npc02a", 0, 30, { "Color 1" }, "BattleVo_Meister.bin" },
             { "Mikan", Kind::Npc, "npc10a", 0, 38, { "Color 1" }, "BattleVo_Freia.bin" },
@@ -60,15 +61,12 @@ namespace pdnet::variants
             { "03", Kind::Npc, "npc01a", 0, 29, { "Color 1" }, "BattleVo_JD.bin" },
             { "Maniac", Kind::Npc, "npc12a", 0, 40, { "Color 1" }, "BattleVo_PH.bin" },
             { "Arthur", Kind::Npc, "npc06a", 0, 34, { "Color 1" }, "BattleVo_Sammah.bin" },
-            { "Mac 1", Kind::Npc, "npc08a", 0, 36, { "Color 1" }, "BattleVo_Freia.bin" },
-            { "Mac 2", Kind::Npc, "npc08a", 1, 36, { "Color 1" }, "BattleVo_Freia.bin" },
-            { "Baroness 1", Kind::Npc, "npc09a", 0, 37, { "Color 1" }, "BattleVo_Tsubutaki.bin" },
-            { "Baroness 2", Kind::Npc, "npc09a", 1, 37, { "Color 1" }, "BattleVo_Tsubutaki.bin" },
+            { "Mac", Kind::Npc, "npc08a", 0, 36, { "Color 1" }, "BattleVo_Freia.bin" },
+            { "Baroness", Kind::Npc, "npc09a", 0, 37, { "Color 1" }, "BattleVo_Tsubutaki.bin" },
             { "Tetsuya", Kind::Npc, "npc05a", 0, 33, { "Color 1" }, "BattleVo_Hero.bin" },
-            { "Reindeer 1", Kind::Npc, "npc07a", 0, 35, { "Color 1" }, "BattleVo_CuffButton.bin" },
-            { "Reindeer 2", Kind::Npc, "npc07a", 1, 35, { "Color 1" }, "BattleVo_CuffButton.bin" },
-            { "Ubiquitous 1", Kind::Npc, "npc03a", 0, 31, { "Color 1" }, "BattleVo_Edgar.bin" },
-            { "Ubiquitous 2", Kind::Npc, "npc03a", 1, 31, { "Color 1" }, "BattleVo_Edgar.bin" },
+            { "Reindeer", Kind::Npc, "npc07a", 0, 35, { "Color 1" }, "BattleVo_CuffButton.bin" },
+            { "Ubiquitous Keyboard", Kind::Npc, "npc03a", 0, 31, { "Color 1" }, "BattleVo_Edgar.bin" },
+            { "Ubiquitous", Kind::Npc, "npc03a", 1, 31, { "Color 1" }, "BattleVo_Edgar.bin" },
             // Extra monsters (their colour files have no names yet)
             { "Germano", Kind::Monster, "enm14a", 0, 25, { "Color 1", "Color 2", "Color 3", "Color 4" }, "BattleVo_Germano.bin" },
             { "Belono", Kind::Monster, "enm15a", 0, 26, { "Color 1", "Color 2", "Color 3", "Color 4" }, "BattleVo_Belono.bin" },
