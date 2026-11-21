@@ -4321,6 +4321,7 @@ namespace pdnet::gamepatches
         void PublishVariant(int slot, const variants::Pick* pick);
         void LogPickTable(const char* why);
         void CarrierClash(int record, int slot);
+        void RetryMemberVariants(const char* why);
 
         int PickSlot()
         {
@@ -4473,6 +4474,7 @@ namespace pdnet::gamepatches
                     args[0] = pending;
                     int64_t result = g_storePick(args);
                     LogPickTable("the script's store");
+                    RetryMemberVariants("this PC picked");
                     return result;
                 }
                 if (g_variantPending.exchange(false))
@@ -4489,7 +4491,9 @@ namespace pdnet::gamepatches
                     Log(L"variants: normal pick %X for slot %d", args[0], slot);
                 }
             }
-            return g_storePick(args);
+            int64_t stored = g_storePick(args);
+            RetryMemberVariants("this PC picked"); // its slot is known now
+            return stored;
         }
 
         // Menu command 29 (0x140207990 -> FUN_14029bb60: a filled rectangle x, y, w, h, colour, drawn at once): the
@@ -5159,6 +5163,11 @@ namespace pdnet::gamepatches
         std::string g_myVariant, g_variantLobby;
         std::map<std::string, std::string> g_memberVariant; // EOS user id -> PD_VARIANT last applied
         std::map<std::string, int> g_memberSlot;            // EOS user id -> the slot their variant was applied to
+        // Toaf's test (2026-11-21): when this PC joined, its own slot still read 0 (the game sets it later) and Nui's
+        // PD_VARIANT for slot 0 was refused as "this PC's own slot" - and never looked at again. Refused ones wait here
+        // (EOS user id -> PD_NAME) and are tried again after this PC's own pick and when the match loads player files.
+        std::map<std::string, std::string> g_memberRetry;
+        std::atomic<bool> g_anyRetry{ false };
 
         std::string VariantText(int slot, const variants::Pick& k)
         {
@@ -5224,6 +5233,7 @@ namespace pdnet::gamepatches
             int oldSlot = g_memberSlot.count(user) ? g_memberSlot[user] : -1;
             if (text.empty())
             {
+                g_memberRetry.erase(user);
                 if (oldSlot >= 0 && oldSlot != mySlot) ClearVariant(oldSlot);
                 g_memberSlot.erase(user);
                 Log(L"variants: online: %S (%S) plays a normal pick now%s", name.c_str(), user.c_str(), oldSlot >= 0 ? L" - their slot's variant is off" : L"");
@@ -5239,9 +5249,12 @@ namespace pdnet::gamepatches
             }
             if (slot == mySlot)
             {
-                Log(L"variants: online: WARNING %S says slot %d, which is this PC's own slot - not used", name.c_str(), slot);
+                Log(L"variants: online: %S says slot %d, which this PC reads as its own slot (yet) - tried again later", name.c_str(), slot);
+                g_memberRetry[user] = name;
+                g_anyRetry = true;
                 return;
             }
+            g_memberRetry.erase(user);
             if (oldSlot >= 0 && oldSlot != slot && oldSlot != mySlot) ClearVariant(oldSlot); // they moved slots
             int value = ActivateVariant(slot, pick);
             g_memberSlot[user] = slot;
@@ -5249,6 +5262,19 @@ namespace pdnet::gamepatches
                 value < 0 ? L" - NOT ACTIVE" : L"");
             if (value >= 0) PrebuildVariant(slot, pick, "another player's pick");
             LogPickTable("after another player's pick");
+        }
+
+        // Members whose PD_VARIANT waited (g_memberRetry), tried again now that this PC's slot may be known.
+        void RetryMemberVariants(const char* why)
+        {
+            if (!g_anyRetry) return;
+            std::lock_guard guard(g_shareLock);
+            std::map<std::string, std::string> waiting;
+            waiting.swap(g_memberRetry);
+            g_anyRetry = false;
+            Log(L"variants: online: trying %zu waiting pick(s) again (%S), this PC's slot %d", waiting.size(), why, *reinterpret_cast<int32_t*>(At(0x140527bc4)));
+            for (auto& [user, name] : waiting)
+                if (auto it = g_memberVariant.find(user); it != g_memberVariant.end() && !it->second.empty()) ApplyMemberVariant(user, name, it->second);
         }
 
         // A carrier file the game opens: built for the active variant (BuildVariantFile), or empty.
@@ -5301,6 +5327,7 @@ namespace pdnet::gamepatches
         HANDLE WINAPI HookedCreateFile2(LPCWSTR name, DWORD access, DWORD share, DWORD disposition, LPCREATEFILE2_EXTENDED_PARAMETERS params)
         {
             size_t n = name ? wcslen(name) : 0;
+            if (g_anyRetry && n > 12 && (wcsstr(name, L"layer\\") || wcsstr(name, L"layer/"))) RetryMemberVariants("the match loads player files");
             bool anyVariant = false;
             for (const ActiveVariant& v : g_variants) anyVariant = anyVariant || v.on;
             if (anyVariant && n > 12)
