@@ -43,7 +43,17 @@ MONSTERS = ['vestio', 'ommato', 'anthro', 'guard', 'andro', 'ceno', 'partheno', 
 # by hand-tuned flood fill, see the commit): sprites portrait_<name>.tga after blank.tga.
 EXTRA = ['germano', 'belono', 'n03', 'spokesman', 'ubiquitous', 'kajikawa', 'tetsuya', 'arthur', 'reindeer', 'mac',
          'baroness', 'mikan', 'ai', 'maniac', 'kei']
-DUPLICATES = ['ubiquitous', 'mac', 'baroness', 'reindeer']  # sprites 111-114 (the last that fit: 115)
+DUPLICATES = ['ubiquitous', 'mac', 'baroness', 'reindeer']  # sprites 111-114 (the record then grows, pdnet's MakeMnetCopy)
+# The lobby's small red banners (window_chara_NN, 74 x 24, one per charaset record) for the Advanced list's NPCs
+# (the user, 2026-11-21): banner_<name>.tga (sprites 115 on), cut from portraits\<name>.png around the face
+# (x, y, width of the box; height = width * 24 / 74) and coloured like the game's own banners (source\window_chara.png,
+# the 11 players' banners from MNet0400).
+BANNERS = {'spokesman': (35, 12, 74), 'mikan': (25, 50, 86), 'ai': (28, 48, 80), 'kei': (28, 40, 80),
+           'kajikawa': (32, 36, 86), 'n03': (33, 24, 80), 'maniac': (18, 52, 80), 'arthur': (30, 44, 86),
+           'mac': (19, 30, 86), 'baroness': (20, 26, 86), 'tetsuya': (25, 28, 80), 'reindeer': (34, 38, 86),
+           'ubiquitous': (44, 28, 80)}
+BANNER_W, BANNER_H = 74, 24
+BANNER_Y = 3 * 98  # in the added art: row 3 of the portrait cells (free), 76 px apart
 
 # Cards in the two guide images (source\characters.png, source\monsters.png, 1000 x 559): left and top of each card's
 # picture, in reading order. The crop leaves out the movement icon (bottom left) and the name bar (bottom).
@@ -121,6 +131,49 @@ def teal_tint(monster_imgs):
     return out
 
 
+def ramp_tint(imgs, reference):
+    """Brightness matched to `reference` (an RGBA image's solid pixels), coloured by its colour for that brightness."""
+    a = np.asarray(reference.convert('RGBA')).reshape(-1, 4)
+    p = a[a[:, 3] > 200][:, :3].astype(np.float64)
+    lum = p @ [0.299, 0.587, 0.114]
+    ramp = np.zeros((256, 3))
+    have = np.zeros(256, bool)
+    for i in range(256):
+        m = np.abs(lum - i) < 4
+        if m.sum() > 5:
+            ramp[i], have[i] = p[m].mean(0), True
+    idx = np.arange(256)
+    for c in range(3):
+        ramp[:, c] = np.interp(idx, idx[have], ramp[have, c])
+    targets = np.percentile(lum, np.linspace(0, 100, 101))
+    out = []
+    for img in imgs:
+        x = np.asarray(img).astype(np.float64)
+        solid = x[..., 3] > 0
+        l = x[..., :3] @ [0.299, 0.587, 0.114]
+        src = np.percentile(l[solid], np.linspace(0, 100, 101))
+        rgb = ramp[np.clip(np.interp(l, src, targets), 0, 255).astype(int)]
+        out.append(Image.fromarray(np.dstack([rgb, x[..., 3]]).clip(0, 255).astype(np.uint8), 'RGBA'))
+    return out
+
+
+def banners():
+    """The lobby banners: the face box of each portrait, 74 x 24, red, on the game banners' dark red."""
+    reference = Image.open(os.path.join(HERE, 'source', 'window_chara.png')).convert('RGBA')
+    crops = []
+    for name, (x, y, w) in BANNERS.items():
+        img = Image.open(os.path.join(HERE, 'portraits', name + '.png')).convert('RGBA')
+        h = round(w * BANNER_H / BANNER_W)
+        crops.append(img.crop((x, y, x + w, y + h)).resize((BANNER_W, BANNER_H), Image.LANCZOS))
+    bg = tuple(int(v) for v in np.asarray(reference)[0, 0])  # the banners' background (49, 12, 16)
+    out = []
+    for img in ramp_tint(crops, reference):
+        card = Image.new('RGBA', (BANNER_W, BANNER_H), bg)
+        card.alpha_composite(img)
+        out.append(card)
+    return list(BANNERS), out
+
+
 def pack():
     """The 11 monster portraits go in the 768 x 512 added to the right of MNet0800. The players keep the game's own
     portraits (the user's choice, 2026-11-20); portraits\\<player>.png are kept for later but not packed."""
@@ -137,19 +190,23 @@ def pack():
         x, y = (k % COLUMNS) * CELL_W, (k // COLUMNS) * CELL_H
         if img is not None:  # blank.tga: an empty (transparent) cell, for places the Advanced list leaves empty
             art[y:y + H, x:x + W] = np.asarray(img)
-        sprites.append((sprite, 9, MNET0800_W + x, y))
+        sprites.append((sprite, 9, MNET0800_W + x, y, W, H))
     # The second models (Mac 2 ...) show the same picture but need sprites of their own (the Advanced list draws all
     # 30 entries at once, and each sprite is one object on screen): portrait_<name>2.tga, the same pixels.
     boxes = {s[0]: (s[2], s[3]) for s in sprites}
     for name in DUPLICATES:
         x, y = boxes['portrait_%s.tga' % name]
-        sprites.append(('portrait_%s2.tga' % name, 9, x, y))
+        sprites.append(('portrait_%s2.tga' % name, 9, x, y, W, H))
+    for k, (name, card) in enumerate(zip(*banners())):
+        x = k * (BANNER_W + 2)
+        art[BANNER_Y:BANNER_Y + BANNER_H, x:x + BANNER_W] = np.asarray(card)
+        sprites.append(('banner_%s.tga' % name, 9, MNET0800_W + x, BANNER_Y, BANNER_W, BANNER_H))
     fmt, blocks = dxt.encode(art, alpha=True)
     assert fmt == dxt.BC3 and len(blocks) == ART_W * ART_H
     data = bytearray(b'PDCP' + struct.pack('<3I', 1, 1, len(sprites)))
     data += struct.pack('<I2HII', 9, ART_W, ART_H, 1, len(blocks)) + blocks  # mode 1: added right of the game's texture
-    for sprite, tex, x, y in sprites:
-        data += struct.pack('<32sI4H', sprite.encode(), tex, x, y, W, H)
+    for sprite, tex, x, y, w, h in sprites:
+        data += struct.pack('<32sI4H', sprite.encode(), tex, x, y, w, h)
     path = os.path.join(HERE, '..', '..', 'kit', 'pdnet', 'charsel-portraits.bin')
     with open(path, 'wb') as f:
         f.write(data)

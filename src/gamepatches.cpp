@@ -3845,10 +3845,20 @@ namespace pdnet::gamepatches
         int64_t CharacterSelectSprite(int64_t* args); // (below)
         void CharacterSelectLeft();
 
+        int LobbyBanner(int sprite); // (below, with the variants)
+
         int64_t HookedDrawSprite(int64_t* args)
         {
             if (args && CurrentMenu(MenuManager()) == kCharacterMenu) return CharacterSelectSprite(args);
             CharacterSelectLeft();
+            if (args && args[0] == 3 && args[1] >= 0 && args[1] <= 26 && CurrentMenu(MenuManager()) == kLobbyMenu)
+                if (int banner = LobbyBanner(static_cast<int>(args[1])); banner >= 0)
+                {
+                    int64_t shown[8];
+                    memcpy(shown, args, sizeof(shown));
+                    shown[1] = banner;
+                    return g_drawSprite(shown);
+                }
             if (!args || args[0] != 3 || (args[1] != 34 && args[1] != 35) || CurrentMenu(MenuManager()) != kLobbyMenu) return g_drawSprite(args);
             int slot = g_rowSlot;
             int mine = *reinterpret_cast<int32_t*>(At(0x140527bc4));
@@ -4854,7 +4864,8 @@ namespace pdnet::gamepatches
         int MakeMnetCopy(const wchar_t* original, const std::wstring& copy, const char*& why)
         {
             constexpr size_t kSize = 863232;
-            constexpr uint32_t kData = 0x2000, kTex = 0x34, kInfo = 0x338, kSprites = 0x428, kSprite = 0x3c;
+            uint32_t kData = 0x2000; // the data's start (header +0xc): moved to 0x3000 below, for more sprite records
+            constexpr uint32_t kTex = 0x34, kInfo = 0x338, kSprites = 0x428, kSprite = 0x3c;
             constexpr uint32_t kEnd = kSprites + kMnetGameSprites * kSprite;
             std::vector<uint8_t> d, p;
             why = "MNet.alr not read";
@@ -4871,6 +4882,12 @@ namespace pdnet::gamepatches
             if (!ReadWholeFile(PdnetDir() + L"charsel-portraits.bin", p, 8 << 20) || p.size() < 16 || memcmp(p.data(), "PDCP", 4) != 0 ||
                 *reinterpret_cast<uint32_t*>(&p[4]) != 1)
                 return -1;
+            // 2026-11-21 (the lobby banners): more sprites than fit before 0x2000 (115). The metadata grows by a page: the
+            // data starts at 0x3000 (header +0xc; texture offsets are relative to it, as phantom_dust_stage rebuilds
+            // files), room for 186 sprites.
+            d.insert(d.begin() + kData, 0x1000, 0);
+            kData += 0x1000;
+            u32(0xc) = kData;
             why = "charsel-portraits.bin doesn't fit MNet.alr";
             uint32_t images = *reinterpret_cast<uint32_t*>(&p[8]), sprites = *reinterpret_cast<uint32_t*>(&p[12]);
             size_t at = 16;
@@ -4937,7 +4954,7 @@ namespace pdnet::gamepatches
                 if (k == kMnetGameSprites)
                 {
                     k = kMnetGameSprites + added++;
-                    if (kSprites + (k + 1) * kSprite + 8 > kData) return -1; // room for 115 sprites in all (111 used, 2026-11-20)
+                    if (kSprites + (k + 1) * kSprite + 8 > kData) return -1; // room for 186 sprites in all (128 used, 2026-11-21)
                     for (uint32_t b = kSprites + k * kSprite + 8; b < kSprites + (k + 1) * kSprite + 8; ++b)
                         if (d[b]) return -1; // only padding may be there
                 }
@@ -5143,6 +5160,27 @@ namespace pdnet::gamepatches
                 line += part;
             }
             Log(L"variants: pick table (%S), this PC's slot %d%s", why, *reinterpret_cast<int32_t*>(At(0x140527bc4)), line.c_str());
+        }
+
+        // The lobby's banner (window_chara_NN: sprite NN = the pick's charaset record) of a carrier whose slot has a variant:
+        // the character's own banner (players), or banner_<name> (NPCs; tools\charsel\make_portraits.py BANNERS, sprites
+        // after the portraits: blank + 15 + 4 + k). -1: the game's.
+        int LobbyBanner(int sprite)
+        {
+            static const char* kBanners[13] = { "Spokesman", "Mikan", "Ai", "Kei", "Kajikawa", "03", "Maniac", "Arthur", "Mac", "Baroness",
+                                                "Tetsuya", "Reindeer", "Ubiquitous" };
+            for (int s = 0; s < 4; ++s)
+            {
+                if (kCarriers[s].record != sprite || !g_variants[s].on) continue;
+                const variants::Character& c = variants::Characters()[g_variants[s].pick.character];
+                if (c.kind == variants::Kind::Player) return c.record;
+                std::string name = c.name;
+                name = name.substr(0, name.find(' ')); // "Ubiquitous Keyboard"
+                for (int k = 0; k < 13; ++k)
+                    if (name == kBanners[k] && kBlankSprite + 20 + k <= kMonsterPortraitFirst + g_monsterPortraits - 1) return kBlankSprite + 20 + k;
+                return -1;
+            }
+            return -1;
         }
 
         // A normal / monster pick of a record that is some slot's carrier while that slot's variant is on: that player
