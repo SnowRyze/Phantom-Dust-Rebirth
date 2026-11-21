@@ -19,6 +19,7 @@ finish-args:
   - --socket=x11              # Wine's X11 driver (XWayland on Wayland and in Steam's Game Mode)
   - --socket=pulseaudio       # game audio, microphone for voice chat
   - --device=all              # GPU and controllers
+  - --allow=multiarch         # wine-uwp's WoW64 makes 32-bit syscalls; without this seccomp kills them
   - --talk-name=org.freedesktop.ScreenSaver   # wine-uwp keeps the screen on while a controller is in use
 modules:
   - name: wine-uwp
