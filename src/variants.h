@@ -19,12 +19,20 @@ namespace pdnet::variants
         int record;             // its charaset record (hitbox; -1: none)
         const char* colours[4]; // colour names; nullptr where it has no such colour file
         const char* voice;      // BattleVo_*.bin
+        // MNET sprites (docs/ADDING_CHARACTERS.md): the Advanced list's portrait (134 x 96) and the lobby's banner
+        // (74 x 24). -1: found by name (the built-in ones), else the placeholder / the carrier's banner.
+        int portrait = -1;
+        int banner = -1;
     };
 
     struct Dodge { const char* name; const char* folder; int move; };      // motions 33-39 from folder; charaset +0x36
     struct AnimationSet { const char* name; const char* folder; int record; }; // every other motion and the exmots
 
     const std::vector<Character>& Characters();
+    // Adds a character after the built-in ones (an imported / modded character; docs/ADDING_CHARACTERS.md). The strings
+    // are copied. Call it at start-up, before the character select opens (the list isn't locked). Returns its index.
+    // Every PC in a lobby needs the same character under the same name (picks are shared by name).
+    int AddCharacter(const Character& c);
     const std::vector<Dodge>& Dodges();
     const std::vector<AnimationSet>& AnimationSets();
     int ColourCount(const Character& c);

@@ -52,6 +52,11 @@ BANNERS = {'spokesman': (35, 12, 74), 'mikan': (25, 50, 86), 'ai': (28, 48, 80),
            'kajikawa': (32, 36, 86), 'n03': (33, 24, 80), 'maniac': (18, 52, 80), 'arthur': (30, 44, 86),
            'mac': (19, 30, 86), 'baroness': (20, 26, 86), 'tetsuya': (25, 28, 80), 'reindeer': (34, 38, 86),
            'ubiquitous': (44, 28, 80)}
+# Added (imported / modded) characters: name -> banner box, as BANNERS. Each needs portraits\<name>.png (134 x 96, cut
+# out, untinted: it gets the players' blue-green like the others). They get portrait_<name>.tga and banner_<name>.tga
+# after everything above; sprites.txt lists every sprite's MNET number for variants::Character::portrait / banner
+# (docs/ADDING_CHARACTERS.md). Room: 25 more portraits (cells of rows 2 and 4), 33 more banners, 186 sprites in all.
+ADDED = {}
 BANNER_W, BANNER_H = 74, 24
 BANNER_Y = 3 * 98  # in the added art: row 3 of the portrait cells (free), 76 px apart
 
@@ -157,11 +162,14 @@ def ramp_tint(imgs, reference):
     return out
 
 
-def banners():
+def banners(boxes=None):
     """The lobby banners: the face box of each portrait, 74 x 24, red, on the game banners' dark red."""
+    boxes = BANNERS if boxes is None else boxes
+    if not boxes:
+        return [], []
     reference = Image.open(os.path.join(HERE, 'source', 'window_chara.png')).convert('RGBA')
     crops = []
-    for name, (x, y, w) in BANNERS.items():
+    for name, (x, y, w) in boxes.items():
         img = Image.open(os.path.join(HERE, 'portraits', name + '.png')).convert('RGBA')
         h = round(w * BANNER_H / BANNER_W)
         crops.append(img.crop((x, y, x + w, y + h)).resize((BANNER_W, BANNER_H), Image.LANCZOS))
@@ -171,7 +179,7 @@ def banners():
         card = Image.new('RGBA', (BANNER_W, BANNER_H), bg)
         card.alpha_composite(img)
         out.append(card)
-    return list(BANNERS), out
+    return list(boxes), out
 
 
 def pack():
@@ -180,12 +188,13 @@ def pack():
     art = np.zeros((ART_H, ART_W, 4), np.uint8)
     sprites = []
     imgs = []
-    for name in MONSTERS + EXTRA:
+    for name in MONSTERS + EXTRA + list(ADDED):
         img = Image.open(os.path.join(HERE, 'portraits', name + '.png')).convert('RGBA')
         imgs.append(img if img.size == (W, H) else img.resize((W, H), Image.LANCZOS))
     imgs = teal_tint(imgs)
     cells = [('monster_%s.tga' % n, img) for n, img in zip(MONSTERS, imgs)] + [('blank.tga', None)] + \
             [('portrait_%s.tga' % n, img) for n, img in zip(EXTRA, imgs[len(MONSTERS):])]
+    added = [('portrait_%s.tga' % n, img) for n, img in zip(ADDED, imgs[len(MONSTERS) + len(EXTRA):])]
     for k, (sprite, img) in enumerate(cells):
         x, y = (k % COLUMNS) * CELL_W, (k // COLUMNS) * CELL_H
         if img is not None:  # blank.tga: an empty (transparent) cell, for places the Advanced list leaves empty
@@ -201,6 +210,22 @@ def pack():
         x = k * (BANNER_W + 2)
         art[BANNER_Y:BANNER_Y + BANNER_H, x:x + BANNER_W] = np.asarray(card)
         sprites.append(('banner_%s.tga' % name, 9, MNET0800_W + x, BANNER_Y, BANNER_W, BANNER_H))
+    # added characters: portraits in the free cells (row 2 after the NPCs, row 4; row 3 holds the banners), banners
+    # after the NPCs' (a second banner row under the first)
+    free = [k for k in range(len(cells), 5 * COLUMNS) if k // COLUMNS != 3]
+    assert len(added) <= len(free), 'no room for more portraits'
+    for k, (sprite, img) in zip(free, added):
+        x, y = (k % COLUMNS) * CELL_W, (k // COLUMNS) * CELL_H
+        art[y:y + H, x:x + W] = np.asarray(img)
+        sprites.append((sprite, 9, MNET0800_W + x, y))
+        sprites[-1] += (W, H)
+    per_row = ART_W // (BANNER_W + 2)
+    for k, (name, card) in enumerate(zip(*banners(ADDED)), start=len(BANNERS)):
+        x, y = (k % per_row) * (BANNER_W + 2), BANNER_Y + (k // per_row) * (BANNER_H + 2)
+        assert y + BANNER_H <= 4 * CELL_H, 'no room for more banners'
+        art[y:y + BANNER_H, x:x + BANNER_W] = np.asarray(card)
+        sprites.append(('banner_%s.tga' % name, 9, MNET0800_W + x, y, BANNER_W, BANNER_H))
+    assert 84 + len(sprites) <= 186, 'more sprites than MNet.alr has room for (pdnet MakeMnetCopy)'
     fmt, blocks = dxt.encode(art, alpha=True)
     assert fmt == dxt.BC3 and len(blocks) == ART_W * ART_H
     data = bytearray(b'PDCP' + struct.pack('<3I', 1, 1, len(sprites)))
@@ -211,6 +236,11 @@ def pack():
     with open(path, 'wb') as f:
         f.write(data)
     print('%d portraits -> %s (%d bytes)' % (len(sprites), os.path.normpath(path), len(data)))
+    # the MNET sprite numbers (the game's 84 first; a name the game already has keeps its own number, none so far)
+    with open(os.path.join(HERE, 'sprites.txt'), 'w') as f:
+        f.write('# MNET sprite numbers of charsel-portraits.bin (make_portraits.py writes this; for variants::Character)\n')
+        for k, s in enumerate(sprites):
+            f.write('%d %s\n' % (84 + k, s[0]))
 
 
 if __name__ == '__main__':

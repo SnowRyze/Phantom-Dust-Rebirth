@@ -22,6 +22,7 @@
 // first named descendant and the distance to it. Rotation and scale keys are copied; translation keys become
 // destination rest + (key - source rest) * |destination rest| / |source rest|, all three axes stored.
 #include "variants.h"
+#include <deque>
 #include <algorithm>
 #include <cctype>
 #include <cmath>
@@ -37,7 +38,7 @@ namespace pdnet::variants
 
         // Colour names: the game's colour files 0-3, named as on the normal list (gamepatches.cpp kCharacterColours).
         // Characters with one model: "Color 1".
-        const std::vector<Character> kCharacters = {
+        std::vector<Character> kCharacters = { // AddCharacter appends
             // Characters
             { "Freia", Kind::Player, "pc02a", 0, 2, { "Grey", "Red", "White", "Black" }, "BattleVo_Freia.bin" },
             { "player", Kind::Player, "pc00a", 0, 0, { "Green", "Red", "Black", "White" }, "BattleVo_Hero.bin" },
@@ -400,6 +401,19 @@ namespace pdnet::variants
     }
 
     const std::vector<Character>& Characters() { return kCharacters; }
+
+    int AddCharacter(const Character& c)
+    {
+        static std::deque<std::string> strings; // the copies' text (a deque: pointers stay valid as it grows)
+        auto keep = [](const char* text) -> const char* { if (!text) return nullptr; strings.emplace_back(text); return strings.back().c_str(); };
+        Character copy = c;
+        copy.name = keep(c.name);
+        copy.folder = keep(c.folder);
+        copy.voice = keep(c.voice);
+        for (auto& colour : copy.colours) colour = keep(colour);
+        kCharacters.push_back(copy);
+        return static_cast<int>(kCharacters.size()) - 1;
+    }
     const std::vector<Dodge>& Dodges() { return kDodges; }
     const std::vector<AnimationSet>& AnimationSets() { return kSets; }
     int ColourCount(const Character& c) { int n = 0; while (n < 4 && c.colours[n]) ++n; return n; }

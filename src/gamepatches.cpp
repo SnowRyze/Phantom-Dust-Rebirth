@@ -3939,6 +3939,8 @@ namespace pdnet::gamepatches
             return g_testPicking == kPickingOpponentCharacter ? "AI OPPONENT'S CHARACTER" : g_testPicking == kPickingCharacter ? "YOUR CHARACTER" : "Online";
         }
 
+        const char* AdvancedHeading(); // (below, with the pages)
+
         void CharacterSelectInput()
         {
             static bool held = false;
@@ -3972,7 +3974,7 @@ namespace pdnet::gamepatches
                 g_charselAdvanced = advanced;
                 Log(L"gamepatch: character select: %s list (%s)", advanced ? L"Advanced" : L"normal", pad ? L"pad Y" : L"Y key");
                 g_popup = kNoPopup;
-                SetMenuHeading(advanced ? "ADVANCED" : CharacterSelectHeading());
+                SetMenuHeading(advanced ? AdvancedHeading() : CharacterSelectHeading());
             }
             held = down;
         }
@@ -4024,7 +4026,18 @@ namespace pdnet::gamepatches
         constexpr int kGridColumns = 6, kGridRows = 5, kGridPitchX = static_cast<int>(134 * kGridScale), kGridPitchY = static_cast<int>(96 * kGridScale);
         constexpr int kGridX = (640 - kGridColumns * kGridPitchX) / 2, kGridY = 58; // test 5: 8 px lower
         constexpr int kFirstFrameSprite = 66, kNamePlateRight = 72;
-        std::atomic<int> g_gridCursor{ 0 };
+        std::atomic<int> g_gridCursor{ 0 }; // index in variants::Characters() (all pages)
+        // Pages (2026-11-21, for characters added with variants::AddCharacter): 30 entries a page, LB / RB or Q / E turn
+        // pages, the heading shows "ADVANCED n/m" when there is more than one.
+        constexpr int kPageSize = kGridColumns * kGridRows;
+        int PageCount() { return (std::max)(1, (static_cast<int>(variants::Characters().size()) + kPageSize - 1) / kPageSize); }
+        const char* AdvancedHeading()
+        {
+            static char text[32];
+            if (PageCount() <= 1) return "ADVANCED";
+            sprintf_s(text, "ADVANCED %d/%d", g_gridCursor / kPageSize + 1, PageCount());
+            return text;
+        }
 
         // The grid place (sprite 38-48) of the name the game draws there (a player's or, with Toggle Monsters, a monster's).
         int PlaceOfName(const std::string& shown)
@@ -4048,6 +4061,7 @@ namespace pdnet::gamepatches
             static const char* kSecond[4] = { "Ubiquitous", "Mac", "Baroness", "Reindeer" };
             if (entry < 0 || entry >= static_cast<int>(variants::Characters().size())) return kBlankSprite;
             const variants::Character& c = variants::Characters()[entry];
+            if (c.portrait >= 0 && c.portrait < kMonsterPortraitFirst + g_monsterPortraits) return c.portrait; // an added character's own
             std::string name = c.name;
             for (int k = 0; k < 11; ++k) if (_stricmp(name.c_str(), kPlayers[k]) == 0) return kPortraitFirst + k;
             bool second = c.version == 1; // a second model: portrait_<name>2
@@ -4131,11 +4145,13 @@ namespace pdnet::gamepatches
             uint32_t* list = MnetHandles();
             if (!list) return;
             int count = static_cast<int>(variants::Characters().size()), cursor = g_gridCursor;
-            for (int e = 0; e < count && e < kGridColumns * kGridRows; ++e)
+            int first = cursor / kPageSize * kPageSize; // this page's entries
+            for (int e = first; e < count && e < first + kPageSize; ++e)
             {
-                int x = kGridX + (e % kGridColumns) * kGridPitchX, y = kGridY + (e / kGridColumns) * kGridPitchY;
+                int x = kGridX + ((e - first) % kGridColumns) * kGridPitchX, y = kGridY + ((e - first) / kGridColumns) * kGridPitchY;
                 DrawHandle(OwnHandle(list, EntrySprite(e)), x, y, kGridScale, e == cursor ? 0xffffffff : 0xff9a9a9a);
             }
+            cursor -= first;
             // the game's own cursor frame (player_cursor2, 138 x 100 around a 134 x 96 portrait), on the chosen entry
             uint32_t frame = list == g_handles ? g_ownFrames[0] : 0;
             if (frame)
@@ -4206,6 +4222,7 @@ namespace pdnet::gamepatches
         variants::Pick g_popupPick;
         std::atomic<bool> g_variantPending{ false }; // the next pick store is the Advanced list's
         std::atomic<int> g_charselKeyMove{ 0 };        // arrow keys / W A S D from the game's key handler: 1 up, 2 down, 3 left, 4 right
+        std::atomic<int> g_charselKeyPage{ 0 };        // Q -1 / E +1: the Advanced list's pages
         constexpr int kCharselPopupWindow = 8, kCharselPopupX = 170, kCharselPopupW = 300;
         constexpr uint32_t kPadUp = 0x40, kPadDown = 0x80, kPadLeft = 0x100, kPadRight = 0x200;
 
@@ -4274,7 +4291,8 @@ namespace pdnet::gamepatches
             int64_t previous = *window;
             *window = reinterpret_cast<int64_t>(WindowAt(manager, 12));
             // the plate under the entry; the name where the game has it against its own plate (test 8: 9 px was too low)
-            int x = kGridX + (cursor % kGridColumns) * kGridPitchX + kGridPitchX / 2, plateY = kGridY + (cursor / kGridColumns + 1) * kGridPitchY;
+            int place = cursor % kPageSize; // on its page
+            int x = kGridX + (place % kGridColumns) * kGridPitchX + kGridPitchX / 2, plateY = kGridY + (place / kGridColumns + 1) * kGridPitchY;
             int y = plateY + (g_haveGamePlate ? g_gameNameY - g_gamePlateY : 1);
             DrawNamePlate(variants::Characters()[cursor].name, x, plateY);
             static char name[64];
@@ -4392,6 +4410,13 @@ namespace pdnet::gamepatches
             bool press[4];
             for (int d = 0; d < 4; ++d) press[d] = dir[d] && !held[d], held[d] = dir[d];
             if (keyMove) press[keyMove - 1] = true; // 1 up, 2 down, 3 left, 4 right
+            static bool heldPage[2] = {};
+            bool pageDir[2] = { AnyPadHolds(0x400), AnyPadHolds(0x800) }; // LB, RB
+            int keyPage = g_charselKeyPage.exchange(0);                   // Q -1, E +1
+            int turn = 0;
+            if ((pageDir[0] && !heldPage[0]) || keyPage < 0) turn = -1;
+            if ((pageDir[1] && !heldPage[1]) || keyPage > 0) turn = 1;
+            heldPage[0] = pageDir[0], heldPage[1] = pageDir[1];
             bool pressA = a && !heldA, pressB = b && !heldB;
             heldA = a, heldB = b;
             if (!g_charselAdvanced) return buttons;
@@ -4399,13 +4424,23 @@ namespace pdnet::gamepatches
             if (g_popup == kNoPopup)
             {
                 int count = static_cast<int>(variants::Characters().size()), cursor = g_gridCursor;
-                int column = cursor % kGridColumns, row = cursor / kGridColumns, rows = (count + kGridColumns - 1) / kGridColumns;
+                int page = cursor / kPageSize, pages = PageCount(), place = cursor % kPageSize;
+                if (turn && pages > 1) page = (page + pages + turn) % pages; // same place on the other page (or its last entry)
+                int onPage = (std::min)(kPageSize, count - page * kPageSize);
+                int column = place % kGridColumns, row = place / kGridColumns, rows = (onPage + kGridColumns - 1) / kGridColumns;
+                if (row >= rows) row = rows - 1;
                 if (press[0]) row = (row + rows - 1) % rows;
                 if (press[1]) row = (row + 1) % rows;
                 if (press[2]) column = (column + kGridColumns - 1) % kGridColumns;
                 if (press[3]) column = (column + 1) % kGridColumns;
-                int next = (std::min)(row * kGridColumns + column, count - 1);
-                if (next != cursor) { g_gridCursor = next; PopupSound(37); }
+                int next = page * kPageSize + (std::min)(row * kGridColumns + column, onPage - 1);
+                if (next != cursor)
+                {
+                    bool newPage = next / kPageSize != cursor / kPageSize;
+                    g_gridCursor = next;
+                    PopupSound(37);
+                    if (newPage) SetMenuHeading(AdvancedHeading()), Log(L"gamepatch: Advanced list: page %d of %d", next / kPageSize + 1, pages);
+                }
                 if (pressB)
                 {
                     // back to the normal list (B again leaves the screen as usual)
@@ -5173,7 +5208,8 @@ namespace pdnet::gamepatches
             {
                 if (kCarriers[s].record != sprite || !g_variants[s].on) continue;
                 const variants::Character& c = variants::Characters()[g_variants[s].pick.character];
-                if (c.kind == variants::Kind::Player) return c.record;
+                if (c.banner >= 0 && c.banner < kMonsterPortraitFirst + g_monsterPortraits) return c.banner; // an added character's own
+                if (c.kind == variants::Kind::Player && c.record >= 0 && c.record <= 10) return c.record;
                 std::string name = c.name;
                 name = name.substr(0, name.find(' ')); // "Ubiquitous Keyboard"
                 for (int k = 0; k < 13; ++k)
@@ -5738,6 +5774,8 @@ namespace pdnet::gamepatches
                 if (key == VK_DOWN || key == 'S') g_charselKeyMove = 2;
                 if (key == VK_LEFT || key == 'A') g_charselKeyMove = 3;
                 if (key == VK_RIGHT || key == 'D') g_charselKeyMove = 4;
+                if (key == 'Q') g_charselKeyPage = -1;
+                if (key == 'E') g_charselKeyPage = 1;
             }
         }
 
