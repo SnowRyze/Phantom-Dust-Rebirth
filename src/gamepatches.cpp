@@ -3846,19 +3846,29 @@ namespace pdnet::gamepatches
         void CharacterSelectLeft();
 
         int LobbyBanner(int sprite); // (below, with the variants)
+        void LobbyBannerHandles();
 
         int64_t HookedDrawSprite(int64_t* args)
         {
             if (args && CurrentMenu(MenuManager()) == kCharacterMenu) return CharacterSelectSprite(args);
             CharacterSelectLeft();
-            if (args && args[0] == 3 && args[1] >= 0 && args[1] <= 26 && CurrentMenu(MenuManager()) == kLobbyMenu)
-                if (int banner = LobbyBanner(static_cast<int>(args[1])); banner >= 0)
-                {
-                    int64_t shown[8];
-                    memcpy(shown, args, sizeof(shown));
-                    shown[1] = banner;
-                    return g_drawSprite(shown);
-                }
+            if (args && CurrentMenu(MenuManager()) == kLobbyMenu)
+            {
+                // Test 9 (2026-11-21): no window_chara draw came through here, so log what the lobby draws (once each), and
+                // also swap the carriers' handles in MNET's list (any draw path that reads the list shows the banner).
+                static std::set<std::pair<int64_t, int64_t>> seen;
+                if (seen.size() < 40 && seen.emplace(args[0], args[1]).second)
+                    Log(L"variants: lobby draws sheet %lld sprite %lld at %lld,%lld", args[0], args[1], args[2], args[3]);
+                LobbyBannerHandles();
+                if (args[0] == 3 && args[1] >= 0 && args[1] <= 26)
+                    if (int banner = LobbyBanner(static_cast<int>(args[1])); banner >= 0)
+                    {
+                        int64_t shown[8];
+                        memcpy(shown, args, sizeof(shown));
+                        shown[1] = banner;
+                        return g_drawSprite(shown);
+                    }
+            }
             if (!args || args[0] != 3 || (args[1] != 34 && args[1] != 35) || CurrentMenu(MenuManager()) != kLobbyMenu) return g_drawSprite(args);
             int slot = g_rowSlot;
             int mine = *reinterpret_cast<int32_t*>(At(0x140527bc4));
@@ -5250,6 +5260,32 @@ namespace pdnet::gamepatches
                 return kLobbyBannerSprite + s;
             }
             return -1;
+        }
+
+        // The carriers' window_chara handles in MNET's list point at their slot's banner sprite while the slot has a variant
+        // (and the game's own otherwise), for draws that don't come through command 95.
+        void LobbyBannerHandles()
+        {
+            static uint32_t* list = nullptr;
+            static uint32_t own[4];
+            uint32_t* now = MnetHandles();
+            if (!now) return;
+            if (now != list)
+            {
+                list = now;
+                for (int s = 0; s < 4; ++s) own[s] = list[kCarriers[s].record];
+                Log(L"variants: lobby banners: carrier handles %X %X %X %X", own[0], own[1], own[2], own[3]);
+            }
+            for (int s = 0; s < 4; ++s)
+            {
+                int shown = LobbyBanner(kCarriers[s].record); // sets the slot sprite's rectangle; -1 = the game's
+                uint32_t want = shown < 0 ? own[s] : list[shown];
+                if (list[kCarriers[s].record] != want)
+                {
+                    list[kCarriers[s].record] = want;
+                    Log(L"variants: lobby banners: slot %d's carrier sprite %d now shows sprite %d", s, kCarriers[s].record, shown < 0 ? kCarriers[s].record : shown);
+                }
+            }
         }
 
         // A normal / monster pick of a record that is some slot's carrier while that slot's variant is on: that player
