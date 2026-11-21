@@ -1,0 +1,7 @@
+# Rebirth's mod catalog: the mods the game's Mods list can show and download. Edited with the Mod Admin app (outside the
+# repository); players' pdlaunch reads this file at every game start.
+# One line per mod:  <id> <github owner/repo> [plugin]
+#   id      a-z, 0-9 and -, 3 to 32 characters; never changes once listed (lobbies and settings use it)
+#   repo    its newest release's first .zip or .7z that the notes give "sha256 <file name> <hex>" for is the download
+#   plugin  only for mods with DLLs under plugins/, after someone has read their source
+mod-test        SnowRyze/PD-mod-test
