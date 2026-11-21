@@ -142,6 +142,32 @@ A stores the variant's carrier value as the pick and leaves the screen. B on the
 While it's on, the game's own window input (FUN_140248b50) runs with the pad words zeroed, so the hidden grid underneath
 doesn't move, and the game's cursor frames / name plate (sprites 66-72) are blanked.
 
+Germano and Belono (2026-11-21): only the Color pop-up; they are picked as the game's own records (25, 26), with no
+variant, nothing built and nothing to share. Ubiquitous Keyboard / Ubiquitous sit side by side (Reindeer after them).
+
+### Online (2026-11-21, not yet tested)
+
+Every PC keeps the same four carriers, one per lobby slot (slot 0 Mechano, 1 Euroto, 2 Hedono, 3 Belono), so a variant's
+pick value (colour << 16 | carrier record) travels through the game's own lobby like any pick. What the carrier stands
+for travels separately:
+
+- The picking PC sets its lobby member attribute `PD_VARIANT` = `1|slot|character|colour|dodge|set` (names, so PCs with
+  different lists notice; version 1). A normal or Germano / Belono pick removes it. xsapi/mpsd.cpp adds it to every
+  member write of this PC (`gamepatches::VariantAttribute`), so the game's own writes don't drop it.
+- Every lobby update (mpsd.cpp `ApplyHostRules`, game lobbies only: they have PD_HOST) goes to `gamepatches::LobbyVariants`:
+  each other member's changed PD_VARIANT turns that slot's variant on (ActivateVariant: the carrier's charaset entry
+  in memory) and starts building its 7 files on a worker thread (PrebuildVariant); an empty one or a member leaving
+  turns it off. Leaving the lobby turns all the others' variants off.
+- Files are built once per pick and session (BuildVariantFile; LocalState\pdnet\variants); the match load only opens
+  them, or waits for a build still running.
+- Known gap: if someone picks Belono (or a carrier record) while slot 3's / that slot's variant is on, they look like
+  that variant (logged as `WARNING ... carrier`).
+
+Log lines to look for (`variants:` in pdnet.log): `Advanced list:` (the pick), `share:` (PD_VARIANT sent, ok / FAILED),
+`online: game lobby`, `online: <name> picked ...` / `plays a normal pick`, `prebuild ... started / done: n of 7 files`,
+`pick table (...)` (the game's pick per slot and the variants on; also when the match loads a carrier's files),
+`the game opens ...`, `... -> ...variants\... (built earlier this session)`, `build FAILED`, `WARNING`.
+
 ## Plan for the Advanced list and movement variants (first notes)
 
 **Menu.** The list is the game's own screen with pdnet in front of it while `g_charselAdvanced` is on: the names,

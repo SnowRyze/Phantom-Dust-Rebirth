@@ -64,9 +64,9 @@ namespace pdnet::variants
             { "Mac", Kind::Npc, "npc08a", 0, 36, { "Color 1" }, "BattleVo_Freia.bin" },
             { "Baroness", Kind::Npc, "npc09a", 0, 37, { "Color 1" }, "BattleVo_Tsubutaki.bin" },
             { "Tetsuya", Kind::Npc, "npc05a", 0, 33, { "Color 1" }, "BattleVo_Hero.bin" },
-            { "Reindeer", Kind::Npc, "npc07a", 0, 35, { "Color 1" }, "BattleVo_CuffButton.bin" },
             { "Ubiquitous Keyboard", Kind::Npc, "npc03a", 0, 31, { "Color 1" }, "BattleVo_Edgar.bin" },
             { "Ubiquitous", Kind::Npc, "npc03a", 1, 31, { "Color 1" }, "BattleVo_Edgar.bin" },
+            { "Reindeer", Kind::Npc, "npc07a", 0, 35, { "Color 1" }, "BattleVo_CuffButton.bin" },
             // Extra monsters (their colour files have no names yet)
             { "Germano", Kind::Monster, "enm14a", 0, 25, { "Color 1", "Color 2", "Color 3", "Color 4" }, "BattleVo_Germano.bin" },
             { "Belono", Kind::Monster, "enm15a", 0, 26, { "Color 1", "Color 2", "Color 3", "Color 4" }, "BattleVo_Belono.bin" },

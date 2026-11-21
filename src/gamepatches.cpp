@@ -4289,6 +4289,10 @@ namespace pdnet::gamepatches
         PickFn g_storePick = nullptr;
         int ActivateVariant(int slot, const variants::Pick& pick); // (below, with the carriers)
         void ClearVariant(int slot);
+        void PrebuildVariant(int slot, const variants::Pick& pick, const char* why);
+        void PublishVariant(int slot, const variants::Pick* pick);
+        void LogPickTable(const char* why);
+        void CarrierClash(int record, int slot);
 
         int PickSlot()
         {
@@ -4301,9 +4305,26 @@ namespace pdnet::gamepatches
         {
             int slot = PickSlot();
             const variants::Pick& k = g_popupPick;
-            int value = slot >= 0 && slot < 4 ? ActivateVariant(slot, k) : -1;
-            Log(L"gamepatch: Advanced list: %S, colour %d, %S, %S set -> slot %d, value %X", variants::Characters()[k.character].name, k.colour,
-                variants::Dodges()[k.dodge].name, variants::AnimationSets()[k.set].name, slot, value);
+            const variants::Character& c = variants::Characters()[k.character];
+            int value = -1;
+            if (c.kind == variants::Kind::Monster)
+            {
+                // Germano / Belono: the game's own record (no variant, nothing to build or share: every PC has them)
+                if (slot >= 0 && slot < 4) ClearVariant(slot);
+                value = (k.colour & 0xffff) << 16 | c.record;
+                CarrierClash(c.record, slot);
+                Log(L"variants: Advanced list: %S colour %d (the game's own record %d) -> slot %d, value %X", c.name, k.colour, c.record, slot, value);
+                PublishVariant(slot, nullptr);
+            }
+            else
+            {
+                value = slot >= 0 && slot < 4 ? ActivateVariant(slot, k) : -1;
+                Log(L"variants: Advanced list: %S, colour %d, %S, %S set -> slot %d, value %X", c.name, k.colour,
+                    variants::Dodges()[k.dodge].name, variants::AnimationSets()[k.set].name, slot, value);
+                if (value >= 0) PrebuildVariant(slot, k, "this PC's pick");
+                PublishVariant(slot, value >= 0 ? &k : nullptr);
+            }
+            LogPickTable("after the Advanced pick");
             if (value < 0 || !g_storePick) return;
             int32_t args[16] = { value };
             g_variantPending = false;
@@ -4364,7 +4385,14 @@ namespace pdnet::gamepatches
             else if (pressA)
             {
                 PopupSound(0);
-                if (g_popup == kColourStep) g_popupPick.colour = g_popupRow, OpenCharselPopup(kDodgeStep);
+                bool monster = variants::Characters()[g_popupPick.character].kind == variants::Kind::Monster;
+                if (g_popup == kColourStep && monster) // Germano / Belono: their own animations, no Movement Type / Animation Set (the user, 2026-11-21)
+                {
+                    g_popupPick.colour = g_popupRow;
+                    g_popup = kNoPopup;
+                    FinishAdvancedPick();
+                }
+                else if (g_popup == kColourStep) g_popupPick.colour = g_popupRow, OpenCharselPopup(kDodgeStep);
                 else if (g_popup == kDodgeStep) g_popupPick.dodge = g_popupRow, OpenCharselPopup(kSetStep);
                 else
                 {
@@ -4408,7 +4436,13 @@ namespace pdnet::gamepatches
                     Log(L"gamepatch: Advanced list: pick %X -> %X (slot %d)", args[0], value, slot);
                     if (value >= 0) args[0] = value;
                 }
-                else ClearVariant(slot);
+                else
+                {
+                    ClearVariant(slot);
+                    PublishVariant(slot, nullptr);
+                    CarrierClash(args[0] & 0xffff, slot);
+                    Log(L"variants: normal pick %X for slot %d", args[0], slot);
+                }
             }
             return g_storePick(args);
         }
@@ -4973,7 +5007,197 @@ namespace pdnet::gamepatches
             return (pick.colour & 0xffff) << 16 | kCarriers[slot].record;
         }
 
-        // A carrier file the game opens: built for the active variant (cached by pick), or empty.
+        // A variant's file: the model (exmot -1, Player\<carrier>\<carrier><colour>.alr) or exmot0..5.ala, built once per
+        // pick and session into LocalState\pdnet\variants (PrebuildVariant builds them in the background as soon as a pick
+        // is known, so the match load only opens them). Empty if the build failed (the game's own file is used then).
+        std::mutex g_buildLock;
+        std::set<std::wstring> g_builtFiles;
+        std::wstring BuildVariantFile(const variants::Pick& pick, int exmot, const wchar_t* forName)
+        {
+            std::string key = std::to_string(pick.character) + "-" + std::to_string(pick.dodge) + "-" + std::to_string(pick.set);
+            std::string out = exmot >= 0 ? key + "-exmot" + std::to_string(exmot) + ".ala" : key + "-" + std::to_string(pick.colour) + ".alr";
+            std::wstring dir = LocalStatePath() + L"\\pdnet\\variants";
+            std::wstring target = dir + L"\\" + std::wstring(out.begin(), out.end());
+            std::lock_guard guard(g_buildLock); // one build at a time (variants:: keeps its stats in statics); waits for a running prebuild
+            if (g_builtFiles.count(target))
+            {
+                Log(L"variants: %s -> %s (built earlier this session)", forName, target.c_str());
+                return target;
+            }
+            std::string error;
+            ULONGLONG started = GetTickCount64();
+            std::vector<uint8_t> bytes = exmot >= 0 ? variants::BuildExmot(pick, exmot, ReadGameFile, error) : variants::BuildModel(pick, ReadGameFile, error);
+            if (bytes.empty())
+            {
+                Log(L"variants: %s - build FAILED, the game's own file stays (%S; data folder '%s')", forName, error.c_str(), g_dataPrefix.c_str());
+                return L"";
+            }
+            CreateDirectoryW((LocalStatePath() + L"\\pdnet").c_str(), nullptr);
+            CreateDirectoryW(dir.c_str(), nullptr);
+            HANDLE f = g_createFile2(target.c_str(), GENERIC_WRITE, 0, CREATE_ALWAYS, nullptr);
+            if (f == INVALID_HANDLE_VALUE)
+            {
+                Log(L"variants: %s - could not write %s (error %lu)", forName, target.c_str(), GetLastError());
+                return L"";
+            }
+            DWORD written = 0;
+            BOOL ok = WriteFile(f, bytes.data(), static_cast<DWORD>(bytes.size()), &written, nullptr) && written == bytes.size();
+            CloseHandle(f);
+            variants::Stats st = variants::LastStats();
+            Log(L"variants: %s -> %s (%u bytes, %llu ms; %d runs, %d tracks, %d dropped, %d joints)%s", forName, target.c_str(), static_cast<unsigned>(bytes.size()),
+                GetTickCount64() - started, st.runs, st.tracks, st.dropped, st.joints, ok ? L"" : L" - WRITE FAILED");
+            if (!ok) return L"";
+            g_builtFiles.insert(target);
+            return target;
+        }
+
+        // All of a pick's files, on a worker thread (logged with their times).
+        void PrebuildVariant(int slot, const variants::Pick& pick, const char* why)
+        {
+            std::thread([slot, pick, why]
+            {
+                ULONGLONG started = GetTickCount64();
+                const char* name = variants::Characters()[pick.character].name;
+                Log(L"variants: prebuild for slot %d (%S): %S colour %d, %S, %S set - started", slot, why, name, pick.colour,
+                    variants::Dodges()[pick.dodge].name, variants::AnimationSets()[pick.set].name);
+                int ok = BuildVariantFile(pick, -1, L"(prebuild model)").empty() ? 0 : 1;
+                for (int k = 0; k < 6; ++k)
+                {
+                    wchar_t label[32];
+                    swprintf_s(label, L"(prebuild exmot%d)", k);
+                    ok += BuildVariantFile(pick, k, label).empty() ? 0 : 1;
+                }
+                Log(L"variants: prebuild for slot %d (%S) done: %d of 7 files, %llu ms", slot, name, ok, GetTickCount64() - started);
+            }).detach();
+        }
+
+        // What the game has picked per lobby slot (0x140527c20, colour << 16 | record) and which variants are on.
+        void LogPickTable(const char* why)
+        {
+            const int32_t* picks = reinterpret_cast<const int32_t*>(At(0x140527c20));
+            std::wstring line;
+            for (int s = 0; s < 4; ++s)
+            {
+                wchar_t part[160];
+                std::lock_guard guard(g_variantLock);
+                const ActiveVariant& v = g_variants[s];
+                swprintf_s(part, L" | slot %d: %X%s%S", s, picks[s], v.on ? L" variant " : L"", v.on ? variants::Characters()[v.pick.character].name : "");
+                line += part;
+            }
+            Log(L"variants: pick table (%S), this PC's slot %d%s", why, *reinterpret_cast<int32_t*>(At(0x140527bc4)), line.c_str());
+        }
+
+        // A normal / monster pick of a record that is some slot's carrier while that slot's variant is on: that player
+        // would show the variant (Belono is slot 3's carrier). Only logged for now.
+        void CarrierClash(int record, int slot)
+        {
+            for (int s = 0; s < 4; ++s)
+                if (s != slot && record == kCarriers[s].record && g_variants[s].on)
+                    Log(L"variants: WARNING slot %d picked record %d, the carrier of slot %d's variant (%S): it will look like that variant", slot, record, s,
+                        variants::Characters()[g_variants[s].pick.character].name);
+        }
+
+        // ---- Online: each PC shares its pick as its lobby member attribute PD_VARIANT, "1|slot|character|colour|dodge|set"
+        // (names, not list numbers, so a mismatch shows), empty for a normal pick. xsapi/mpsd.cpp adds it to every member
+        // write (VariantAttribute) and hands every lobby update to LobbyVariants, which turns the other members' picks
+        // on for their slots (and builds their files in the background).
+        std::mutex g_shareLock;
+        std::string g_myVariant, g_variantLobby;
+        std::map<std::string, std::string> g_memberVariant; // EOS user id -> PD_VARIANT last applied
+        std::map<std::string, int> g_memberSlot;            // EOS user id -> the slot their variant was applied to
+
+        std::string VariantText(int slot, const variants::Pick& k)
+        {
+            return "1|" + std::to_string(slot) + "|" + variants::Characters()[k.character].name + "|" + std::to_string(k.colour) + "|" +
+                   variants::Dodges()[k.dodge].name + "|" + variants::AnimationSets()[k.set].name;
+        }
+
+        bool ParseVariant(const std::string& text, int& slot, variants::Pick& k, std::string& why)
+        {
+            std::vector<std::string> f;
+            for (size_t at = 0;;)
+            {
+                size_t bar = text.find('|', at);
+                f.push_back(text.substr(at, bar == std::string::npos ? std::string::npos : bar - at));
+                if (bar == std::string::npos) break;
+                at = bar + 1;
+            }
+            if (f.size() != 6 || f[0] != "1") { why = "not version 1 / 6 fields"; return false; }
+            slot = atoi(f[1].c_str());
+            k = {};
+            k.colour = atoi(f[3].c_str());
+            for (size_t i = 0; i < variants::Characters().size(); ++i) if (f[2] == variants::Characters()[i].name) k.character = static_cast<int>(i);
+            for (size_t i = 0; i < variants::Dodges().size(); ++i) if (f[4] == variants::Dodges()[i].name) k.dodge = static_cast<int>(i);
+            int set = -1;
+            for (size_t i = 0; i < variants::AnimationSets().size(); ++i) if (f[5] == variants::AnimationSets()[i].name) set = static_cast<int>(i);
+            if (slot < 0 || slot > 3) { why = "slot out of range"; return false; }
+            if (k.character < 0) { why = "unknown character '" + f[2] + "' (older / newer pdnet?)"; return false; }
+            if (set < 0) { why = "unknown animation set '" + f[5] + "'"; return false; }
+            k.set = set;
+            if (k.colour < 0 || k.colour > 3) k.colour = 0;
+            return true;
+        }
+
+        void PublishVariant(int slot, const variants::Pick* pick)
+        {
+            if (g_testPicking != kPickingNone) return; // Test Arsenal: nobody to tell
+            std::string text = pick ? VariantText(slot, *pick) : "", lobby;
+            {
+                std::lock_guard guard(g_shareLock);
+                if (text == g_myVariant) return;
+                g_myVariant = text;
+                lobby = g_variantLobby;
+            }
+            if (lobby.empty())
+            {
+                Log(L"variants: share: no game lobby known yet - '%S' goes out with this PC's next lobby write", text.c_str());
+                return;
+            }
+            std::thread([lobby, text]
+            {
+                lobbies::Changes member;
+                if (text.empty()) member.remove.push_back("PD_VARIANT");
+                else member.set["PD_VARIANT"] = text;
+                bool ok = lobbies::Update(lobby, lobbies::Changes{}, member);
+                Log(L"variants: share: PD_VARIANT '%S' to lobby %S - %s", text.c_str(), lobby.c_str(), ok ? L"ok" : L"FAILED");
+            }).detach();
+        }
+
+        // Another member's PD_VARIANT changed (or they left: `text` empty).
+        void ApplyMemberVariant(const std::string& user, const std::string& name, const std::string& text)
+        {
+            int mySlot = *reinterpret_cast<int32_t*>(At(0x140527bc4));
+            int oldSlot = g_memberSlot.count(user) ? g_memberSlot[user] : -1;
+            if (text.empty())
+            {
+                if (oldSlot >= 0 && oldSlot != mySlot) ClearVariant(oldSlot);
+                g_memberSlot.erase(user);
+                Log(L"variants: online: %S (%S) plays a normal pick now%s", name.c_str(), user.c_str(), oldSlot >= 0 ? L" - their slot's variant is off" : L"");
+                return;
+            }
+            int slot = -1;
+            variants::Pick pick;
+            std::string why;
+            if (!ParseVariant(text, slot, pick, why))
+            {
+                Log(L"variants: online: %S's PD_VARIANT '%S' not used: %S", name.c_str(), text.c_str(), why.c_str());
+                return;
+            }
+            if (slot == mySlot)
+            {
+                Log(L"variants: online: WARNING %S says slot %d, which is this PC's own slot - not used", name.c_str(), slot);
+                return;
+            }
+            if (oldSlot >= 0 && oldSlot != slot && oldSlot != mySlot) ClearVariant(oldSlot); // they moved slots
+            int value = ActivateVariant(slot, pick);
+            g_memberSlot[user] = slot;
+            Log(L"variants: online: %S (%S) picked %S for slot %d -> carrier value %X%s", name.c_str(), user.c_str(), text.c_str(), slot, value,
+                value < 0 ? L" - NOT ACTIVE" : L"");
+            if (value >= 0) PrebuildVariant(slot, pick, "another player's pick");
+            LogPickTable("after another player's pick");
+        }
+
+        // A carrier file the game opens: built for the active variant (BuildVariantFile), or empty.
         std::wstring VariantFile(LPCWSTR name)
         {
             std::wstring path(name);
@@ -4994,40 +5218,17 @@ namespace pdnet::gamepatches
                     if (!g_variants[slot].on || _stricmp(folder.c_str(), kCarriers[slot].folder) != 0) continue;
                     pick = g_variants[slot].pick;
                 }
-                g_dataPrefix = std::wstring(name, name + player); // up to Player\ (the game's own spelling)
-                std::string key = std::to_string(pick.character) + "-" + std::to_string(pick.dodge) + "-" + std::to_string(pick.set);
-                std::string out, error;
-                std::vector<uint8_t> bytes;
-                ULONGLONG started = GetTickCount64();
+                {
+                    std::lock_guard guard(g_buildLock); // a prebuild may be reading it
+                    std::wstring prefix(name, name + player); // up to Player\ (the game's own spelling)
+                    if (prefix != g_dataPrefix) g_dataPrefix = prefix;
+                }
+                static ULONGLONG lastTable = 0; // the pick table once per match load
+                if (GetTickCount64() - lastTable > 20000) { lastTable = GetTickCount64(); LogPickTable("the match loads a carrier's files"); }
                 if (file.size() == 10 && file.compare(0, 5, "exmot") == 0 && file.compare(6, 4, ".ala") == 0 && isdigit(static_cast<unsigned char>(file[5])))
-                {
-                    out = key + "-exmot" + file.substr(5, 1) + ".ala";
-                    bytes = variants::BuildExmot(pick, file[5] - '0', ReadGameFile, error);
-                }
-                else if (file.size() == strlen(kCarriers[slot].folder) + 5 && file.compare(file.size() - 4, 4, ".alr") == 0 && isdigit(static_cast<unsigned char>(file[file.size() - 5])))
-                {
-                    out = key + "-" + std::to_string(pick.colour) + ".alr";
-                    bytes = variants::BuildModel(pick, ReadGameFile, error);
-                }
-                else continue;
-                if (bytes.empty())
-                {
-                    Log(L"variants: %s left as the game's (%S)", name, error.c_str());
-                    return L"";
-                }
-                std::wstring dir = LocalStatePath() + L"\\pdnet\\variants";
-                CreateDirectoryW((LocalStatePath() + L"\\pdnet").c_str(), nullptr);
-                CreateDirectoryW(dir.c_str(), nullptr);
-                std::wstring target = dir + L"\\" + std::wstring(out.begin(), out.end());
-                HANDLE f = g_createFile2(target.c_str(), GENERIC_WRITE, 0, CREATE_ALWAYS, nullptr);
-                if (f == INVALID_HANDLE_VALUE) return L"";
-                DWORD written = 0;
-                BOOL ok = WriteFile(f, bytes.data(), static_cast<DWORD>(bytes.size()), &written, nullptr) && written == bytes.size();
-                CloseHandle(f);
-                variants::Stats st = variants::LastStats();
-                Log(L"variants: %s -> %s (%u bytes, %llu ms; %d runs, %d tracks, %d dropped, %d joints)", name, target.c_str(), static_cast<unsigned>(bytes.size()),
-                    GetTickCount64() - started, st.runs, st.tracks, st.dropped, st.joints);
-                return ok ? target : L"";
+                    return BuildVariantFile(pick, file[5] - '0', name);
+                if (file.size() == strlen(kCarriers[slot].folder) + 5 && file.compare(file.size() - 4, 4, ".alr") == 0 && isdigit(static_cast<unsigned char>(file[file.size() - 5])))
+                    return BuildVariantFile(pick, -1, name);
             }
             return L"";
         }
@@ -5074,8 +5275,11 @@ namespace pdnet::gamepatches
             {
                 static std::once_flag once;
                 static std::wstring copy;
-                std::call_once(once, [name]
+                std::call_once(once, [name, n]
                 {
+                    // the game's data folder as it names it (for variant builds before any player file is opened)
+                    g_dataPrefix = std::wstring(name, name + n - 13);
+                    Log(L"variants: data folder '%s'", g_dataPrefix.c_str());
                     std::wstring path = LocalStatePath() + L"\\pdnet\\MNet.alr";
                     const char* why = "";
                     int added = MakeMnetCopy(name, path, why);
@@ -6492,6 +6696,64 @@ namespace pdnet::gamepatches
     {
         if (!g_editorFromLobby || g_lobbyEndedInEditor.exchange(true)) return;
         Log(L"menu: the lobby ended while its Arsenal editor is open - leaving the editor goes out of the lobby");
+    }
+
+    // Advanced list variants online (see PublishVariant / ApplyMemberVariant).
+    std::string VariantAttribute()
+    {
+        std::lock_guard guard(g_shareLock);
+        return g_myVariant;
+    }
+
+    void LobbyVariants(const std::string& lobbyId, const std::vector<LobbyVariant>& members)
+    {
+        std::string me = lobbies::LocalUserId();
+        std::lock_guard guard(g_shareLock);
+        if (g_variantLobby != lobbyId)
+        {
+            Log(L"variants: online: game lobby %S (%zu member(s)), this PC's slot %d, its PD_VARIANT '%S'", lobbyId.c_str(), members.size(),
+                *reinterpret_cast<int32_t*>(At(0x140527bc4)), g_myVariant.c_str());
+            g_variantLobby = lobbyId;
+            if (!g_myVariant.empty()) // a pick made before the lobby was known
+            {
+                std::string text = g_myVariant;
+                std::thread([lobbyId, text]
+                {
+                    bool ok = lobbies::Update(lobbyId, lobbies::Changes{}, lobbies::Changes{ { { "PD_VARIANT", text } }, {} });
+                    Log(L"variants: share: PD_VARIANT '%S' to lobby %S (on joining) - %s", text.c_str(), lobbyId.c_str(), ok ? L"ok" : L"FAILED");
+                }).detach();
+            }
+        }
+        std::set<std::string> present;
+        for (const LobbyVariant& m : members)
+        {
+            if (m.userId == me) continue;
+            present.insert(m.userId);
+            auto it = g_memberVariant.find(m.userId);
+            if (it != g_memberVariant.end() && it->second == m.value) continue;
+            if (it == g_memberVariant.end() && m.value.empty()) { g_memberVariant[m.userId] = ""; continue; }
+            g_memberVariant[m.userId] = m.value;
+            ApplyMemberVariant(m.userId, m.name, m.value);
+        }
+        for (auto it = g_memberVariant.begin(); it != g_memberVariant.end();)
+        {
+            if (present.count(it->first)) { ++it; continue; }
+            if (!it->second.empty()) ApplyMemberVariant(it->first, "(left the lobby)", "");
+            it = g_memberVariant.erase(it);
+        }
+    }
+
+    void LobbyVariantsLeft(const std::string& lobbyId)
+    {
+        std::lock_guard guard(g_shareLock);
+        if (lobbyId != g_variantLobby) return;
+        int mySlot = *reinterpret_cast<int32_t*>(At(0x140527bc4));
+        for (auto& [user, slot] : g_memberSlot)
+            if (slot != mySlot) ClearVariant(slot);
+        Log(L"variants: online: left lobby %S - the other players' variants are off (%zu)", lobbyId.c_str(), g_memberSlot.size());
+        g_memberSlot.clear();
+        g_memberVariant.clear();
+        g_variantLobby.clear();
     }
 
     int SavedRating()

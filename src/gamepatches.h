@@ -1,6 +1,7 @@
 #pragma once
 #include <map>
 #include <string>
+#include <vector>
 // Small in-memory changes to the game's own code (PDUWP.exe), applied once at startup. Each one checks that the bytes
 // it replaces are exactly the expected ones first, so a different game version is left alone. No files are changed.
 namespace pdnet::gamepatches
@@ -54,6 +55,13 @@ namespace pdnet::gamepatches
     // The lobby this player is in closed, removed them, or lost its game host (xsapi/mpsd.cpp). If they are in the
     // Arsenal editor opened from the lobby, leaving it takes them out the way the lobby would, not back into it.
     void LobbyEnded();
+
+    // Advanced list variants online: this PC's lobby member attribute PD_VARIANT (empty: a normal pick), and every
+    // update of a game lobby's members (EOS user id, PD_NAME, PD_VARIANT) / leaving it. xsapi/mpsd.cpp calls these.
+    struct LobbyVariant { std::string userId, name, value; };
+    std::string VariantAttribute();
+    void LobbyVariants(const std::string& lobbyId, const std::vector<LobbyVariant>& members);
+    void LobbyVariantsLeft(const std::string& lobbyId);
 
     // True while the save's multiplayer profile is the active one (online play; the story uses the other).
     bool MultiplayerProfile();
