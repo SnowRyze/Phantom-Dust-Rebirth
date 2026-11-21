@@ -9,6 +9,7 @@
 #include "gamepads.h"
 #include "labtests.h"
 #include "film.h"
+#include "variants.h"
 #include "p2p.h"
 #include <fstream>
 #include <winrt/Windows.ApplicationModel.Core.h>
@@ -686,6 +687,15 @@ namespace pdnet::gamepatches
         // The scoreboard battle (g4 #661 = FUN_140214770) has map 2, layout 0 and character 0 built in, so HookedTestStart
         // passes the picks to its FUN_140128990 (the match setup, 0x48 per player: the character at +8; online, the same field).
         constexpr int kArsenalPickMenu = 67, kCharacterMenu = 46, kStageMenu = 47;
+        std::atomic<bool> g_forceBack{ false }; // the character select backs out at its next input label (the Advanced list, HookedSetState)
+        // In a lobby the B event goes back to the lobby setup (menu 48) and the lobby sends the player to the character
+        // select again (the user's test, 2026-11-21: a loop). There the Advanced list confirms the game's own way: the A
+        // event on the grid (the script opens its COLORS window, 2), then A on its first row; the store (g4 #571) then
+        // gets pdnet's value (g_pendingPick) and the script finishes as after any pick (session cmd 35, back to the lobby).
+        enum ForceConfirm { kConfirmNone, kConfirmGrid, kConfirmWaitColours, kConfirmColours };
+        std::atomic<int> g_forceConfirm{ kConfirmNone };
+        std::atomic<ULONGLONG> g_forceConfirmSince{ 0 };
+        std::atomic<int> g_pendingPick{ -1 }; // the value the next store (g4 #571) writes instead of the script's
         enum TestPick { kPickingNone, kPickingCharacter, kPickingArsenal, kPickingOpponentCharacter, kPickingOpponentArsenal, kPickingStage };
         std::atomic<int> g_testPicking{ kPickingNone };
         std::atomic<int> g_testStage{ -1 }, g_testLayout{ 0 }, g_testCharacter{ -1 }, g_testOpponentCharacter{ -1 }, g_testArsenal{ 0 };
@@ -1133,9 +1143,10 @@ namespace pdnet::gamepatches
         {
             static std::atomic<int> logged{ 0 };
             uint32_t table = id >> 16, index = id & 0xffff;
-            // The lobby, and (2026-11-14) the Lab's screens: what decides the split-screen "Player 2" warning there.
+            // The lobby, and (2026-11-14) the Lab's screens: what decides the split-screen "Player 2" warning there; (2026-11-20)
+            // the character select: how it builds its list and handles X / Y (the Advanced list).
             int menu = CurrentMenu(MenuManager());
-            if (table > 2 || index > 255 || (menu != kLobbyMenu && menu != kLabMenu && menu != kStockMenu && menu != kEditorMenu) || logged > 5000) return;
+            if (table > 2 || index > 255 || (menu != kLobbyMenu && menu != kLabMenu && menu != kStockMenu && menu != kEditorMenu && menu != kCharacterMenu) || logged > 5000) return;
             int32_t arg = 0;
             if (args && !IsBadReadPtr(args, 4)) arg = args[0];
             // Each command + argument + result once: some are called every frame with alternating arguments.
@@ -2460,9 +2471,13 @@ namespace pdnet::gamepatches
             *reinterpret_cast<int16_t*>(manager + 0x10402) = current;
         }
 
+        int64_t CharacterSelectButtons(int64_t buttons); // (below)
+        void DrawCharselPopup(int64_t* args);
+
         int64_t HookedDrawWindow(int64_t* args)
         {
             int64_t result = g_drawWindow(args);
+            if (CurrentMenu(MenuManager()) == kCharacterMenu) { DrawCharselPopup(args); return result; }
             int64_t manager = MenuManager();
             if (!args || !g_confirmingSave || !InSettings() || !manager) return result;
             int16_t* list = WindowAt(manager, static_cast<int>(args[0]));
@@ -2487,6 +2502,7 @@ namespace pdnet::gamepatches
         int64_t HookedButtons(int64_t* args)
         {
             int64_t buttons = g_buttons(args);
+            if ((!args || args[0] == 0) && CurrentMenu(MenuManager()) == kCharacterMenu) return CharacterSelectButtons(buttons);
             if (InSettings() && g_theatre && (!args || args[0] == 0))
             {
                 static bool held[2] = {};
@@ -2551,6 +2567,7 @@ namespace pdnet::gamepatches
             return 0; // nothing else while asking
         }
         // The button bar (menu command 88 with 2, text): the Options screen's "Change / Back" gets "A Save".
+        bool CharacterSelectBar(const char* text, char* out, size_t size); // (below)
         int64_t HookedButtonBar(int64_t* args)
         {
             const char* kSave = g_theatre ? kTheatreBar : g_confirmingSave ? kConfirmBar : kNormalBar;
@@ -2565,6 +2582,18 @@ namespace pdnet::gamepatches
                 memcpy(changed, args, sizeof(changed));
                 changed[1] = reinterpret_cast<int64_t>(kSave);
                 return g_buttonBar(changed);
+            }
+            static char charselBar[160];
+            if (args && CopyString(reinterpret_cast<const char*>(args[1]), charselBar, sizeof(charselBar)))
+            {
+                static char withY[200];
+                if (CharacterSelectBar(charselBar, withY, sizeof(withY)))
+                {
+                    int64_t changed[8];
+                    memcpy(changed, args, sizeof(changed));
+                    changed[1] = reinterpret_cast<int64_t>(withY);
+                    return g_buttonBar(changed);
+                }
             }
             return g_buttonBar(args);
         }
@@ -3261,6 +3290,30 @@ namespace pdnet::gamepatches
         {
             NoteState(args);
             int64_t manager = MenuManager();
+            if (manager && CurrentMenu(manager) == kCharacterMenu && g_forceBack.exchange(false))
+            {
+                *reinterpret_cast<int32_t*>(manager + 0x10414) = 6; // the B event: the script runs its back (the Advanced list's pick is stored)
+                Log(L"gamepatch: Advanced list: leaving the character select");
+            }
+            if (manager && CurrentMenu(manager) == kCharacterMenu && g_forceConfirm != kConfirmNone)
+            {
+                char state[16] = "?";
+                if (args) CopyString(reinterpret_cast<const char*>(args[0]), state, sizeof(state));
+                int step = g_forceConfirm;
+                if (step == kConfirmGrid || step == kConfirmColours)
+                {
+                    *reinterpret_cast<int32_t*>(manager + 0x10414) = 5;                         // the A event
+                    *reinterpret_cast<int32_t*>(manager + 0x10418) = step == kConfirmGrid ? 12 : 2; // on the grid (window 12) / COLORS (window 2)
+                    g_forceConfirm = step == kConfirmGrid ? kConfirmWaitColours : kConfirmNone;
+                    Log(L"variants: Advanced list: A for the script on %s (state label '%S')", step == kConfirmGrid ? L"the grid" : L"its COLORS window", state);
+                }
+                else if (GetTickCount64() - g_forceConfirmSince > 5000)
+                {
+                    Log(L"variants: Advanced list: WARNING the script's COLORS window didn't come within 5 s (state label '%S') - given up", state);
+                    g_forceConfirm = kConfirmNone;
+                    g_pendingPick = -1;
+                }
+            }
             int32_t event = manager ? *reinterpret_cast<int32_t*>(manager + 0x10414) : 0;
             int64_t result = g_setState(args);
             CheckSendLogPick(event);
@@ -3603,6 +3656,19 @@ namespace pdnet::gamepatches
             { "Scoto", { "Navy", "Red", "White", "Yellow" } },
         };
         const CharacterColours* g_shownCharacter = nullptr;
+        int g_gameNameX = 0, g_gameNameY = 0; // where the game draws the name line (command 23), for the Advanced list's plate
+        uint8_t g_nameTextColours[16]; bool g_haveNameColours = false; // 0x14054c9b0 (command 27's text colours) at the name line
+        int g_gamePlateY = 0; uint32_t g_gamePlateColour = 0; bool g_haveGamePlate = false; // the game's plate sprite 71 (command 95)
+        std::string g_charselName; // the name line's text as drawn ("player" for Alpha), for the portrait (HookedDrawSprite)
+        // MNet.alr's portraits (MakeMnetCopy, CharacterSelectSprite).
+        constexpr int kMnetGameSprites = 84;
+        constexpr int kPortraitFirst = 38, kPortraitLast = 48, kMonsterPortraitFirst = 84;
+        std::atomic<int> g_monsterPortraits{ 0 }; // sprites added (0: the game's file)
+        constexpr int kSpriteSize = 0x3c;
+        std::vector<uint8_t> g_mnetSprites; // the copy's sprite records (MakeMnetCopy), to find the game's loaded table
+        // The monsters with a portrait, in charsel-portraits.bin's order (sprites 84 on).
+        constexpr const char* kMonsterPortraitNames[] = { "Vestio", "Ommato", "Anthro", "Guard", "Andro", "Ceno", "Partheno",
+                                                         "Catoptro", "Gyne", "Claustro", "Scoto" };
 
         // The text with the game's \a control codes (\a + digits + one letter) left out.
         std::string PlainText(const char* text)
@@ -3620,6 +3686,9 @@ namespace pdnet::gamepatches
             }
             return plain;
         }
+
+        bool CharacterSelectAdvanced(); // (below)
+        const char* AdvancedName(const std::string& shown);
 
         bool ColourNameText(int64_t* args, int64_t* changed)
         {
@@ -3649,7 +3718,8 @@ namespace pdnet::gamepatches
             {
                 // The name line is "\a130c%s" with the character's name (Experimental 149, MojoJoey's log); the first
                 // character, Alpha, is drawn as "player". Any other name there is a character without a list entry.
-                if (strcmp(format, "\a130c%s") == 0)
+                bool nameLine = strncmp(format, "\a130c%s", 7) == 0;
+                if (nameLine) // "\a130c%s\f" on the character select (the log shows the \f)
                 {
                     // Diagnostics (151: Alpha still showed the previous character's colours): every change of the name.
                     static std::string lastName;
@@ -3661,6 +3731,10 @@ namespace pdnet::gamepatches
                         lastName = value;
                     }
                     g_shownCharacter = nullptr;
+                    g_charselName = value;
+                    g_gameNameX = static_cast<int>(args[0]), g_gameNameY = static_cast<int>(args[1]);
+                    memcpy(g_nameTextColours, At(0x14054c9b0), sizeof(g_nameTextColours)); // the name's yellow (test 8)
+                    g_haveNameColours = true;
                     if (_stricmp(value.c_str(), "player") == 0) value = "Alpha";
                 }
                 for (std::string candidate : { PlainText(text.c_str()), PlainText(value.c_str()) })
@@ -3670,8 +3744,19 @@ namespace pdnet::gamepatches
                     for (const auto& character : kCharacterColours)
                         if (!candidate.empty() && _stricmp(candidate.c_str(), character.name) == 0) g_shownCharacter = &character;
                 }
+                if (nameLine && CharacterSelectAdvanced())
+                {
+                    // The Advanced list: the place's entry instead (empty places: no name); its colours are Freia's.
+                    static char advancedName[48];
+                    strcpy_s(advancedName, AdvancedName(g_charselName));
+                    g_shownCharacter = advancedName[0] ? &kCharacterColours[0] : nullptr;
+                    memcpy(changed, args, 8 * sizeof(int64_t));
+                    changed[3] = reinterpret_cast<int64_t>(advancedName);
+                    return true;
+                }
                 return false;
             }
+            if (g_forceConfirm == kConfirmWaitColours) g_forceConfirm = kConfirmColours; // its COLORS window is up: the second A
             int colour = static_cast<int>(args[3]);
             static const CharacterColours* lastUsed = reinterpret_cast<const CharacterColours*>(1);
             static int uses = 0;
@@ -3757,8 +3842,33 @@ namespace pdnet::gamepatches
             return g_slotStatus(args);
         }
 
+        int64_t CharacterSelectSprite(int64_t* args); // (below)
+        void CharacterSelectLeft();
+
+        int LobbyBanner(int sprite); // (below, with the variants)
+        void LobbyBannerHandles();
+
         int64_t HookedDrawSprite(int64_t* args)
         {
+            if (args && CurrentMenu(MenuManager()) == kCharacterMenu) return CharacterSelectSprite(args);
+            CharacterSelectLeft();
+            if (args && CurrentMenu(MenuManager()) == kLobbyMenu)
+            {
+                // Test 9 (2026-11-21): no window_chara draw came through here, so log what the lobby draws (once each), and
+                // also swap the carriers' handles in MNET's list (any draw path that reads the list shows the banner).
+                static std::set<std::pair<int64_t, int64_t>> seen;
+                if (seen.size() < 40 && seen.emplace(args[0], args[1]).second)
+                    Log(L"variants: lobby draws sheet %lld sprite %lld at %lld,%lld", args[0], args[1], args[2], args[3]);
+                LobbyBannerHandles();
+                if (args[0] == 3 && args[1] >= 0 && args[1] <= 26)
+                    if (int banner = LobbyBanner(static_cast<int>(args[1])); banner >= 0)
+                    {
+                        int64_t shown[8];
+                        memcpy(shown, args, sizeof(shown));
+                        shown[1] = banner;
+                        return g_drawSprite(shown);
+                    }
+            }
             if (!args || args[0] != 3 || (args[1] != 34 && args[1] != 35) || CurrentMenu(MenuManager()) != kLobbyMenu) return g_drawSprite(args);
             int slot = g_rowSlot;
             int mine = *reinterpret_cast<int32_t*>(At(0x140527bc4));
@@ -3800,6 +3910,768 @@ namespace pdnet::gamepatches
             strcat_s(named[slot], " ");
             strcat_s(named[slot], g_talkMark.c_str());
             return reinterpret_cast<int64_t>(named[slot]);
+        }
+
+        // The character select's portraits (see MakeMnetCopy, ShowGrid): while the name line (ColourNameText) shows a
+        // monster, the grid shows each place's monster (sprites 84 on, kMonsterFor). Every distinct sprite drawn there is
+        // logged once, to check.
+        // The Advanced list (2026-11-20, the user's request): Y (controller) or the Y key on the character select switches
+        // g_charselAdvanced: heading ADVANCED, the button bar's Y entry (\a5# is the Y icon: "\a5#Invite" in the lobby),
+        // and the test list: Freia (jump) / Freia (dodge) in two grid places (ShowGrid, AdvancedName). Still to come: the
+        // 12 colour rows "<colour> - <jump>", and the pick itself (the variant characters don't exist yet).
+        std::atomic<bool> g_charselAdvanced{ false };
+        enum PopupStep { kNoPopup, kColourStep, kDodgeStep, kSetStep }; // the Advanced list's pop-ups (CharacterSelectButtons)
+        std::atomic<int> g_popup{ kNoPopup };
+        std::atomic<bool> g_charselKeyY{ false }; // the Y key went down (HookedKey: the game's window delivers keys)
+        constexpr uint32_t kPadY = 0x20; // Windows.Gaming.Input.GamepadButtons.Y (A 4, B 8, X 0x10, Y 0x20; 0x80 is D-pad down)
+
+        // The screen shows all 11 portraits at once, a grid of sprites 38-48 (player_00..10: player, Edgar, Freia,
+        // Meister, Chunky, Cuff Button, pH, Know, Tsubutaki, JD, Sammah); with Toggle Monsters on it draws the same
+        // sprites. Each grid place has its monster, as in the user's guide images (Freia -> Vestio, player -> Ommato, as
+        // the logs show): kMonsterFor[sprite - 38] = index in kMonsterPortraitNames.
+        constexpr int kMonsterFor[11] = { 1 /* player: Ommato */, 2 /* Edgar: Anthro */, 0 /* Freia: Vestio */, 3 /* Meister: Guard */,
+                                          4 /* Chunky: Andro */, 5 /* Cuff Button: Ceno */, 6 /* pH: Partheno */, 7 /* Know: Catoptro */,
+                                          8 /* Tsubutaki: Gyne */, 9 /* JD: Claustro */, 10 /* Sammah: Scoto */ };
+
+        // True while the name line shows a monster (Toggle Monsters on).
+        bool ShowingMonsters()
+        {
+            for (const char* name : kMonsterPortraitNames)
+                if (_stricmp(g_charselName.c_str(), name) == 0) return true;
+            for (const char* name : { "Mechano", "Euroto", "Hedono", "Germano", "Belono" })
+                if (_stricmp(g_charselName.c_str(), name) == 0) return true;
+            return false;
+        }
+
+        // The heading the screen had: Test Arsenal's (HookedAddItem), else the multiplayer menus' "Online".
+        const char* CharacterSelectHeading()
+        {
+            return g_testPicking == kPickingOpponentCharacter ? "AI OPPONENT'S CHARACTER" : g_testPicking == kPickingCharacter ? "YOUR CHARACTER" : "Online";
+        }
+
+        const char* AdvancedHeading(); // (below, with the pages)
+
+        void CharacterSelectInput()
+        {
+            static bool held = false;
+            static ULONGLONG lastFrame = 0;
+            ULONGLONG now = GetTickCount64();
+            if (now - lastFrame > 1000) // the screen just opened: the normal list
+            {
+                if (g_charselAdvanced.exchange(false))
+                {
+                    SetMenuHeading(CharacterSelectHeading());
+                    Log(L"gamepatch: character select: normal list (screen opened)");
+                }
+                held = true; // a Y still held from the last screen doesn't count
+            }
+            lastFrame = now;
+            uint8_t keys[256];
+            bool pad = AnyPadHolds(kPadY), key = g_charselKeyY.exchange(false) || (KeysHeld(keys) && keys['Y']);
+            bool down = pad || key;
+            static ULONGLONG nextBeat = 0; // diagnostics while the screen is open: every 2 s, up to 60 lines
+            static int beats = 0;
+            if (now >= nextBeat && beats < 60)
+            {
+                ++beats;
+                nextBeat = now + 2000;
+                Log(L"gamepatch: character select: name '%S', monsters %d, Y pad %d key %d, Advanced %d", g_charselName.c_str(), ShowingMonsters() ? 1 : 0,
+                    pad ? 1 : 0, key ? 1 : 0, g_charselAdvanced ? 1 : 0);
+            }
+            if (down && !held && g_popup == kNoPopup)
+            {
+                bool advanced = !g_charselAdvanced;
+                g_charselAdvanced = advanced;
+                Log(L"gamepatch: character select: %s list (%s)", advanced ? L"Advanced" : L"normal", pad ? L"pad Y" : L"Y key");
+                g_popup = kNoPopup;
+                SetMenuHeading(advanced ? AdvancedHeading() : CharacterSelectHeading());
+            }
+            held = down;
+        }
+
+        bool SameBytes(const uint8_t* at, const uint8_t* want, size_t size)
+        {
+            __try { return memcmp(at, want, size) == 0; }
+            __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+        }
+
+        // How the game draws a sheet's sprite (menu command 95 = FUN_140246c70): the menu manager keeps per texture slot
+        // (manager + 0x10530 + slot * 32) a pointer at +0x18 to a u32 per sprite, the sprite's handle for the drawing
+        // code (FUN_1401983e0). Test 1 swapped the sprite number in command 95: only the back layer changed. Test 2 / 3
+        // switched sprite records in memory: no effect (and test 3's search of all memory took 2.5 s per frame).
+        // Now the handles of sprites 38-48 in MNET's (slot 3) list are switched: every drawing that goes through that
+        // list shows the monster / Advanced picture. The game's own handles go back when the screen is left.
+        constexpr int kBlankSprite = kMonsterPortraitFirst + 11; // blank.tga: transparent, after the monsters
+        uint32_t g_ownHandles[11], g_putHandles[11]; // the game's, and the last ones pdnet put there
+        uint32_t* g_handles = nullptr; // the list the own handles were read from
+        // the game's cursor frames (66-69), name plate (70-72): hidden on the Advanced list (test 4: the white card and red
+        // bar of 68 / 69 / 70 still followed the game's hidden cursor). [0] is player_cursor2, pdnet's own cursor frame.
+        constexpr int kFrameSprites[7] = { 67, 66, 68, 69, 70, 71, 72 };
+        constexpr int kFrameCount = 7;
+        uint32_t g_ownFrames[kFrameCount];
+        int g_gridShown = -1; // what the grid shows: 0 own, 1 monsters, 2 Advanced
+        ULONGLONG g_gridLastFrame = 0;
+
+        uint32_t* MnetHandles()
+        {
+            int64_t manager = MenuManager();
+            if (!manager) return nullptr;
+            uint8_t* slot = reinterpret_cast<uint8_t*>(manager) + 0x10530 + kMultiplayerTextures * 32;
+            uint64_t loaded = 0, list = 0;
+            if (!SameBytes(slot, slot, 32)) return nullptr;
+            memcpy(&loaded, slot, 8);
+            memcpy(&list, slot + 0x18, 8);
+            return loaded && list ? reinterpret_cast<uint32_t*>(list) : nullptr;
+        }
+
+        // The Advanced list (the user's design, 2026-11-20; docs/CHARACTER_SELECT.md): all of variants::Characters() at once,
+        // a grid of 6 x 5 portraits drawn by pdnet at 55 % size (DrawAdvancedGrid), with its own cursor (CharacterSelectButtons:
+        // D-pad, stick, arrow keys, W A S D). The game's own grid stays underneath but shows nothing: its sprites 38-48 and
+        // its cursor frame / name plate (67, 71, 72) get the blank sprite's handle (ShowGrid), and their command 95 draws
+        // are skipped. Each entry has a sprite of its own (one object on screen per sprite): players their player_NN,
+        // the others portrait_<name> (96-110) and portrait_<name>2 (111-114) for the second models.
+        // Test 2: no gaps between portraits, as big as fits above the game's "Choose the character" line.
+        // Test 3: off the top bar, room under the bottom row for the name: 64 % = 85 x 61 per entry, 510 x 305 from y 50.
+        constexpr float kGridScale = 0.64f;
+        constexpr int kGridColumns = 6, kGridRows = 5, kGridPitchX = static_cast<int>(134 * kGridScale), kGridPitchY = static_cast<int>(96 * kGridScale);
+        constexpr int kGridX = (640 - kGridColumns * kGridPitchX) / 2, kGridY = 58; // test 5: 8 px lower
+        constexpr int kFirstFrameSprite = 66, kNamePlateRight = 72;
+        std::atomic<int> g_gridCursor{ 0 }; // index in variants::Characters() (all pages)
+        // Pages (2026-11-21, for characters added with variants::AddCharacter): 30 entries a page, LB / RB or Q / E turn
+        // pages, the heading shows "ADVANCED n/m" when there is more than one.
+        constexpr int kPageSize = kGridColumns * kGridRows;
+        int PageCount() { return (std::max)(1, (static_cast<int>(variants::Characters().size()) + kPageSize - 1) / kPageSize); }
+        const char* AdvancedHeading()
+        {
+            static char text[32];
+            if (PageCount() <= 1) return "ADVANCED";
+            sprintf_s(text, "ADVANCED %d/%d", g_gridCursor / kPageSize + 1, PageCount());
+            return text;
+        }
+
+        // The grid place (sprite 38-48) of the name the game draws there (a player's or, with Toggle Monsters, a monster's).
+        int PlaceOfName(const std::string& shown)
+        {
+            static const char* kPlayers[11] = { "player", "Edgar", "Freia", "Meister", "Chunky", "Cuff Button", "pH", "Know", "Tsubutaki", "JD", "Sammah" };
+            for (int k = 0; k < 11; ++k)
+            {
+                if (_stricmp(shown.c_str(), kPlayers[k]) == 0) return kPortraitFirst + k;
+                if (_stricmp(shown.c_str(), kMonsterPortraitNames[kMonsterFor[k]]) == 0) return kPortraitFirst + k;
+            }
+            return -1;
+        }
+
+        // An entry's portrait sprite: a player's own (player_00..10 in the game's character order), else portrait_<name>.
+        int EntrySprite(int entry)
+        {
+            static const char* kPlayers[11] = { "player", "Edgar", "Freia", "Meister", "Chunky", "Cuff Button", "pH", "Know", "Tsubutaki", "JD", "Sammah" };
+            // charsel-portraits.bin's EXTRA (96 on) and DUPLICATES (111 on) orders, tools\charsel\make_portraits.py
+            static const char* kExtra[15] = { "Germano", "Belono", "03", "Spokesman", "Ubiquitous", "Kajikawa", "Tetsuya", "Arthur",
+                                              "Reindeer", "Mac", "Baroness", "Mikan", "Ai", "Maniac", "Kei" };
+            static const char* kSecond[1] = { "Ubiquitous" }; // DUPLICATES (Mac / Baroness / Reindeer 2 are gone)
+            if (entry < 0 || entry >= static_cast<int>(variants::Characters().size())) return kBlankSprite;
+            const variants::Character& c = variants::Characters()[entry];
+            if (c.portrait >= 0 && c.portrait < kMonsterPortraitFirst + g_monsterPortraits) return c.portrait; // an added character's own
+            std::string name = c.name;
+            for (int k = 0; k < 11; ++k) if (_stricmp(name.c_str(), kPlayers[k]) == 0) return kPortraitFirst + k;
+            bool second = c.version == 1; // a second model: portrait_<name>2
+            if (c.kind == variants::Kind::Npc) name = name.substr(0, name.find(' ')); // "Ubiquitous Keyboard" -> its portrait's name
+            int last = kMonsterPortraitFirst + g_monsterPortraits - 1;
+            if (second)
+                for (int k = 0; k < 1; ++k)
+                    if (_stricmp(name.c_str(), kSecond[k]) == 0 && kBlankSprite + 16 + k <= last) return kBlankSprite + 16 + k;
+            for (int k = 0; k < 15; ++k)
+                if (_stricmp(name.c_str(), kExtra[k]) == 0 && kBlankSprite + 1 + k <= last) return kBlankSprite + 1 + k;
+            return kPortraitFirst; // placeholder: the player's portrait
+        }
+
+        // The game's name plate shows nothing on the Advanced list (pdnet writes the name under its own grid).
+        const char* AdvancedName(const std::string&) { return ""; }
+
+        bool CharacterSelectAdvanced() { return g_charselAdvanced; }
+
+
+        // The sprite a grid place (sprite 38-48) shows now.
+        int ShownAt(int place, int what)
+        {
+            if (what == 2) return kBlankSprite; // the Advanced list draws its own grid
+            int monster = kMonsterFor[place - kPortraitFirst];
+            return what == 1 && monster < g_monsterPortraits ? kMonsterPortraitFirst + monster : place;
+        }
+
+        bool PutHandles(uint32_t* list, const uint32_t* handles)
+        {
+            __try { memcpy(list + kPortraitFirst, handles, sizeof(g_ownHandles)); return true; }
+            __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+        }
+
+        void ShowGrid(int what)
+        {
+            uint32_t* list = MnetHandles();
+            if (!list || g_monsterPortraits <= 11) return;
+            // A new load of MNET (another list, or the same memory with other handles than pdnet's last): its own handles.
+            bool reloaded = list != g_handles || !SameBytes(reinterpret_cast<uint8_t*>(list + kPortraitFirst), reinterpret_cast<uint8_t*>(g_putHandles), sizeof(g_putHandles));
+            if (!reloaded && what == g_gridShown) return;
+            if (reloaded)
+            {
+                if (!SameBytes(reinterpret_cast<uint8_t*>(list + kPortraitFirst), reinterpret_cast<uint8_t*>(list + kPortraitFirst), sizeof(g_ownHandles))) return;
+                memcpy(g_ownHandles, list + kPortraitFirst, sizeof(g_ownHandles));
+                for (int i = 0; i < kFrameCount; ++i) g_ownFrames[i] = list[kFrameSprites[i]];
+                g_handles = list;
+                static int told = 0;
+                if (told++ < 10) Log(L"gamepatch: character select: MNET sprite handles 38-48 %u..%u, monsters from %u", g_ownHandles[0], g_ownHandles[10], list[kMonsterPortraitFirst]);
+            }
+            uint32_t handles[11];
+            for (int k = 0; k < 11; ++k)
+            {
+                int shown = ShownAt(kPortraitFirst + k, what);
+                handles[k] = shown >= kPortraitFirst && shown <= kPortraitLast ? g_ownHandles[shown - kPortraitFirst] : list[shown];
+            }
+            if (!PutHandles(list, handles)) return;
+            g_gridShown = what;
+            memcpy(g_putHandles, handles, sizeof(handles));
+            // the game's cursor frame and name plate: hidden on the Advanced list (pdnet draws its own cursor)
+            for (int i = 0; i < kFrameCount; ++i) list[kFrameSprites[i]] = what == 2 ? list[kBlankSprite] : g_ownFrames[i];
+        }
+
+        // Draws a sprite of MNET by its handle (FUN_1401983e0: the object's position, size and colour for this frame;
+        // its 6th / 7th arguments point to x / y scales, the 8th to the colour). The game's grid places are drawn this way
+        // by FUN_140246c70 (menu command 95) with no scale.
+        using SpriteObjectFn = void (*)(void* unused, uint32_t handle, int x, int y, int64_t a5, const float* scaleX, const float* scaleY,
+                                        const uint32_t* colour, int64_t a9, int64_t a10);
+        void DrawHandle(uint32_t handle, int x, int y, float scale, uint32_t colour)
+        {
+            reinterpret_cast<SpriteObjectFn>(At(0x1401983e0))(nullptr, handle, x, y, 0, &scale, &scale, &colour, 0, 0);
+        }
+
+        uint32_t OwnHandle(uint32_t* list, int sprite)
+        {
+            if (sprite >= kPortraitFirst && sprite <= kPortraitLast && list == g_handles) return g_ownHandles[sprite - kPortraitFirst];
+            return list[sprite];
+        }
+
+        void DrawAdvancedGrid()
+        {
+            uint32_t* list = MnetHandles();
+            if (!list) return;
+            int count = static_cast<int>(variants::Characters().size()), cursor = g_gridCursor;
+            int first = cursor / kPageSize * kPageSize; // this page's entries
+            for (int e = first; e < count && e < first + kPageSize; ++e)
+            {
+                int x = kGridX + ((e - first) % kGridColumns) * kGridPitchX, y = kGridY + ((e - first) / kGridColumns) * kGridPitchY;
+                DrawHandle(OwnHandle(list, EntrySprite(e)), x, y, kGridScale, e == cursor ? 0xffffffff : 0xff9a9a9a);
+            }
+            cursor -= first;
+            // the game's own cursor frame (player_cursor2, 138 x 100 around a 134 x 96 portrait), on the chosen entry
+            uint32_t frame = list == g_handles ? g_ownFrames[0] : 0;
+            if (frame)
+                DrawHandle(frame, kGridX + (cursor % kGridColumns) * kGridPitchX - 1, kGridY + (cursor / kGridColumns) * kGridPitchY - 1, kGridScale, 0xffffffff);
+        }
+
+        int64_t CharacterSelectSprite(int64_t* args)
+        {
+            g_gridLastFrame = GetTickCount64();
+            CharacterSelectInput(); // once per drawn sprite: several times a frame, edges only
+            ShowGrid(g_charselAdvanced ? 2 : ShowingMonsters() ? 1 : 0);
+            static std::set<std::pair<int64_t, int64_t>> seen;
+            if (seen.size() < 60 && seen.emplace(args[0], args[1]).second)
+                Log(L"gamepatch: character select draws sheet %lld sprite %lld at %lld,%lld (name line '%S')", args[0], args[1], args[2], args[3], g_charselName.c_str());
+            if (args[0] == 3 && args[1] == kNamePlateRight - 1) // 71: the game's plate, its y and colour for pdnet's (test 8)
+            {
+                g_gamePlateY = static_cast<int>(args[3]), g_gamePlateColour = static_cast<uint32_t>(args[4]), g_haveGamePlate = true;
+                static int told = 0;
+                if (told++ < 2) Log(L"gamepatch: character select: plate sprite at %lld,%lld colour %llX, name line at %d,%d", args[2], args[3], args[4], g_gameNameX, g_gameNameY);
+            }
+            if (g_charselAdvanced && args[0] == 3 &&
+                ((args[1] >= kPortraitFirst && args[1] <= kPortraitLast) || (args[1] >= kFirstFrameSprite && args[1] <= kNamePlateRight)))
+                return 1; // pdnet's grid is drawn after the screen's window (DrawCharselPopup)
+            return g_drawSprite(args);
+        }
+
+        // Leaving the screen: the game's own handles back (the lobby draws the same sheet), if MNET is still that load.
+        void CharacterSelectLeft()
+        {
+            if (g_gridShown <= 0 || GetTickCount64() - g_gridLastFrame < 300) return;
+            if (MnetHandles() == g_handles && g_handles)
+            {
+                PutHandles(g_handles, g_ownHandles);
+                for (int i = 0; i < kFrameCount; ++i) g_handles[kFrameSprites[i]] = g_ownFrames[i];
+            }
+            g_gridShown = 0;
+        }
+
+        // The button bar: "\a6#Select \a580r\a4#Toggle Monsters \a2#Confirm \a3#Back" ($MONSTER_HINT) gets the Y entry.
+        bool CharacterSelectBar(const char* text, char* out, size_t size)
+        {
+            if (CurrentMenu(MenuManager()) != kCharacterMenu) return false;
+            static std::set<std::string> told;
+            if (told.size() < 10 && told.insert(text).second)
+            {
+                std::string shown;
+                for (const char* p = text; *p; ++p) shown += *p == '\a' ? std::string("\\a") : std::string(1, *p);
+                Log(L"gamepatch: character select: button bar '%S'", shown.c_str());
+            }
+            if (strcmp(text, "$MONSTER_HINT") == 0) text = "\a6#Select \a580r\a4#Toggle Monsters \a2#Confirm \a3#Back"; // newstrings.txt monster_hint (English)
+            const char* toggle = strstr(text, "\a4#Toggle Monsters ");
+            if (!toggle) return false;
+            // Normal: "... X Toggle Monsters  Y Advanced  A Confirm  B Back". Advanced: X does nothing there, so its entry goes:
+            // "... Y All Characters  A Confirm  B Back" (the name of the list Y goes back to).
+            size_t before = toggle - text, after = before + strlen("\a4#Toggle Monsters ");
+            if (g_charselAdvanced) _snprintf_s(out, size, _TRUNCATE, "%.*s\a5#All Characters %s", static_cast<int>(before), text, text + after);
+            else _snprintf_s(out, size, _TRUNCATE, "%.*s\a5#Advanced %s", static_cast<int>(after), text, text + after);
+            return true;
+        }
+
+        // The Advanced list's three menus after a pick (the user, 2026-11-20): Colour, Dodge type, Animation set, one after
+        // the other in a pop-up window (window 8, set up like the Settings' save question: menu commands 33 / 36 / 37 /
+        // 38 / 40, drawn after the screen's window 12 with command 42, its rows with command 24). While it's open the
+        // script gets no buttons (CharacterSelectButtons): up / down (D-pad, stick, arrow keys, W / S) move, A picks, B
+        // goes back. The last A hands the pick to the game: pdnet presses A twice for the script (the grid place, then
+        // the game's own COLORS row) and the store (g4 #571) gets the variant's carrier value (ActivateVariant).
+        std::atomic<int> g_popupRow{ 0 };
+        variants::Pick g_popupPick;
+        std::atomic<bool> g_variantPending{ false }; // the next pick store is the Advanced list's
+        std::atomic<int> g_charselKeyMove{ 0 };        // arrow keys / W A S D from the game's key handler: 1 up, 2 down, 3 left, 4 right
+        std::atomic<int> g_charselKeyPage{ 0 };        // Q -1 / E +1: the Advanced list's pages
+        constexpr int kCharselPopupWindow = 8, kCharselPopupX = 170, kCharselPopupW = 300;
+        constexpr uint32_t kPadUp = 0x40, kPadDown = 0x80, kPadLeft = 0x100, kPadRight = 0x200;
+
+        int PopupRows()
+        {
+            switch (g_popup.load())
+            {
+            case kColourStep: return (std::max)(1, variants::ColourCount(variants::Characters()[g_popupPick.character]));
+            case kDodgeStep: return static_cast<int>(variants::Dodges().size());
+            case kSetStep: return static_cast<int>(variants::AnimationSets().size());
+            default: return 0;
+            }
+        }
+
+        const char* PopupTitle()
+        {
+            return g_popup == kColourStep ? "Color" : g_popup == kDodgeStep ? "Movement Type" : "Animation Set";
+        }
+
+        std::string PopupRowText(int row)
+        {
+            const variants::Character& c = variants::Characters()[g_popupPick.character];
+            if (g_popup == kColourStep) return c.colours[row] ? c.colours[row] : "Color 1";
+            if (g_popup == kDodgeStep) return variants::Dodges()[row].name;
+            return variants::AnimationSets()[row].name;
+        }
+
+        // Layout (test 1: the rows ran one row below the window and its title didn't show): pdnet writes the title itself,
+        // rows start one line under it, the window is tall enough for both.
+        constexpr int kPopupLine = 22, kPopupTop = 12;
+        int PopupHeight() { return kPopupTop * 2 + (PopupRows() + 1) * kPopupLine + 28; } // test 3: more room under the last row
+        int PopupY() { return 200 - PopupHeight() / 2; }
+
+        void OpenCharselPopup(int step)
+        {
+            g_popup = step;
+            g_popupRow = 0;
+            int64_t manager = MenuManager();
+            if (!manager || step == kNoPopup) return;
+            int16_t current = *reinterpret_cast<int16_t*>(manager + 0x10402); // the script's own window stays current
+            auto cmd = [](uint64_t fn, int64_t a0, int64_t a1) { int64_t args[8] = { a0, a1 }; reinterpret_cast<MenuCommandFn>(At(fn))(args); };
+            cmd(0x140207cd0, kCharselPopupWindow, 2);
+            cmd(0x140207d20, kCharselPopupW, PopupHeight());
+            cmd(0x140207d50, kCharselPopupX, PopupY());
+            cmd(0x140207d80, reinterpret_cast<int64_t>(""), 0);
+            // empty lines as the Settings' save question (test 4: a window with none drew no background)
+            // test 5: the window's height follows its lines; the short pop-ups (Color, Movement Type) get one more
+            int lines = PopupRows() + (PopupRows() < 6 ? 2 : 1);
+            for (int i = 0; i < lines; ++i) cmd(0x140207e20, reinterpret_cast<int64_t>(""), 0);
+            *reinterpret_cast<int16_t*>(manager + 0x10402) = current;
+        }
+
+        // After the screen's window (12) is drawn: on the Advanced list the chosen entry's name under pdnet's grid, and the
+        // pop-up with its title and rows (the chosen one marked).
+        void DrawNamePlate(const char* name, int centreX, int textY); // (below, with the hooks)
+
+        // The chosen entry's name on its plate, under it (test 3), after the grid. Not while a pop-up is open (text is
+        // drawn over every window background). Tests 6 / 7: filled rectangles (command 29) lie under every sprite, so
+        // the plate is the game's own plate sprites: player_name_plate_l (71, 20 x 16), _c (70, 8 x 16, stretched), _r (72).
+        void DrawAdvancedName()
+        {
+            int64_t manager = MenuManager();
+            int cursor = g_gridCursor;
+            if (!manager || g_popup != kNoPopup || cursor < 0 || cursor >= static_cast<int>(variants::Characters().size())) return;
+            int64_t* window = reinterpret_cast<int64_t*>(manager + 0x10408);
+            int64_t previous = *window;
+            *window = reinterpret_cast<int64_t>(WindowAt(manager, 12));
+            // the plate under the entry; the name where the game has it against its own plate (test 8: 9 px was too low)
+            int place = cursor % kPageSize; // on its page
+            int x = kGridX + (place % kGridColumns) * kGridPitchX + kGridPitchX / 2, plateY = kGridY + (place / kGridColumns + 1) * kGridPitchY;
+            int y = plateY + (g_haveGamePlate ? g_gameNameY - g_gamePlateY : 1);
+            DrawNamePlate(variants::Characters()[cursor].name, x, plateY);
+            static char name[64];
+            sprintf_s(name, "\a200c%s", variants::Characters()[cursor].name);
+            int64_t a[8] = { x - 100, y, reinterpret_cast<int64_t>(name) };
+            uint8_t colours[16];
+            uint8_t* textColours = At(0x14054c9b0);
+            memcpy(colours, textColours, sizeof(colours));
+            if (g_haveNameColours) memcpy(textColours, g_nameTextColours, sizeof(colours)); // the game's yellow for names
+            reinterpret_cast<MenuCommandFn>(At(0x140207870))(a);
+            memcpy(textColours, colours, sizeof(colours));
+            *window = previous;
+        }
+
+        void DrawCharselPopup(int64_t* args)
+        {
+            int64_t manager = MenuManager();
+            if (!g_charselAdvanced || !args || args[0] != 12 || !manager || !g_drawWindow) return;
+            // Test 2: drawn with the portraits (command 95 of sprite 40) the grid sometimes lay under the screen's scanlines,
+            // sometimes over them. After window 12 it should always be over them.
+            DrawAdvancedGrid();
+            DrawAdvancedName();
+            auto text = [](int x, int y, const char* s) { int64_t a[8] = { x, y, reinterpret_cast<int64_t>(s) }; reinterpret_cast<MenuCommandFn>(At(0x140207870))(a); };
+            if (g_popup == kNoPopup) return;
+            int64_t popup[8] = { kCharselPopupWindow };
+            g_drawWindow(popup);
+            *reinterpret_cast<int64_t*>(manager + 0x10408) = reinterpret_cast<int64_t>(WindowAt(manager, kCharselPopupWindow));
+            static char lines[9][96];
+            int y = PopupY() + kPopupTop;
+            sprintf_s(lines[8], "\a%dc%s", kCharselPopupW, PopupTitle());
+            text(kCharselPopupX, y, lines[8]);
+            y += kPopupLine + 6;
+            for (int r = 0; r < PopupRows() && r < 8; ++r, y += kPopupLine)
+            {
+                std::string row = PopupRowText(r);
+                _snprintf_s(lines[r], _TRUNCATE, r == g_popupRow ? "\a%dc> %s <" : "\a%dc%s", kCharselPopupW, row.c_str());
+                text(kCharselPopupX, y, lines[r]);
+            }
+            *reinterpret_cast<int64_t*>(manager + 0x10408) = 0;
+        }
+
+        void PopupSound(int which) { int64_t sound[2] = { which, 0 }; reinterpret_cast<InputFn>(At(0x140261750))(sound); }
+
+        // The script's button reads on the character select (HookedButtons). A = 0x1010, B = 0x2020 (as the Settings).
+        // On the Advanced list pdnet takes every input: the grid cursor, the pop-ups; the script sees no A / B and the game's
+        // window input nothing (HookedWindowInput: its hidden grid cursor stays put). The last pop-up's A stores the pick (g4 #571 with the
+        // variant's carrier value, as the script does after its COLORS row) and backs out of the screen (g_forceBack:
+        // the B event for the script's next input label, test 1's two A presses for the script never arrived).
+        using PickFn = int64_t (*)(int32_t* args);
+        PickFn g_storePick = nullptr;
+        int ActivateVariant(int slot, const variants::Pick& pick); // (below, with the carriers)
+        void ClearVariant(int slot);
+        void PrebuildVariant(int slot, const variants::Pick& pick, const char* why);
+        void PublishVariant(int slot, const variants::Pick* pick);
+        void LogPickTable(const char* why);
+        void CarrierClash(int record, int slot);
+        void RetryMemberVariants(const char* why);
+
+        int PickSlot()
+        {
+            if (g_testPicking == kPickingOpponentCharacter) return 1; // Test Arsenal: the AI opponent's pick
+            if (g_testPicking == kPickingCharacter) return 0;
+            return *reinterpret_cast<int32_t*>(At(0x140527bc4)); // this PC's lobby slot
+        }
+
+        void FinishAdvancedPick()
+        {
+            int slot = PickSlot();
+            const variants::Pick& k = g_popupPick;
+            const variants::Character& c = variants::Characters()[k.character];
+            int value = -1;
+            if (c.kind == variants::Kind::Monster)
+            {
+                // Germano / Belono: the game's own record (no variant, nothing to build or share: every PC has them)
+                if (slot >= 0 && slot < 4) ClearVariant(slot);
+                value = (k.colour & 0xffff) << 16 | c.record;
+                CarrierClash(c.record, slot);
+                Log(L"variants: Advanced list: %S colour %d (the game's own record %d) -> slot %d, value %X", c.name, k.colour, c.record, slot, value);
+                PublishVariant(slot, nullptr);
+            }
+            else
+            {
+                value = slot >= 0 && slot < 4 ? ActivateVariant(slot, k) : -1;
+                Log(L"variants: Advanced list: %S, colour %d, %S, %S set -> slot %d, value %X", c.name, k.colour,
+                    variants::Dodges()[k.dodge].name, variants::AnimationSets()[k.set].name, slot, value);
+                if (value >= 0) PrebuildVariant(slot, k, "this PC's pick");
+                PublishVariant(slot, value >= 0 ? &k : nullptr);
+            }
+            LogPickTable("after the Advanced pick");
+            if (value < 0 || !g_storePick) return;
+            if (g_testPicking == kPickingNone)
+            {
+                // a lobby: the game's own confirm (see g_forceConfirm)
+                g_pendingPick = value;
+                g_forceConfirmSince = GetTickCount64();
+                g_forceConfirm = kConfirmGrid;
+                Log(L"variants: Advanced list: confirming through the script (value %X waits for its store)", value);
+                return;
+            }
+            int32_t args[16] = { value }; // Test Arsenal: stored here, the screen left with B (works there)
+            g_variantPending = false;
+            g_storePick(args);
+            g_forceBack = true;
+        }
+
+        int64_t CharacterSelectButtons(int64_t buttons)
+        {
+            static bool heldA = false, heldB = false, held[4] = {};
+            bool a = (buttons & 0x1010) != 0, b = (buttons & 0x2020) != 0;
+            float lx = 0, ly = 0, rx = 0, ry = 0;
+            PadSticks(lx, ly, rx, ry);
+            bool dir[4] = { AnyPadHolds(kPadUp) || ly > 0.6f, AnyPadHolds(kPadDown) || ly < -0.6f,
+                            AnyPadHolds(kPadLeft) || lx < -0.6f, AnyPadHolds(kPadRight) || lx > 0.6f };
+            int keyMove = g_charselKeyMove.exchange(0);
+            bool press[4];
+            for (int d = 0; d < 4; ++d) press[d] = dir[d] && !held[d], held[d] = dir[d];
+            if (keyMove) press[keyMove - 1] = true; // 1 up, 2 down, 3 left, 4 right
+            static bool heldPage[2] = {};
+            bool pageDir[2] = { AnyPadHolds(0x400), AnyPadHolds(0x800) }; // LB, RB
+            int keyPage = g_charselKeyPage.exchange(0);                   // Q -1, E +1
+            int turn = 0;
+            if ((pageDir[0] && !heldPage[0]) || keyPage < 0) turn = -1;
+            if ((pageDir[1] && !heldPage[1]) || keyPage > 0) turn = 1;
+            heldPage[0] = pageDir[0], heldPage[1] = pageDir[1];
+            bool pressA = a && !heldA, pressB = b && !heldB;
+            heldA = a, heldB = b;
+            if (!g_charselAdvanced) return buttons;
+
+            if (g_popup == kNoPopup)
+            {
+                int count = static_cast<int>(variants::Characters().size()), cursor = g_gridCursor;
+                int page = cursor / kPageSize, pages = PageCount(), place = cursor % kPageSize;
+                if (turn && pages > 1) page = (page + pages + turn) % pages; // same place on the other page (or its last entry)
+                int onPage = (std::min)(kPageSize, count - page * kPageSize);
+                int column = place % kGridColumns, row = place / kGridColumns, rows = (onPage + kGridColumns - 1) / kGridColumns;
+                if (row >= rows) row = rows - 1;
+                if (press[0]) row = (row + rows - 1) % rows;
+                if (press[1]) row = (row + 1) % rows;
+                if (press[2]) column = (column + kGridColumns - 1) % kGridColumns;
+                if (press[3]) column = (column + 1) % kGridColumns;
+                int next = page * kPageSize + (std::min)(row * kGridColumns + column, onPage - 1);
+                if (next != cursor)
+                {
+                    bool newPage = next / kPageSize != cursor / kPageSize;
+                    g_gridCursor = next;
+                    PopupSound(37);
+                    if (newPage) SetMenuHeading(AdvancedHeading()), Log(L"gamepatch: Advanced list: page %d of %d", next / kPageSize + 1, pages);
+                }
+                if (pressB)
+                {
+                    // back to the normal list (B again leaves the screen as usual)
+                    g_charselAdvanced = false;
+                    SetMenuHeading(CharacterSelectHeading());
+                    PopupSound(1);
+                    Log(L"gamepatch: character select: normal list (B)");
+                }
+                else if (pressA)
+                {
+                    g_popupPick = { g_gridCursor, 0, 0, 0 };
+                    PopupSound(0);
+                    OpenCharselPopup(kColourStep);
+                    Log(L"gamepatch: Advanced list: %S chosen", variants::Characters()[g_gridCursor].name);
+                }
+                return 0; // the script gets nothing (test 2: its hidden cursor, and the name plate with it, followed the D-pad)
+            }
+            if (press[0]) { g_popupRow = (g_popupRow + PopupRows() - 1) % PopupRows(); PopupSound(37); }
+            if (press[1]) { g_popupRow = (g_popupRow + 1) % PopupRows(); PopupSound(37); }
+            if (pressB)
+            {
+                PopupSound(1);
+                OpenCharselPopup(g_popup == kColourStep ? kNoPopup : g_popup - 1);
+            }
+            else if (pressA)
+            {
+                PopupSound(0);
+                bool monster = variants::Characters()[g_popupPick.character].kind == variants::Kind::Monster;
+                if (g_popup == kColourStep && monster) // Germano / Belono: their own animations, no Movement Type / Animation Set (the user, 2026-11-21)
+                {
+                    g_popupPick.colour = g_popupRow;
+                    g_popup = kNoPopup;
+                    FinishAdvancedPick();
+                }
+                else if (g_popup == kColourStep) g_popupPick.colour = g_popupRow, OpenCharselPopup(kDodgeStep);
+                else if (g_popup == kDodgeStep) g_popupPick.dodge = g_popupRow, OpenCharselPopup(kSetStep);
+                else
+                {
+                    g_popupPick.set = g_popupRow;
+                    g_popup = kNoPopup;
+                    FinishAdvancedPick();
+                }
+            }
+            return 0; // the script gets nothing while the pop-up is open
+        }
+
+        // The game's window input (FUN_140248b50, per window each frame): reads the pads' pressed / held / repeat words
+        // (0x14059b800 + pad * 0x34, + 0 / 4 / 8) for its A / B events and the window's cursor. HookedButtons only filters
+        // the script's own read, so on the Advanced list the game's hidden grid cursor still moved under the pop-ups
+        // (test 4). There the handler runs with those words zero; pdnet reads the pads itself (gamepads.cpp).
+        using WindowInputFn = int64_t (*)(void* window);
+        WindowInputFn g_windowInput = nullptr;
+        int64_t HookedWindowInput(void* window)
+        {
+            if (!g_charselAdvanced || !window || CurrentMenu(MenuManager()) != kCharacterMenu) return g_windowInput(window);
+            uint32_t* pads = reinterpret_cast<uint32_t*>(At(0x14059b800));
+            uint32_t saved[4][3];
+            for (int p = 0; p < 4; ++p)
+                for (int w = 0; w < 3; ++w) saved[p][w] = pads[p * 13 + w], pads[p * 13 + w] = 0;
+            int64_t result = g_windowInput(window);
+            for (int p = 0; p < 4; ++p)
+                for (int w = 0; w < 3; ++w) pads[p * 13 + w] = saved[p][w];
+            return result;
+        }
+
+        // g4 #571 stores the character pick (FUN_140213b80: 0x140527bc0 and this PC's lobby slot in 0x140527c20); the
+        // Advanced list's pick becomes its carrier's value there, so the lobby and the match see the carrier.
+        int64_t HookedStorePick(int32_t* args)
+        {
+            int slot = PickSlot();
+            if (args && slot >= 0 && slot < 4)
+            {
+                if (int pending = g_pendingPick.exchange(-1); pending >= 0)
+                {
+                    // the store came (often right after the grid's A): no second A. Test 10: left waiting, it gave up
+                    // 5 s later on the next character select, and would have pressed A on a COLORS row there.
+                    g_forceConfirm = kConfirmNone;
+                    Log(L"variants: Advanced list: the script stores %X for slot %d - pdnet's %X instead", args[0], slot, pending);
+                    args[0] = pending;
+                    int64_t result = g_storePick(args);
+                    LogPickTable("the script's store");
+                    RetryMemberVariants("this PC picked");
+                    return result;
+                }
+                if (g_variantPending.exchange(false))
+                {
+                    int value = ActivateVariant(slot, g_popupPick);
+                    Log(L"gamepatch: Advanced list: pick %X -> %X (slot %d)", args[0], value, slot);
+                    if (value >= 0) args[0] = value;
+                }
+                else
+                {
+                    ClearVariant(slot);
+                    PublishVariant(slot, nullptr);
+                    CarrierClash(args[0] & 0xffff, slot);
+                    Log(L"variants: normal pick %X for slot %d", args[0], slot);
+                }
+            }
+            int64_t stored = g_storePick(args);
+            RetryMemberVariants("this PC picked"); // its slot is known now
+            return stored;
+        }
+
+        // Menu command 29 (0x140207990 -> FUN_14029bb60: a filled rectangle x, y, w, h, colour, drawn at once): the
+        // character select's red name plate behind the name, sized by the name's width (command 31). Not on the Advanced list.
+        // Test 5: the plate back behind pdnet's name, measured from the game's own (still called every frame, not drawn):
+        // its rectangle against the name's width (command 31, FUN_140247550(text, font, 0)) and the name line's place.
+        MenuCommandFn g_fillRect = nullptr, g_textWidth = nullptr;
+        int64_t g_plate[5] = {}; // the game's last name plate: x, y, w, h, colour
+        int g_plateFont = 0, g_plateTextWidth = 0;
+        bool g_havePlate = false;
+        int64_t HookedFillRect(int64_t* args)
+        {
+            if (!args || CurrentMenu(MenuManager()) != kCharacterMenu) return g_fillRect(args);
+            memcpy(g_plate, args, sizeof(g_plate));
+            g_havePlate = g_plateTextWidth > 0;
+            static int told = 0;
+            if (told++ < 3) Log(L"gamepatch: character select: name plate %lld,%lld %lldx%lld colour %llX (name at %d,%d, width %d)", args[0], args[1], args[2], args[3], args[4], g_gameNameX, g_gameNameY, g_plateTextWidth);
+            if (g_charselAdvanced) return 0;
+            return g_fillRect(args);
+        }
+        int64_t HookedTextWidth(int64_t* args)
+        {
+            int64_t width = g_textWidth(args);
+            if (args && CurrentMenu(MenuManager()) == kCharacterMenu) g_plateFont = static_cast<int>(args[1]), g_plateTextWidth = static_cast<int>(width);
+            return width;
+        }
+
+        // pdnet's name plate (sprites 71, 70 stretched, 72; the handles the game had, g_ownFrames) centred on `centreX`
+        // from `y` (sprite coordinates), as wide as `name` (command 31 with the game's font for its name line).
+        void DrawNamePlate(const char* name, int centreX, int y)
+        {
+            uint32_t* list = MnetHandles();
+            if (!list || list != g_handles) return;
+            int width = static_cast<int>(strlen(name)) * 9;
+            if (g_textWidth && g_plateTextWidth > 0)
+            {
+                int64_t measure[8] = { reinterpret_cast<int64_t>(name), g_plateFont };
+                width = static_cast<int>(g_textWidth(measure));
+            }
+            int inner = width + 8, left = centreX - inner / 2;
+            float one = 1.0f, stretch = inner / 8.0f;
+            uint32_t white = g_haveGamePlate ? g_gamePlateColour : 0xff401010; // the game's plate colour (test 8: plain white)
+            auto draw = [&](uint32_t handle, int x, const float* scaleX)
+            {
+                reinterpret_cast<SpriteObjectFn>(At(0x1401983e0))(nullptr, handle, x, y, 0, scaleX, &one, &white, 0, 0);
+            };
+            draw(g_ownFrames[5], left - 20, &one);  // 71 player_name_plate_l
+            draw(g_ownFrames[4], left, &stretch);   // 70 player_name_plate_c
+            draw(g_ownFrames[6], left + inner, &one); // 72 player_name_plate_r
+        }
+
+        // A model's joint by name: FUN_14018aa50 (model, part, base-40 name) binary-searches the part's sorted name table
+        // and returns the joint's matrix, or null when the name isn't there. Some skill-effect callers use the result
+        // unchecked (0x14018ae75), so a character without a joint a skill names crashes the game (2026-11-21: Piece of
+        // Thunder as Ai or Mikan - their models spell "raddh" for "raddha"; variants.cpp now renames it in the built file).
+        // This is the safety net for the rest (e.g. Ai has no lteku2 / rnino2 / alpha, imported characters may lack more):
+        // a missing name is retried with a stand-in joint, logged once per name (only for the callers that don't check).
+        using JointFn = void* (*)(void* model, int part, uint32_t name);
+        JointFn g_joint = nullptr;
+        struct JointStandIn { uint32_t name; uint32_t standIns[3]; const wchar_t* text; };
+        constexpr JointStandIn kJointStandIns[] = {
+            { 0xACA1B65B, { 0xACA1B650, 0xADB07630, 0 }, L"raddha -> raddh / rhand" },
+            { 0x8802B65B, { 0x8802B650, 0x89117630, 0 }, L"laddha -> laddh / lhand" },
+            { 0xACA1B650, { 0xACA1B65B, 0xADB07630, 0 }, L"raddh -> raddha / rhand" },
+            { 0x8802B650, { 0x8802B65B, 0x89117630, 0 }, L"laddh -> laddha / lhand" },
+            { 0xAF73AAAE, { 0xADB07630, 0, 0 }, L"rsword -> rhand" },
+            { 0x8AD4AAAE, { 0x89117630, 0, 0 }, L"lsword -> lhand" },
+            { 0x8AEA0E1B, { 0x8AEA0E24, 0, 0 }, L"lteku2 -> ltekub" },
+            { 0xAF890E1B, { 0xAF890E24, 0, 0 }, L"rteku2 -> rtekub" },
+            { 0x8A03A7EB, { 0x8A03A807, 0, 0 }, L"lnino2 -> lninou" },
+            { 0xAEA2A7EB, { 0xAEA2A807, 0, 0 }, L"rnino2 -> rninou" },
+        };
+        constexpr uint32_t kLastResort[] = { 0x4D1D1738, 0x4D1D1710, 0x70DC9400 }; // body2, body1, hip
+        std::mutex g_jointLogLock;
+        std::set<uint32_t> g_jointLogged;
+
+        void* HookedJoint(void* model, int part, uint32_t name)
+        {
+            void* found = g_joint(model, part, name);
+            if (found || name == 0 || name == 0xFFFFFFFF) return found;
+            // 0x14018976a checks for null itself (a default matrix): left to the game, as unmodded
+            if (_ReturnAddress() == At(0x14018976f)) return found;
+            const wchar_t* how = L"body2 / body1 / hip (no stand-in for this name)";
+            for (const JointStandIn& s : kJointStandIns)
+            {
+                if (s.name != name) continue;
+                how = s.text;
+                for (uint32_t other : s.standIns)
+                    if (other && (found = g_joint(model, part, other)) != nullptr) break;
+                break;
+            }
+            for (uint32_t other : kLastResort)
+                if (!found && (found = g_joint(model, part, other)) != nullptr) break;
+            {
+                std::lock_guard guard(g_jointLogLock);
+                if (g_jointLogged.insert(name).second)
+                    Log(L"variants: joint %08X asked for (part %d, from %llX), which this model lacks - stand-in %s%s", name, part,
+                        static_cast<unsigned long long>(GhidraAddress(_ReturnAddress())), how, found ? L"" : L": none found either, left null");
+            }
+            return found;
+        }
+
+        void CharacterSelectHooks()
+        {
+            if (!GetConfig().charselPortraits) return;
+            bool sprite = g_drawSprite || WrapCommand<MenuCommandFn>(0x1403eefe0 + 95 * 8, 0x1402077a0, &HookedDrawSprite, g_drawSprite, L"character select portraits");
+            bool text = g_drawText || WrapCommand<MenuCommandFn>(0x1403eefe0 + 23 * 8, 0x140207840, &HookedDrawText, g_drawText, L"character select names");
+            bool store = WrapCommand<PickFn>(0x1403f0090 + 571 * 8, 0x140213b80, &HookedStorePick, g_storePick, L"Advanced list pick");
+            if (!g_textWidth) WrapCommand<MenuCommandFn>(0x1403eefe0 + 31 * 8, 0x140207a20, &HookedTextWidth, g_textWidth, L"character select name width");
+            if (!g_fillRect) WrapCommand<MenuCommandFn>(0x1403eefe0 + 29 * 8, 0x140207990, &HookedFillRect, g_fillRect, L"character select name plate");
+            // FUN_140248b50 starts push rbx / sub rsp,40h / mov rbx,rcx (9 position-independent bytes)
+            static const std::vector<uint8_t> kInputStart = { 0x40, 0x53, 0x48, 0x83, 0xEC, 0x40, 0x48, 0x8B, 0xD9 };
+            if (!g_windowInput)
+                g_windowInput = reinterpret_cast<WindowInputFn>(InlineHookBytes(0x140248b50, kInputStart, kInputStart, reinterpret_cast<void*>(&HookedWindowInput), L"Advanced list input lock"));
+            // FUN_14018aa50 starts sub rsp,8 / mov [rsp],rdi (8 position-independent bytes)
+            static const std::vector<uint8_t> kJointStart = { 0x48, 0x83, 0xEC, 0x08, 0x48, 0x89, 0x3C, 0x24 };
+            if (!g_joint)
+                g_joint = reinterpret_cast<JointFn>(InlineHookBytes(0x14018aa50, kJointStart, kJointStart, reinterpret_cast<void*>(&HookedJoint), L"joint lookup stand-ins"));
+            Log(L"gamepatch: character select: monster portraits %s, Advanced list (Y) %s, its picks %s", sprite && text ? L"on" : L"off (hook not set)", sprite ? L"on" : L"off",
+                store ? L"on" : L"off");
         }
 
         template <typename Fn>
@@ -4049,9 +4921,628 @@ namespace pdnet::gamepatches
             return true;
         }
 
+
+        // Character select portraits (2026-11-20, the user's art; tools\charsel\make_portraits.py). The character select
+        // (livecharasel, menu 46) draws a 134 x 96 portrait with menu command 95 from MNET (Assets\Data\menu\MNet.alr,
+        // texture slot 3): sprites 38-48 (player_00..player_10). The file has no large monster portraits (only the small window_chara_11..26), so the X toggle
+        // (Toggle Monsters) only changes the names. When the game opens the file it gets a copy (LocalState\pdnet\MNet.alr,
+        // made once per start) with kit\pdnet\charsel-portraits.bin put in (a file, not a folder: the updater copies only
+        // files):
+        // - MNet0800 (texture 9, 256 x 512 DXT5) widened to 1024 x 512: the game's own quarter on the left, the monster
+        //   portraits right of it. The players keep the game's own portraits (the user, 2026-11-20). The file format can
+        //   also replace a whole texture or a game sprite's art (tools\charsel\make_portraits.py).
+        // - The sprite list (the 0x10 record at 0x198: 12 texture infos of 0x14 at 0x338, 84 sprites of 0x3c at 0x428:
+        //   texture, name[32], u0 v0 u1 v1, w, h): the 11 monsters added as sprites 84-94.
+        //   The record and the sprite count (0x1a4) grow; the record's end marker moves into the padding before 0x2000.
+        // - Texture table (0x34 + 0x1c each: +4 offset in the data, +0xe log2 width << 4 | mips) and the data size (0x14).
+        // charsel_portraits=off leaves the game's file alone.
+
+        std::wstring PdnetDir()
+        {
+            HMODULE self = nullptr;
+            GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT, reinterpret_cast<LPCWSTR>(&PdnetDir), &self);
+            wchar_t path[MAX_PATH];
+            GetModuleFileNameW(self, path, MAX_PATH);
+            std::wstring dir = path;
+            return dir.substr(0, dir.find_last_of(L'\\') + 1);
+        }
+
+        bool ReadWholeFile(const std::wstring& path, std::vector<uint8_t>& data, size_t limit)
+        {
+            HANDLE file = g_createFile2(path.c_str(), GENERIC_READ, FILE_SHARE_READ, OPEN_EXISTING, nullptr);
+            if (file == INVALID_HANDLE_VALUE) return false;
+            LARGE_INTEGER size{};
+            bool ok = GetFileSizeEx(file, &size) && size.QuadPart > 0 && static_cast<uint64_t>(size.QuadPart) <= limit;
+            DWORD got = 0;
+            if (ok)
+            {
+                data.resize(static_cast<size_t>(size.QuadPart));
+                ok = ReadFile(file, data.data(), static_cast<DWORD>(data.size()), &got, nullptr) && got == data.size();
+            }
+            CloseHandle(file);
+            return ok;
+        }
+
+        // Returns the number of sprites added, or -1 (file left as it is; `why` says what didn't match).
+        int MakeMnetCopy(const wchar_t* original, const std::wstring& copy, const char*& why)
+        {
+            constexpr size_t kSize = 863232;
+            constexpr uint32_t kData = 0x2000; // the data's start (header +0xc)
+            constexpr uint32_t kTex = 0x34, kInfo = 0x338, kSprites = 0x428, kSprite = 0x3c;
+            constexpr uint32_t kEnd = kSprites + kMnetGameSprites * kSprite;
+            std::vector<uint8_t> d, p;
+            why = "MNet.alr not read";
+            if (!ReadWholeFile(original, d, kSize)) return -1;
+            auto u32 = [&](size_t at) -> uint32_t& { return *reinterpret_cast<uint32_t*>(&d[at]); };
+            auto u16 = [&](size_t at) -> uint16_t& { return *reinterpret_cast<uint16_t*>(&d[at]); };
+            auto f32 = [&](size_t at) -> float& { return *reinterpret_cast<float*>(&d[at]); };
+            why = "MNet.alr not the expected file";
+            if (d.size() != kSize || u32(0) != 0x11 || u32(0xc) != kData || u32(0x14) != kSize - kData || u32(0x28) != 0x15 || u32(0x30) != 12 ||
+                u32(0x198) != 0x10 || u32(0x19c) != 0x1640 || u32(0x1a4) != kMnetGameSprites || memcmp(&d[0x2d8], "MNet0800.dds", 12) != 0 ||
+                u32(kEnd) != 0 || u32(kEnd + 4) != 8)
+                return -1;
+            why = "kit\\pdnet\\charsel-portraits.bin missing or not readable";
+            if (!ReadWholeFile(PdnetDir() + L"charsel-portraits.bin", p, 8 << 20) || p.size() < 16 || memcmp(p.data(), "PDCP", 4) != 0 ||
+                *reinterpret_cast<uint32_t*>(&p[4]) != 1)
+                return -1;
+            // The sprite list must end before 0x2000 (115 sprites): a test build that moved the data to 0x3000 for more
+            // (2026-11-21) crashed the game on the online menu. The lobby banners therefore have no sprites of their own
+            // (LobbyBanner).
+            why = "charsel-portraits.bin doesn't fit MNet.alr";
+            uint32_t images = *reinterpret_cast<uint32_t*>(&p[8]), sprites = *reinterpret_cast<uint32_t*>(&p[12]);
+            size_t at = 16;
+            for (uint32_t i = 0; i < images; ++i)
+            {
+                if (at + 16 > p.size()) return -1;
+                uint32_t tex = *reinterpret_cast<uint32_t*>(&p[at]), mode = *reinterpret_cast<uint32_t*>(&p[at + 8]), size = *reinterpret_cast<uint32_t*>(&p[at + 12]);
+                uint32_t w = *reinterpret_cast<uint16_t*>(&p[at + 4]), h = *reinterpret_cast<uint16_t*>(&p[at + 6]);
+                const uint8_t* art = &p[at + 16];
+                at += 16 + size;
+                if (at > p.size() || tex >= 12 || size != w * h) return -1;
+                size_t entry = kTex + tex * 0x1c, info = kInfo + tex * 0x14;
+                uint32_t oldW = u16(info), oldH = u16(info + 2), offset = u32(entry + 4), oldSize = oldW * oldH; // DXT5: a byte per pixel
+                if (d[entry + 0xd] != 0x0f || kData + offset + oldSize > d.size()) return -1;
+                std::vector<uint8_t> image;
+                if (mode == 1) // added to the right: rows of 4 x 4 blocks (16 bytes a block) side by side
+                {
+                    uint32_t newW = oldW + w;
+                    if (h != oldH || (newW & (newW - 1)) != 0 || h % 4) return -1;
+                    for (uint32_t row = 0; row < h / 4; ++row)
+                    {
+                        const uint8_t* own = &d[kData + offset + row * oldW * 4];
+                        image.insert(image.end(), own, own + oldW * 4);
+                        image.insert(image.end(), art + row * w * 4, art + (row + 1) * w * 4);
+                    }
+                    unsigned long log2 = 0;
+                    _BitScanReverse(&log2, newW);
+                    d[entry + 0xe] = static_cast<uint8_t>(log2 << 4 | (d[entry + 0xe] & 0xf));
+                    u16(info) = static_cast<uint16_t>(newW);
+                    memcpy(&d[info + 4], &d[kInfo + 4], 4); // as MNet0400's info, also 1024 x 512
+                    for (int k = 0; k < kMnetGameSprites; ++k) // the game's sprites on it keep their pixels
+                        if (u32(kSprites + k * kSprite) == tex)
+                        {
+                            f32(kSprites + k * kSprite + 36) *= static_cast<float>(oldW) / newW;
+                            f32(kSprites + k * kSprite + 44) *= static_cast<float>(oldW) / newW;
+                        }
+                }
+                else
+                {
+                    if (w != oldW || h != oldH) return -1;
+                    image.assign(art, art + size);
+                }
+                uint32_t grow = static_cast<uint32_t>(image.size()) - oldSize;
+                d.erase(d.begin() + kData + offset, d.begin() + kData + offset + oldSize);
+                d.insert(d.begin() + kData + offset, image.begin(), image.end());
+                u32(0x14) += grow;
+                for (int k = 0; k < 12; ++k)
+                    if (u32(kTex + k * 0x1c + 4) > offset) u32(kTex + k * 0x1c + 4) += grow;
+            }
+            uint8_t end[8];
+            memcpy(end, &d[kEnd], 8);
+            int added = 0;
+            for (uint32_t i = 0; i < sprites; ++i, at += 44)
+            {
+                if (at + 44 > p.size()) return -1;
+                char name[33] = {};
+                memcpy(name, &p[at], 32);
+                uint32_t tex = *reinterpret_cast<uint32_t*>(&p[at + 32]);
+                const uint16_t* box = reinterpret_cast<const uint16_t*>(&p[at + 36]);
+                if (tex >= 12) return -1;
+                float texW = u16(kInfo + tex * 0x14), texH = u16(kInfo + tex * 0x14 + 2);
+                int k = 0;
+                while (k < kMnetGameSprites && strncmp(reinterpret_cast<const char*>(&d[kSprites + k * kSprite + 4]), name, 32) != 0) ++k;
+                if (k == kMnetGameSprites)
+                {
+                    k = kMnetGameSprites + added++;
+                    if (kSprites + (k + 1) * kSprite + 8 > kData) return -1; // room for 115 sprites in all (112 used, 2026-11-21)
+                    for (uint32_t b = kSprites + k * kSprite + 8; b < kSprites + (k + 1) * kSprite + 8; ++b)
+                        if (d[b]) return -1; // only padding may be there
+                }
+                size_t s = kSprites + k * kSprite;
+                u32(s) = tex;
+                memcpy(&d[s + 4], name, 32);
+                f32(s + 36) = box[0] / texW, f32(s + 40) = box[1] / texH, f32(s + 44) = (box[0] + box[2]) / texW, f32(s + 48) = (box[1] + box[3]) / texH;
+                u32(s + 52) = box[2], u32(s + 56) = box[3];
+            }
+            memcpy(&d[kEnd + added * kSprite], end, 8);
+            u32(0x19c) += added * kSprite;
+            u32(0x1a4) += added;
+            g_mnetSprites.assign(&d[kSprites], &d[kSprites + (kMnetGameSprites + added) * kSprite]);
+            uint32_t counts[12] = {}; // each texture's info counts the sprites on it
+            for (int k = 0; k < kMnetGameSprites + added; ++k)
+                if (u32(kSprites + k * kSprite) < 12) ++counts[u32(kSprites + k * kSprite)];
+            for (int t = 0; t < 12; ++t) u32(kInfo + t * 0x14 + 8) = counts[t];
+
+            why = "the copy couldn't be written";
+            CreateDirectoryW((LocalStatePath() + L"\\pdnet").c_str(), nullptr);
+            HANDLE file = g_createFile2(copy.c_str(), GENERIC_WRITE, 0, CREATE_ALWAYS, nullptr);
+            if (file == INVALID_HANDLE_VALUE) return -1;
+            DWORD written = 0;
+            BOOL ok = WriteFile(file, d.data(), static_cast<DWORD>(d.size()), &written, nullptr) && written == d.size();
+            CloseHandle(file);
+            return ok ? added : -1;
+        }
+
+
+        // Character variants (variants.h; the Advanced list, docs/CHARACTER_SELECT.md). A picked variant plays as a
+        // "carrier": a charaset record the normal lists don't offer, one per lobby slot, so every PC can tell whose
+        // files are whose (kCarriers). While a slot's variant is active:
+        // - the game's files for the carrier (Player\<folder>\<folder><colour>.alr, exmot0..5.ala) are built by
+        //   variants::BuildModel / BuildExmot from the game's own files and handed over instead (LocalState\pdnet\variants);
+        // - the carrier's charaset entry in memory gets the variant's movement skill, voice, exmot lengths and hitbox.
+        //   The game unpacks charaset into 0xa0-byte entries at 0x1404c01e0 (FUN_14017d300; count at 0x1404c0174):
+        //   +0 model folder, +0x18..+0x24 capsule height, width, hit radius, hit centre (file value / [0x1402f7f7c]),
+        //   +0x28..+0x68, +0x74, +0x78 movement stats (turning, speeds; taken from the animation set's character),
+        //   +0x6C movement skill, +0x80 voice bank name, +0x88 six exmot lengths (ints).
+        // variant_test=<character>,<colour>,<dodge>,<set> (pdnet.ini, numbers from variants.cpp's lists) plays your own
+        // Test Arsenal character as that variant, before the menu exists.
+        struct Carrier { int record; const char* folder; };
+        constexpr Carrier kCarriers[4] = { { 19, "enm04a" }, { 21, "enm06a" }, { 22, "enm07a" }, { 26, "enm15a" } }; // Mechano, Euroto, Hedono, Belono
+        struct ActiveVariant { bool on = false; variants::Pick pick; uint8_t saved[0xa0]; };
+        ActiveVariant g_variants[4];
+        std::mutex g_variantLock;
+        std::wstring g_dataPrefix = L"Assets\\Data\\"; // how the game names its data folder (taken from its own file opens)
+
+        uint8_t* CharasetEntry(int record) { return At(0x1404c01e0) + static_cast<size_t>(record) * 0xa0; }
+
+        std::vector<uint8_t> ReadGameFile(const std::string& relative)
+        {
+            std::vector<uint8_t> data;
+            ReadWholeFile(g_dataPrefix + std::wstring(relative.begin(), relative.end()), data, 64 << 20);
+            return data;
+        }
+
+        bool CarrierFolderIs(int slot)
+        {
+            int count = *reinterpret_cast<int32_t*>(At(0x1404c0174));
+            const char* folder = *reinterpret_cast<const char**>(CharasetEntry(kCarriers[slot].record));
+            char text[16];
+            return kCarriers[slot].record < count && folder && CopyString(folder, text, sizeof(text)) && strcmp(text, kCarriers[slot].folder) == 0;
+        }
+
+        void ClearVariant(int slot)
+        {
+            std::lock_guard guard(g_variantLock);
+            if (!g_variants[slot].on) return;
+            memcpy(CharasetEntry(kCarriers[slot].record), g_variants[slot].saved, 0xa0);
+            g_variants[slot].on = false;
+            Log(L"variants: slot %d back to the game's %S", slot, kCarriers[slot].folder);
+        }
+
+        // The game value for the match setup (colour << 16 | record), or -1.
+        int ActivateVariant(int slot, const variants::Pick& pick)
+        {
+            const auto& list = variants::Characters();
+            if (slot < 0 || slot >= 4 || pick.character < 0 || pick.character >= static_cast<int>(list.size())) return -1;
+            if (!CarrierFolderIs(slot))
+            {
+                Log(L"variants: carrier record %d isn't %S - variants off", kCarriers[slot].record, kCarriers[slot].folder);
+                return -1;
+            }
+            ClearVariant(slot);
+            std::lock_guard guard(g_variantLock);
+            ActiveVariant& v = g_variants[slot];
+            uint8_t* e = CharasetEntry(kCarriers[slot].record);
+            memcpy(v.saved, e, 0xa0);
+            const variants::Character& c = list[pick.character];
+            // hitbox: the character's own (its record, or the saved original if that record is a carrier now), height at least 18
+            // Ai and Mikan (charaset height 16) get Freia's hitbox exactly (the user, 2026-11-21: played competitively, no
+            // smaller target than Freia's).
+            int hitboxRecord = c.record;
+            if (strcmp(c.name, "Ai") == 0 || strcmp(c.name, "Mikan") == 0) hitboxRecord = 2; // Freia
+            const uint8_t* own = hitboxRecord >= 0 ? CharasetEntry(hitboxRecord) : nullptr;
+            for (int s = 0; s < 4; ++s)
+                if (g_variants[s].on && hitboxRecord == kCarriers[s].record) own = g_variants[s].saved;
+            if (own) memcpy(e + 0x18, own + 0x18, 16);
+            float minHeight = 180.0f / *reinterpret_cast<float*>(At(0x1402f7f7c));
+            // Ubiquitous (both models, 12) and Kei (14) keep their own small hitbox: meme picks (the user, 2026-11-21)
+            bool meme = strncmp(c.name, "Ubiquitous", 10) == 0 || strcmp(c.name, "Kei") == 0;
+            if (!meme && *reinterpret_cast<float*>(e + 0x18) < minHeight) *reinterpret_cast<float*>(e + 0x18) = minHeight;
+            const float* box = reinterpret_cast<const float*>(e + 0x18);
+            Log(L"variants: slot %d hitbox %.1f / %.1f / %.1f / %.1f (from record %d%s)", slot, box[0], box[1], box[2], box[3], hitboxRecord,
+                hitboxRecord != c.record ? L", Freia's" : L"");
+            // Movement stats (turning, speeds...: +0x28..+0x68, +0x74, +0x78, from the file's +0x14..+0x34, +0x38, +0x3A) from
+            // the animation set's character: test 2 (2026-11-20) kept the carrier's (Mechano: turning as slow as
+            // Catoptro's) with Gyne's animations; Gyne turns like Meister.
+            const uint8_t* stats = CharasetEntry(variants::AnimationSets()[pick.set].record);
+            for (int s = 0; s < 4; ++s)
+                if (g_variants[s].on && variants::AnimationSets()[pick.set].record == kCarriers[s].record) stats = g_variants[s].saved;
+            memcpy(e + 0x28, stats + 0x28, 0x6c - 0x28);
+            memcpy(e + 0x74, stats + 0x74, 8);
+            *reinterpret_cast<int32_t*>(e + 0x6c) = variants::Dodges()[pick.dodge].move;
+            *reinterpret_cast<const char**>(e + 0x80) = c.voice; // static strings in pdnet
+            int16_t lengths[6];
+            variants::SetLengths(pick, lengths);
+            for (int k = 0; k < 6; ++k) reinterpret_cast<int32_t*>(e + 0x88)[k] = lengths[k];
+            v.pick = pick;
+            v.on = true;
+            Log(L"variants: slot %d plays %S (%S, %S dodge, %S set) as %S, movement %d, voice %S", slot, c.name,
+                c.colours[pick.colour < variants::ColourCount(c) ? pick.colour : 0], variants::Dodges()[pick.dodge].name,
+                variants::AnimationSets()[pick.set].name, kCarriers[slot].folder, variants::Dodges()[pick.dodge].move, c.voice);
+            return (pick.colour & 0xffff) << 16 | kCarriers[slot].record;
+        }
+
+        // A variant's file: the model (exmot -1, Player\<carrier>\<carrier><colour>.alr) or exmot0..5.ala, built once per
+        // pick and session into LocalState\pdnet\variants (PrebuildVariant builds them in the background as soon as a pick
+        // is known, so the match load only opens them). Empty if the build failed (the game's own file is used then).
+        std::mutex g_buildLock;
+        std::set<std::wstring> g_builtFiles;
+        std::wstring BuildVariantFile(const variants::Pick& pick, int exmot, const wchar_t* forName)
+        {
+            std::string key = std::to_string(pick.character) + "-" + std::to_string(pick.dodge) + "-" + std::to_string(pick.set);
+            std::string out = exmot >= 0 ? key + "-exmot" + std::to_string(exmot) + ".ala" : key + "-" + std::to_string(pick.colour) + ".alr";
+            std::wstring dir = LocalStatePath() + L"\\pdnet\\variants";
+            std::wstring target = dir + L"\\" + std::wstring(out.begin(), out.end());
+            std::lock_guard guard(g_buildLock); // one build at a time (variants:: keeps its stats in statics); waits for a running prebuild
+            if (g_builtFiles.count(target))
+            {
+                Log(L"variants: %s -> %s (built earlier this session)", forName, target.c_str());
+                return target;
+            }
+            std::string error;
+            ULONGLONG started = GetTickCount64();
+            std::vector<uint8_t> bytes = exmot >= 0 ? variants::BuildExmot(pick, exmot, ReadGameFile, error) : variants::BuildModel(pick, ReadGameFile, error);
+            if (bytes.empty())
+            {
+                Log(L"variants: %s - build FAILED, the game's own file stays (%S; data folder '%s')", forName, error.c_str(), g_dataPrefix.c_str());
+                return L"";
+            }
+            CreateDirectoryW((LocalStatePath() + L"\\pdnet").c_str(), nullptr);
+            CreateDirectoryW(dir.c_str(), nullptr);
+            HANDLE f = g_createFile2(target.c_str(), GENERIC_WRITE, 0, CREATE_ALWAYS, nullptr);
+            if (f == INVALID_HANDLE_VALUE)
+            {
+                Log(L"variants: %s - could not write %s (error %lu)", forName, target.c_str(), GetLastError());
+                return L"";
+            }
+            DWORD written = 0;
+            BOOL ok = WriteFile(f, bytes.data(), static_cast<DWORD>(bytes.size()), &written, nullptr) && written == bytes.size();
+            CloseHandle(f);
+            variants::Stats st = variants::LastStats();
+            Log(L"variants: %s -> %s (%u bytes, %llu ms; %d runs, %d tracks, %d dropped, %d joints, %d renamed, %d stray draws hidden)%s", forName, target.c_str(), static_cast<unsigned>(bytes.size()),
+                GetTickCount64() - started, st.runs, st.tracks, st.dropped, st.joints, st.renamed, st.hidden, ok ? L"" : L" - WRITE FAILED");
+            if (!ok) return L"";
+            g_builtFiles.insert(target);
+            return target;
+        }
+
+        // All of a pick's files, on a worker thread (logged with their times).
+        void PrebuildVariant(int slot, const variants::Pick& pick, const char* why)
+        {
+            std::thread([slot, pick, why]
+            {
+                ULONGLONG started = GetTickCount64();
+                const char* name = variants::Characters()[pick.character].name;
+                Log(L"variants: prebuild for slot %d (%S): %S colour %d, %S, %S set - started", slot, why, name, pick.colour,
+                    variants::Dodges()[pick.dodge].name, variants::AnimationSets()[pick.set].name);
+                int ok = BuildVariantFile(pick, -1, L"(prebuild model)").empty() ? 0 : 1;
+                for (int k = 0; k < 6; ++k)
+                {
+                    wchar_t label[32];
+                    swprintf_s(label, L"(prebuild exmot%d)", k);
+                    ok += BuildVariantFile(pick, k, label).empty() ? 0 : 1;
+                }
+                Log(L"variants: prebuild for slot %d (%S) done: %d of 7 files, %llu ms", slot, name, ok, GetTickCount64() - started);
+            }).detach();
+        }
+
+        // What the game has picked per lobby slot (0x140527c20, colour << 16 | record) and which variants are on.
+        void LogPickTable(const char* why)
+        {
+            const int32_t* picks = reinterpret_cast<const int32_t*>(At(0x140527c20));
+            std::wstring line;
+            for (int s = 0; s < 4; ++s)
+            {
+                wchar_t part[160];
+                std::lock_guard guard(g_variantLock);
+                const ActiveVariant& v = g_variants[s];
+                swprintf_s(part, L" | slot %d: %X%s%S", s, picks[s], v.on ? L" variant " : L"", v.on ? variants::Characters()[v.pick.character].name : "");
+                line += part;
+            }
+            Log(L"variants: pick table (%S), this PC's slot %d%s", why, *reinterpret_cast<int32_t*>(At(0x140527bc4)), line.c_str());
+        }
+
+        // The lobby's banner (window_chara_NN: sprite NN = the pick's charaset record) of a carrier whose slot has a variant:
+        // the character's own banner (players), or an NPC's banner from tools\charsel\make_portraits.py. Those banners are
+        // art in MNet0800 (texture 9) without sprites of their own (MNet.alr has no room): each lobby slot shows its banner
+        // through one of the game's unused sprites dummy001-004 (27-30; charsel-portraits.bin gives them texture 9 and a
+        // 74 x 24 box), whose source rectangle pdnet moves to banner k. The rectangle table: [0x140527c78] + 0x3a8 + group *
+        // 8 -> per object -> idx * 8: s16 x, y, w, h (FUN_1401983e0; handle = group << 16 | object << 8 | idx). -1: the game's.
+        constexpr int kLobbyBannerSprite = 27;
+        int16_t* SpriteRect(uint32_t handle)
+        {
+            __try
+            {
+                uint8_t* base = *reinterpret_cast<uint8_t**>(At(0x140527c78));
+                uint8_t* groups = *reinterpret_cast<uint8_t**>(base + 0x3a8 + ((handle >> 16) & 0xff) * 8);
+                uint8_t* rects = *reinterpret_cast<uint8_t**>(groups + ((handle >> 8) & 0xff) * 8);
+                return reinterpret_cast<int16_t*>(rects + (handle & 0xff) * 8);
+            }
+            __except (EXCEPTION_EXECUTE_HANDLER) { return nullptr; }
+        }
+
+        int BannerNumber(const variants::Character& c)
+        {
+            static const char* kBanners[13] = { "Spokesman", "Mikan", "Ai", "Kei", "Kajikawa", "03", "Maniac", "Arthur", "Mac", "Baroness",
+                                                "Tetsuya", "Reindeer", "Ubiquitous" };
+            if (c.banner >= 0) return c.banner; // an added character's (sprites.txt "banner k")
+            std::string name = c.name;
+            name = name.substr(0, name.find(' ')); // "Ubiquitous Keyboard"
+            for (int k = 0; k < 13; ++k)
+                if (name == kBanners[k]) return k;
+            return -1;
+        }
+
+        int LobbyBanner(int sprite)
+        {
+            for (int s = 0; s < 4; ++s)
+            {
+                if (kCarriers[s].record != sprite || !g_variants[s].on) continue;
+                const variants::Character& c = variants::Characters()[g_variants[s].pick.character];
+                if (c.kind == variants::Kind::Player && c.record >= 0 && c.record <= 10 && c.banner < 0) return c.record;
+                int k = BannerNumber(c);
+                uint32_t* list = MnetHandles();
+                if (k < 0 || !list || g_monsterPortraits <= 0) return -1;
+                int16_t* rect = SpriteRect(list[kLobbyBannerSprite + s]);
+                if (!rect) return -1;
+                int16_t x = static_cast<int16_t>(256 + (k % 23) * 76), y = static_cast<int16_t>(294 + (k / 23) * 26);
+                static int told = 0;
+                if (told < 8 && (rect[0] != x || rect[1] != y))
+                {
+                    ++told;
+                    Log(L"variants: lobby banner of slot %d: %S (banner %d) - sprite %d's rectangle %d,%d %dx%d -> %d,%d", s, c.name, k,
+                        kLobbyBannerSprite + s, rect[0], rect[1], rect[2], rect[3], x, y);
+                }
+                __try { rect[0] = x, rect[1] = y; }
+                __except (EXCEPTION_EXECUTE_HANDLER) { return -1; }
+                return kLobbyBannerSprite + s;
+            }
+            return -1;
+        }
+
+        // The carriers' window_chara handles in MNET's list point at their slot's banner sprite while the slot has a variant
+        // (and the game's own otherwise), for draws that don't come through command 95.
+        void LobbyBannerHandles()
+        {
+            static uint32_t* list = nullptr;
+            static uint32_t own[4];
+            uint32_t* now = MnetHandles();
+            if (!now) return;
+            if (now != list)
+            {
+                list = now;
+                for (int s = 0; s < 4; ++s) own[s] = list[kCarriers[s].record];
+                Log(L"variants: lobby banners: carrier handles %X %X %X %X", own[0], own[1], own[2], own[3]);
+            }
+            for (int s = 0; s < 4; ++s)
+            {
+                int shown = LobbyBanner(kCarriers[s].record); // sets the slot sprite's rectangle; -1 = the game's
+                uint32_t want = shown < 0 ? own[s] : list[shown];
+                if (list[kCarriers[s].record] != want)
+                {
+                    list[kCarriers[s].record] = want;
+                    Log(L"variants: lobby banners: slot %d's carrier sprite %d now shows sprite %d", s, kCarriers[s].record, shown < 0 ? kCarriers[s].record : shown);
+                }
+            }
+        }
+
+        // A normal / monster pick of a record that is some slot's carrier while that slot's variant is on: that player
+        // would show the variant (Belono is slot 3's carrier). Only logged for now.
+        void CarrierClash(int record, int slot)
+        {
+            for (int s = 0; s < 4; ++s)
+                if (s != slot && record == kCarriers[s].record && g_variants[s].on)
+                    Log(L"variants: WARNING slot %d picked record %d, the carrier of slot %d's variant (%S): it will look like that variant", slot, record, s,
+                        variants::Characters()[g_variants[s].pick.character].name);
+        }
+
+        // ---- Online: each PC shares its pick as its lobby member attribute PD_VARIANT, "1|slot|character|colour|dodge|set"
+        // (names, not list numbers, so a mismatch shows), empty for a normal pick. xsapi/mpsd.cpp adds it to every member
+        // write (VariantAttribute) and hands every lobby update to LobbyVariants, which turns the other members' picks
+        // on for their slots (and builds their files in the background).
+        std::mutex g_shareLock;
+        std::string g_myVariant, g_variantLobby;
+        std::map<std::string, std::string> g_memberVariant; // EOS user id -> PD_VARIANT last applied
+        std::map<std::string, int> g_memberSlot;            // EOS user id -> the slot their variant was applied to
+        // Toaf's test (2026-11-21): when this PC joined, its own slot still read 0 (the game sets it later) and Nui's
+        // PD_VARIANT for slot 0 was refused as "this PC's own slot" - and never looked at again. Refused ones wait here
+        // (EOS user id -> PD_NAME) and are tried again after this PC's own pick and when the match loads player files.
+        std::map<std::string, std::string> g_memberRetry;
+        std::atomic<bool> g_anyRetry{ false };
+
+        std::string VariantText(int slot, const variants::Pick& k)
+        {
+            return "1|" + std::to_string(slot) + "|" + variants::Characters()[k.character].name + "|" + std::to_string(k.colour) + "|" +
+                   variants::Dodges()[k.dodge].name + "|" + variants::AnimationSets()[k.set].name;
+        }
+
+        bool ParseVariant(const std::string& text, int& slot, variants::Pick& k, std::string& why)
+        {
+            std::vector<std::string> f;
+            for (size_t at = 0;;)
+            {
+                size_t bar = text.find('|', at);
+                f.push_back(text.substr(at, bar == std::string::npos ? std::string::npos : bar - at));
+                if (bar == std::string::npos) break;
+                at = bar + 1;
+            }
+            if (f.size() != 6 || f[0] != "1") { why = "not version 1 / 6 fields"; return false; }
+            slot = atoi(f[1].c_str());
+            k = {};
+            k.colour = atoi(f[3].c_str());
+            for (size_t i = 0; i < variants::Characters().size(); ++i) if (f[2] == variants::Characters()[i].name) k.character = static_cast<int>(i);
+            for (size_t i = 0; i < variants::Dodges().size(); ++i) if (f[4] == variants::Dodges()[i].name) k.dodge = static_cast<int>(i);
+            int set = -1;
+            for (size_t i = 0; i < variants::AnimationSets().size(); ++i) if (f[5] == variants::AnimationSets()[i].name) set = static_cast<int>(i);
+            if (slot < 0 || slot > 3) { why = "slot out of range"; return false; }
+            if (k.character < 0) { why = "unknown character '" + f[2] + "' (older / newer pdnet?)"; return false; }
+            if (set < 0) { why = "unknown animation set '" + f[5] + "'"; return false; }
+            k.set = set;
+            if (k.colour < 0 || k.colour > 3) k.colour = 0;
+            return true;
+        }
+
+        void PublishVariant(int slot, const variants::Pick* pick)
+        {
+            if (g_testPicking != kPickingNone) return; // Test Arsenal: nobody to tell
+            std::string text = pick ? VariantText(slot, *pick) : "", lobby;
+            {
+                std::lock_guard guard(g_shareLock);
+                if (text == g_myVariant) return;
+                g_myVariant = text;
+                lobby = g_variantLobby;
+            }
+            if (lobby.empty())
+            {
+                Log(L"variants: share: no game lobby known yet - '%S' goes out with this PC's next lobby write", text.c_str());
+                return;
+            }
+            std::thread([lobby, text]
+            {
+                lobbies::Changes member;
+                if (text.empty()) member.remove.push_back("PD_VARIANT");
+                else member.set["PD_VARIANT"] = text;
+                bool ok = lobbies::Update(lobby, lobbies::Changes{}, member);
+                Log(L"variants: share: PD_VARIANT '%S' to lobby %S - %s", text.c_str(), lobby.c_str(), ok ? L"ok" : L"FAILED");
+            }).detach();
+        }
+
+        // Another member's PD_VARIANT changed (or they left: `text` empty).
+        void ApplyMemberVariant(const std::string& user, const std::string& name, const std::string& text)
+        {
+            int mySlot = *reinterpret_cast<int32_t*>(At(0x140527bc4));
+            int oldSlot = g_memberSlot.count(user) ? g_memberSlot[user] : -1;
+            if (text.empty())
+            {
+                g_memberRetry.erase(user);
+                if (oldSlot >= 0 && oldSlot != mySlot) ClearVariant(oldSlot);
+                g_memberSlot.erase(user);
+                Log(L"variants: online: %S (%S) plays a normal pick now%s", name.c_str(), user.c_str(), oldSlot >= 0 ? L" - their slot's variant is off" : L"");
+                return;
+            }
+            int slot = -1;
+            variants::Pick pick;
+            std::string why;
+            if (!ParseVariant(text, slot, pick, why))
+            {
+                Log(L"variants: online: %S's PD_VARIANT '%S' not used: %S", name.c_str(), text.c_str(), why.c_str());
+                return;
+            }
+            if (slot == mySlot)
+            {
+                Log(L"variants: online: %S says slot %d, which this PC reads as its own slot (yet) - tried again later", name.c_str(), slot);
+                g_memberRetry[user] = name;
+                g_anyRetry = true;
+                return;
+            }
+            g_memberRetry.erase(user);
+            if (oldSlot >= 0 && oldSlot != slot && oldSlot != mySlot) ClearVariant(oldSlot); // they moved slots
+            int value = ActivateVariant(slot, pick);
+            g_memberSlot[user] = slot;
+            Log(L"variants: online: %S (%S) picked %S for slot %d -> carrier value %X%s", name.c_str(), user.c_str(), text.c_str(), slot, value,
+                value < 0 ? L" - NOT ACTIVE" : L"");
+            if (value >= 0) PrebuildVariant(slot, pick, "another player's pick");
+            LogPickTable("after another player's pick");
+        }
+
+        // Members whose PD_VARIANT waited (g_memberRetry), tried again now that this PC's slot may be known.
+        void RetryMemberVariants(const char* why)
+        {
+            if (!g_anyRetry) return;
+            std::lock_guard guard(g_shareLock);
+            std::map<std::string, std::string> waiting;
+            waiting.swap(g_memberRetry);
+            g_anyRetry = false;
+            Log(L"variants: online: trying %zu waiting pick(s) again (%S), this PC's slot %d", waiting.size(), why, *reinterpret_cast<int32_t*>(At(0x140527bc4)));
+            for (auto& [user, name] : waiting)
+                if (auto it = g_memberVariant.find(user); it != g_memberVariant.end() && !it->second.empty()) ApplyMemberVariant(user, name, it->second);
+        }
+
+        // A carrier file the game opens: built for the active variant (BuildVariantFile), or empty.
+        std::wstring VariantFile(LPCWSTR name)
+        {
+            std::wstring path(name);
+            for (wchar_t& ch : path) ch = ch == L'/' ? L'\\' : static_cast<wchar_t>(towlower(ch)); // the game writes "player\%s"
+            size_t player = 0;
+            for (size_t at = path.find(L"player\\"); at != std::wstring::npos; at = path.find(L"player\\", at + 1)) player = at;
+            if (player == 0 && path.compare(0, 7, L"player\\") != 0) return L"";
+            std::wstring rest = path.substr(player + 7); // <folder>\<file>
+            size_t slash = rest.find(L'\\');
+            if (slash == std::wstring::npos) return L"";
+            std::string folder, file; // ASCII names: each wchar_t narrowed on purpose (no C4244 warning)
+            for (size_t i = 0; i < rest.size(); ++i)
+                if (i != slash) (i < slash ? folder : file).push_back(static_cast<char>(rest[i]));
+            for (char& ch : file) ch = static_cast<char>(tolower(static_cast<unsigned char>(ch)));
+            for (int slot = 0; slot < 4; ++slot)
+            {
+                variants::Pick pick;
+                {
+                    std::lock_guard guard(g_variantLock);
+                    if (!g_variants[slot].on || _stricmp(folder.c_str(), kCarriers[slot].folder) != 0) continue;
+                    pick = g_variants[slot].pick;
+                }
+                {
+                    std::lock_guard guard(g_buildLock); // a prebuild may be reading it
+                    std::wstring prefix(name, name + player); // up to Player\ (the game's own spelling)
+                    if (prefix != g_dataPrefix) g_dataPrefix = prefix;
+                }
+                static ULONGLONG lastTable = 0; // the pick table once per match load
+                if (GetTickCount64() - lastTable > 20000) { lastTable = GetTickCount64(); LogPickTable("the match loads a carrier's files"); }
+                if (file.size() == 10 && file.compare(0, 5, "exmot") == 0 && file.compare(6, 4, ".ala") == 0 && isdigit(static_cast<unsigned char>(file[5])))
+                    return BuildVariantFile(pick, file[5] - '0', name);
+                if (file.size() == strlen(kCarriers[slot].folder) + 5 && file.compare(file.size() - 4, 4, ".alr") == 0 && isdigit(static_cast<unsigned char>(file[file.size() - 5])))
+                    return BuildVariantFile(pick, -1, name);
+            }
+            return L"";
+        }
+
+        // variant_test=c,colour,dodge,set (numbers)
+        bool VariantTestPick(variants::Pick& pick)
+        {
+            const std::string& text = GetConfig().variantTest;
+            if (text.empty()) return false;
+            int v[4] = { -1, 0, 0, 0 };
+            if (sscanf_s(text.c_str(), "%d,%d,%d,%d", &v[0], &v[1], &v[2], &v[3]) < 1) return false;
+            pick = { v[0], v[1], v[2], v[3] };
+            return true;
+        }
+
         HANDLE WINAPI HookedCreateFile2(LPCWSTR name, DWORD access, DWORD share, DWORD disposition, LPCREATEFILE2_EXTENDED_PARAMETERS params)
         {
             size_t n = name ? wcslen(name) : 0;
+            if (g_anyRetry && n > 12 && (wcsstr(name, L"layer\\") || wcsstr(name, L"layer/"))) RetryMemberVariants("the match loads player files");
+            bool anyVariant = false;
+            for (const ActiveVariant& v : g_variants) anyVariant = anyVariant || v.on;
+            if (anyVariant && n > 12)
+            {
+                static std::atomic<int> told{ 0 };
+                if (told < 40 && (wcsstr(name, L"layer") || wcsstr(name, L".al"))) { ++told; Log(L"variants: the game opens %s (access %X)", name, access); }
+            }
+            if (anyVariant && n > 12 && (access & GENERIC_READ) && !(access & GENERIC_WRITE))
+            {
+                std::wstring built = VariantFile(name);
+                if (!built.empty()) return g_createFile2(built.c_str(), access, share, disposition, params);
+            }
             if (n > 16 && _wcsicmp(name + n - 15, L"menu\\FDLogo.alr") == 0 && (name[n - 16] == L'/' || name[n - 16] == L'\\')) // "Assets/Data/menu\FDLogo.alr"
             {
                 static std::once_flag once;
@@ -4061,6 +5552,24 @@ namespace pdnet::gamepatches
                     std::wstring path = LocalStatePath() + L"\\pdnet\\FDLogo.alr";
                     if (MakeTitleCopy(name, path) && TallerTitleBoxes()) copy = path;
                     Log(L"gamepatch: title screen %s", copy.empty() ? L"left as it is (logo file not as expected)" : L"reads \"Rebirth\"");
+                });
+                if (!copy.empty()) return g_createFile2(copy.c_str(), access, share, disposition, params);
+            }
+            if (n > 14 && _wcsicmp(name + n - 13, L"menu\\MNet.alr") == 0 && (name[n - 14] == L'/' || name[n - 14] == L'\\') && GetConfig().charselPortraits)
+            {
+                static std::once_flag once;
+                static std::wstring copy;
+                std::call_once(once, [name, n]
+                {
+                    // the game's data folder as it names it (for variant builds before any player file is opened)
+                    g_dataPrefix = std::wstring(name, name + n - 13);
+                    Log(L"variants: data folder '%s'", g_dataPrefix.c_str());
+                    std::wstring path = LocalStatePath() + L"\\pdnet\\MNet.alr";
+                    const char* why = "";
+                    int added = MakeMnetCopy(name, path, why);
+                    if (added >= 0) copy = path, g_monsterPortraits = added;
+                    if (added >= 0) Log(L"gamepatch: character select portraits: %d sprites added (MNET sprites %d-%d: monsters, blank, Advanced list portraits)", added, kMonsterPortraitFirst, kMonsterPortraitFirst + added - 1);
+                    else Log(L"gamepatch: character select portraits left as they are (%S)", why);
                 });
                 if (!copy.empty()) return g_createFile2(copy.c_str(), access, share, disposition, params);
             }
@@ -4090,9 +5599,11 @@ namespace pdnet::gamepatches
             return g_createFile2(name, access, share, disposition, params);
         }
         // Returns false until Windows has filled in PDUWP.exe's imports (pdlaunch injects pdnet before that).
-        bool PatchCreateFile2()
+        // CreateFile2 in a module's import table -> HookedCreateFile2. PDUWP.exe's (the menus, FDLogo / MNet) and, for the
+        // character files (test 6, 2026-11-20: none of them came through PDUWP.exe's), MeldRelease_UWP.dll's, the data
+        // layer, which imports CreateFile2 too.
+        bool PatchCreateFile2In(uint8_t* base)
         {
-            auto base = Image();
             auto nt = reinterpret_cast<IMAGE_NT_HEADERS*>(base + reinterpret_cast<IMAGE_DOS_HEADER*>(base)->e_lfanew);
             auto& dir = nt->OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_IMPORT];
             for (auto desc = reinterpret_cast<IMAGE_IMPORT_DESCRIPTOR*>(base + dir.VirtualAddress); dir.VirtualAddress && desc->Name; ++desc)
@@ -4106,7 +5617,8 @@ namespace pdnet::gamepatches
                         strcmp(reinterpret_cast<IMAGE_IMPORT_BY_NAME*>(base + names->u1.AddressOfData)->Name, "CreateFile2") != 0)
                         continue;
                     if (slots->u1.Function == names->u1.AddressOfData) return false; // not filled in yet
-                    g_createFile2 = reinterpret_cast<CreateFile2Fn>(slots->u1.Function);
+                    if (slots->u1.Function == reinterpret_cast<ULONG_PTR>(&HookedCreateFile2)) return true;
+                    if (!g_createFile2) g_createFile2 = reinterpret_cast<CreateFile2Fn>(slots->u1.Function);
                     DWORD old;
                     VirtualProtect(&slots->u1.Function, sizeof(ULONG_PTR), PAGE_READWRITE, &old);
                     slots->u1.Function = reinterpret_cast<ULONG_PTR>(&HookedCreateFile2);
@@ -4115,6 +5627,15 @@ namespace pdnet::gamepatches
                 }
             }
             return false;
+        }
+
+        bool PatchCreateFile2()
+        {
+            if (!PatchCreateFile2In(Image())) return false;
+            if (HMODULE meld = GetModuleHandleW(L"MeldRelease_UWP.dll"))
+                Log(L"gamepatch: MeldRelease_UWP.dll file opens %s", PatchCreateFile2In(reinterpret_cast<uint8_t*>(meld)) ? L"hooked" : L"NOT hooked");
+            else Log(L"gamepatch: MeldRelease_UWP.dll not loaded yet - its file opens not hooked");
+            return true;
         }
     }
 
@@ -4276,6 +5797,12 @@ namespace pdnet::gamepatches
             {
                 if (g_testStage >= 0) { stage = g_testStage; layout = g_testLayout; }
                 if (g_testCharacter >= 0) *reinterpret_cast<int32_t*>(setup + 8) = g_testCharacter;
+                variants::Pick test;
+                if (VariantTestPick(test))
+                {
+                    int value = ActivateVariant(0, test);
+                    if (value >= 0) *reinterpret_cast<int32_t*>(setup + 8) = value;
+                }
                 if (g_testOpponentCharacter >= 0) *reinterpret_cast<int32_t*>(setup + 0x48 + 8) = g_testOpponentCharacter;
                 Log(L"gamepatch: Test Arsenal: battle on map %d, layout %u, character %d, opponent's %d", stage, layout, *reinterpret_cast<int32_t*>(setup + 8), *reinterpret_cast<int32_t*>(setup + 0x48 + 8));
                 // A film with 3 or 4 players: the setup has 4 entries of 0x48 (FUN_140128990 copies them; a player is
@@ -4369,6 +5896,16 @@ namespace pdnet::gamepatches
                 return;
             }
             if (key && key == GetConfig().partnerLockKey) PartnerPress(L"key");
+            if (CurrentMenu(MenuManager()) == kCharacterMenu) // the Advanced list (CharacterSelectInput / CharacterSelectButtons)
+            {
+                if (key == 'Y') g_charselKeyY = true;
+                if (key == VK_UP || key == 'W') g_charselKeyMove = 1;
+                if (key == VK_DOWN || key == 'S') g_charselKeyMove = 2;
+                if (key == VK_LEFT || key == 'A') g_charselKeyMove = 3;
+                if (key == VK_RIGHT || key == 'D') g_charselKeyMove = 4;
+                if (key == 'Q') g_charselKeyPage = -1;
+                if (key == 'E') g_charselKeyPage = 1;
+            }
         }
 
         // KeyEventArgs: get_VirtualKey at vtable +0x30, get_KeyStatus at +0x38 (CorePhysicalKeyStatus: WasKeyDown at byte 10).
@@ -5407,6 +6944,7 @@ namespace pdnet::gamepatches
             if (GetConfig().nametagDebug) NametagDebug();
             if (GetConfig().lobbyArsenalEditor) LobbyArsenalEditor();
             if (GetConfig().voiceChat || GetConfig().iconGallery) LobbyTalkIndicator();
+            CharacterSelectHooks(); // after LobbyTalkIndicator: shares its sprite and text hooks
             bool micLabel = GetConfig().voiceChat && !GetConfig().voiceClassic; // classic: the option keeps its "Voice Chat" name
             QuickJoinLabels();
             if (GetConfig().shopMaxOut) ShopMaxOut();
@@ -5444,6 +6982,64 @@ namespace pdnet::gamepatches
     {
         if (!g_editorFromLobby || g_lobbyEndedInEditor.exchange(true)) return;
         Log(L"menu: the lobby ended while its Arsenal editor is open - leaving the editor goes out of the lobby");
+    }
+
+    // Advanced list variants online (see PublishVariant / ApplyMemberVariant).
+    std::string VariantAttribute()
+    {
+        std::lock_guard guard(g_shareLock);
+        return g_myVariant;
+    }
+
+    void LobbyVariants(const std::string& lobbyId, const std::vector<LobbyVariant>& members)
+    {
+        std::string me = lobbies::LocalUserId();
+        std::lock_guard guard(g_shareLock);
+        if (g_variantLobby != lobbyId)
+        {
+            Log(L"variants: online: game lobby %S (%zu member(s)), this PC's slot %d, its PD_VARIANT '%S'", lobbyId.c_str(), members.size(),
+                *reinterpret_cast<int32_t*>(At(0x140527bc4)), g_myVariant.c_str());
+            g_variantLobby = lobbyId;
+            if (!g_myVariant.empty()) // a pick made before the lobby was known
+            {
+                std::string text = g_myVariant;
+                std::thread([lobbyId, text]
+                {
+                    bool ok = lobbies::Update(lobbyId, lobbies::Changes{}, lobbies::Changes{ { { "PD_VARIANT", text } }, {} });
+                    Log(L"variants: share: PD_VARIANT '%S' to lobby %S (on joining) - %s", text.c_str(), lobbyId.c_str(), ok ? L"ok" : L"FAILED");
+                }).detach();
+            }
+        }
+        std::set<std::string> present;
+        for (const LobbyVariant& m : members)
+        {
+            if (m.userId == me) continue;
+            present.insert(m.userId);
+            auto it = g_memberVariant.find(m.userId);
+            if (it != g_memberVariant.end() && it->second == m.value) continue;
+            if (it == g_memberVariant.end() && m.value.empty()) { g_memberVariant[m.userId] = ""; continue; }
+            g_memberVariant[m.userId] = m.value;
+            ApplyMemberVariant(m.userId, m.name, m.value);
+        }
+        for (auto it = g_memberVariant.begin(); it != g_memberVariant.end();)
+        {
+            if (present.count(it->first)) { ++it; continue; }
+            if (!it->second.empty()) ApplyMemberVariant(it->first, "(left the lobby)", "");
+            it = g_memberVariant.erase(it);
+        }
+    }
+
+    void LobbyVariantsLeft(const std::string& lobbyId)
+    {
+        std::lock_guard guard(g_shareLock);
+        if (lobbyId != g_variantLobby) return;
+        int mySlot = *reinterpret_cast<int32_t*>(At(0x140527bc4));
+        for (auto& [user, slot] : g_memberSlot)
+            if (slot != mySlot) ClearVariant(slot);
+        Log(L"variants: online: left lobby %S - the other players' variants are off (%zu)", lobbyId.c_str(), g_memberSlot.size());
+        g_memberSlot.clear();
+        g_memberVariant.clear();
+        g_variantLobby.clear();
     }
 
     int SavedRating()

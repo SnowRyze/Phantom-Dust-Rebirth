@@ -1,0 +1,47 @@
+# MNET sprite numbers of charsel-portraits.bin (make_portraits.py writes this; for variants::Character)
+84 monster_vestio.tga
+85 monster_ommato.tga
+86 monster_anthro.tga
+87 monster_guard.tga
+88 monster_andro.tga
+89 monster_ceno.tga
+90 monster_partheno.tga
+91 monster_catoptro.tga
+92 monster_gyne.tga
+93 monster_claustro.tga
+94 monster_scoto.tga
+95 blank.tga
+96 portrait_germano.tga
+97 portrait_belono.tga
+98 portrait_n03.tga
+99 portrait_spokesman.tga
+100 portrait_ubiquitous.tga
+101 portrait_kajikawa.tga
+102 portrait_tetsuya.tga
+103 portrait_arthur.tga
+104 portrait_reindeer.tga
+105 portrait_mac.tga
+106 portrait_baroness.tga
+107 portrait_mikan.tga
+108 portrait_ai.tga
+109 portrait_maniac.tga
+110 portrait_kei.tga
+111 portrait_ubiquitous2.tga
+27 dummy001.tga (lobby banner of slot 0)
+28 dummy002.tga (lobby banner of slot 1)
+29 dummy003.tga (lobby banner of slot 2)
+30 dummy004.tga (lobby banner of slot 3)
+# banners (variants::Character::banner = k): k name x y in MNet0800
+banner 0 spokesman 256 294
+banner 1 mikan 332 294
+banner 2 ai 408 294
+banner 3 kei 484 294
+banner 4 kajikawa 560 294
+banner 5 n03 636 294
+banner 6 maniac 712 294
+banner 7 arthur 788 294
+banner 8 mac 864 294
+banner 9 baroness 940 294
+banner 10 tetsuya 1016 294
+banner 11 reindeer 1092 294
+banner 12 ubiquitous 1168 294
