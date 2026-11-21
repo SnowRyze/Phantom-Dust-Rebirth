@@ -101,6 +101,8 @@ Ideas, not planned (notes in the change log and reference notes):
 
 ## November 2026
 
+Advanced list, after menu test 6 (2026-11-21; not yet seen in game): the plate lay under the portraits (drawn right after window 12). pdnet's name and plate are now drawn when the game draws its own (empty) name line, in that line's drawing layer (command 99 comes before it), as the game's own plate is. Wanted order (the user): background, scanlines, portrait shadow, portraits, cursor, plate, name, pop-up window, pop-up text.
+
 Advanced list entries (2026-11-21, the user): Mac 2, Baroness 2 and Reindeer 2 removed (the others lose their "1"); Ubiquitous 1 / 2 are now "Ubiquitous Keyboard" / "Ubiquitous". 27 entries; EntrySprite picks the second portrait by the entry's model version, not its name.
 
 Advanced list, after menu test 5 (2026-11-21; not yet seen in game). The name plate is back behind pdnet's name: the game still calls command 29 every frame (not drawn on the Advanced list), so its rectangle, the name's width (command 31, also wrapped) and the name line's place (command 23) give the plate's padding, offset, height and colour; pdnet draws one sized for its name under the chosen entry (DrawNamePlate). No name while a pop-up is open (text is drawn over all window backgrounds). Grid 8 px lower (y 58). Pop-ups under 6 rows get one more empty line (the window's height follows its lines).

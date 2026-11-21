@@ -3660,6 +3660,7 @@ namespace pdnet::gamepatches
 
         bool CharacterSelectAdvanced(); // (below)
         const char* AdvancedName(const std::string& shown);
+        void DrawAdvancedName();
 
         bool ColourNameText(int64_t* args, int64_t* changed)
         {
@@ -3718,6 +3719,7 @@ namespace pdnet::gamepatches
                     // The Advanced list: the place's entry instead (empty places: no name); its colours are Freia's.
                     static char advancedName[48];
                     strcpy_s(advancedName, AdvancedName(g_charselName));
+                    DrawAdvancedName(); // pdnet's name and plate, in the game's name line's layer
                     g_shownCharacter = advancedName[0] ? &kCharacterColours[0] : nullptr;
                     memcpy(changed, args, 8 * sizeof(int64_t));
                     changed[3] = reinterpret_cast<int64_t>(advancedName);
@@ -4214,6 +4216,27 @@ namespace pdnet::gamepatches
         // pop-up with its title and rows (the chosen one marked).
         void DrawNamePlate(const char* name, int centreX, int textY); // (below, with the hooks)
 
+        // The chosen entry's name on its plate, under it (test 3). Drawn when the game draws its own (empty) name line
+        // (ColourNameText): there the game's drawing layer puts the plate over the portraits (test 6: drawn after
+        // window 12 it lay under them). Not while a pop-up is open (text is drawn over every window background).
+        void DrawAdvancedName()
+        {
+            int64_t manager = MenuManager();
+            int cursor = g_gridCursor;
+            if (!manager || g_popup != kNoPopup || cursor < 0 || cursor >= static_cast<int>(variants::Characters().size())) return;
+            int64_t* window = reinterpret_cast<int64_t*>(manager + 0x10408);
+            int64_t previous = *window;
+            *window = reinterpret_cast<int64_t>(WindowAt(manager, 12));
+            // Text lands ~9 px higher on screen than a sprite at the same y.
+            int x = kGridX + (cursor % kGridColumns) * kGridPitchX + kGridPitchX / 2, y = kGridY + (cursor / kGridColumns + 1) * kGridPitchY + 9;
+            DrawNamePlate(variants::Characters()[cursor].name, x, y);
+            static char name[64];
+            sprintf_s(name, "\a200c%s", variants::Characters()[cursor].name);
+            int64_t a[8] = { x - 100, y, reinterpret_cast<int64_t>(name) };
+            reinterpret_cast<MenuCommandFn>(At(0x140207870))(a);
+            *window = previous;
+        }
+
         void DrawCharselPopup(int64_t* args)
         {
             int64_t manager = MenuManager();
@@ -4222,19 +4245,6 @@ namespace pdnet::gamepatches
             // sometimes over them. After window 12 it should always be over them.
             DrawAdvancedGrid();
             auto text = [](int x, int y, const char* s) { int64_t a[8] = { x, y, reinterpret_cast<int64_t>(s) }; reinterpret_cast<MenuCommandFn>(At(0x140207870))(a); };
-            static char name[64];
-            int cursor = g_gridCursor;
-            // test 5: no name while a pop-up is open (text is drawn over every window background)
-            if (g_popup == kNoPopup && cursor >= 0 && cursor < static_cast<int>(variants::Characters().size()))
-            {
-                *reinterpret_cast<int64_t*>(manager + 0x10408) = reinterpret_cast<int64_t>(WindowAt(manager, 12));
-                // under the chosen entry (test 3). Text lands ~9 px higher on screen than a sprite at the same y.
-                int x = kGridX + (cursor % kGridColumns) * kGridPitchX + kGridPitchX / 2, y = kGridY + (cursor / kGridColumns + 1) * kGridPitchY + 9;
-                DrawNamePlate(variants::Characters()[cursor].name, x, y);
-                sprintf_s(name, "\a200c%s", variants::Characters()[cursor].name);
-                text(x - 100, y, name);
-                *reinterpret_cast<int64_t*>(manager + 0x10408) = 0;
-            }
             if (g_popup == kNoPopup) return;
             int64_t popup[8] = { kCharselPopupWindow };
             g_drawWindow(popup);
