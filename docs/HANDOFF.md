@@ -101,6 +101,8 @@ Ideas, not planned (notes in the change log and reference notes):
 
 ## November 2026
 
+Advanced list, after menu test 7 (2026-11-21; not yet seen in game): drawn with the game's name line, the plate and name lay under the portraits; drawn after the grid (test 6) the name was over them but the plate (command 29 rectangle) still under: filled rectangles lie under every sprite. The plate is now the game's own plate sprites, 71 / 70 (stretched to the name's width) / 72, drawn after the grid with the name (DrawAdvancedName from DrawCharselPopup).
+
 Advanced list, after menu test 6 (2026-11-21; not yet seen in game): the plate lay under the portraits (drawn right after window 12). pdnet's name and plate are now drawn when the game draws its own (empty) name line, in that line's drawing layer (command 99 comes before it), as the game's own plate is. Wanted order (the user): background, scanlines, portrait shadow, portraits, cursor, plate, name, pop-up window, pop-up text.
 
 Advanced list entries (2026-11-21, the user): Mac 2, Baroness 2 and Reindeer 2 removed (the others lose their "1"); Ubiquitous 1 / 2 are now "Ubiquitous Keyboard" / "Ubiquitous". 27 entries; EntrySprite picks the second portrait by the entry's model version, not its name.

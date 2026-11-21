@@ -3660,7 +3660,6 @@ namespace pdnet::gamepatches
 
         bool CharacterSelectAdvanced(); // (below)
         const char* AdvancedName(const std::string& shown);
-        void DrawAdvancedName();
 
         bool ColourNameText(int64_t* args, int64_t* changed)
         {
@@ -3719,7 +3718,6 @@ namespace pdnet::gamepatches
                     // The Advanced list: the place's entry instead (empty places: no name); its colours are Freia's.
                     static char advancedName[48];
                     strcpy_s(advancedName, AdvancedName(g_charselName));
-                    DrawAdvancedName(); // pdnet's name and plate, in the game's name line's layer
                     g_shownCharacter = advancedName[0] ? &kCharacterColours[0] : nullptr;
                     memcpy(changed, args, 8 * sizeof(int64_t));
                     changed[3] = reinterpret_cast<int64_t>(advancedName);
@@ -4216,9 +4214,9 @@ namespace pdnet::gamepatches
         // pop-up with its title and rows (the chosen one marked).
         void DrawNamePlate(const char* name, int centreX, int textY); // (below, with the hooks)
 
-        // The chosen entry's name on its plate, under it (test 3). Drawn when the game draws its own (empty) name line
-        // (ColourNameText): there the game's drawing layer puts the plate over the portraits (test 6: drawn after
-        // window 12 it lay under them). Not while a pop-up is open (text is drawn over every window background).
+        // The chosen entry's name on its plate, under it (test 3), after the grid. Not while a pop-up is open (text is
+        // drawn over every window background). Tests 6 / 7: filled rectangles (command 29) lie under every sprite, so
+        // the plate is the game's own plate sprites: player_name_plate_l (71, 20 x 16), _c (70, 8 x 16, stretched), _r (72).
         void DrawAdvancedName()
         {
             int64_t manager = MenuManager();
@@ -4229,7 +4227,7 @@ namespace pdnet::gamepatches
             *window = reinterpret_cast<int64_t>(WindowAt(manager, 12));
             // Text lands ~9 px higher on screen than a sprite at the same y.
             int x = kGridX + (cursor % kGridColumns) * kGridPitchX + kGridPitchX / 2, y = kGridY + (cursor / kGridColumns + 1) * kGridPitchY + 9;
-            DrawNamePlate(variants::Characters()[cursor].name, x, y);
+            DrawNamePlate(variants::Characters()[cursor].name, x, kGridY + (cursor / kGridColumns + 1) * kGridPitchY);
             static char name[64];
             sprintf_s(name, "\a200c%s", variants::Characters()[cursor].name);
             int64_t a[8] = { x - 100, y, reinterpret_cast<int64_t>(name) };
@@ -4244,6 +4242,7 @@ namespace pdnet::gamepatches
             // Test 2: drawn with the portraits (command 95 of sprite 40) the grid sometimes lay under the screen's scanlines,
             // sometimes over them. After window 12 it should always be over them.
             DrawAdvancedGrid();
+            DrawAdvancedName();
             auto text = [](int x, int y, const char* s) { int64_t a[8] = { x, y, reinterpret_cast<int64_t>(s) }; reinterpret_cast<MenuCommandFn>(At(0x140207870))(a); };
             if (g_popup == kNoPopup) return;
             int64_t popup[8] = { kCharselPopupWindow };
@@ -4423,16 +4422,28 @@ namespace pdnet::gamepatches
             return width;
         }
 
-        // pdnet's name plate: the game's, moved to `centreX` / `textY` and sized for `name`.
-        void DrawNamePlate(const char* name, int centreX, int textY)
+        // pdnet's name plate (sprites 71, 70 stretched, 72; the handles the game had, g_ownFrames) centred on `centreX`
+        // from `y` (sprite coordinates), as wide as `name` (command 31 with the game's font for its name line).
+        void DrawNamePlate(const char* name, int centreX, int y)
         {
-            if (!g_havePlate || !g_fillRect || !g_textWidth) return;
-            int64_t measure[8] = { reinterpret_cast<int64_t>(name), g_plateFont };
-            int width = static_cast<int>(g_textWidth(measure));
-            int padLeft = static_cast<int>(g_gameNameX + 65 - g_plateTextWidth / 2 - g_plate[0]); // the game's line is "\a130c%s"
-            int padWidth = static_cast<int>(g_plate[2]) - g_plateTextWidth;
-            int64_t rect[8] = { centreX - width / 2 - padLeft, textY + (g_plate[1] - g_gameNameY), width + padWidth, g_plate[3], g_plate[4] };
-            g_fillRect(rect);
+            uint32_t* list = MnetHandles();
+            if (!list || list != g_handles) return;
+            int width = static_cast<int>(strlen(name)) * 9;
+            if (g_textWidth && g_plateTextWidth > 0)
+            {
+                int64_t measure[8] = { reinterpret_cast<int64_t>(name), g_plateFont };
+                width = static_cast<int>(g_textWidth(measure));
+            }
+            int inner = width + 8, left = centreX - inner / 2;
+            float one = 1.0f, stretch = inner / 8.0f;
+            uint32_t white = 0xffffffff;
+            auto draw = [&](uint32_t handle, int x, const float* scaleX)
+            {
+                reinterpret_cast<SpriteObjectFn>(At(0x1401983e0))(nullptr, handle, x, y, 0, scaleX, &one, &white, 0, 0);
+            };
+            draw(g_ownFrames[5], left - 20, &one);  // 71 player_name_plate_l
+            draw(g_ownFrames[4], left, &stretch);   // 70 player_name_plate_c
+            draw(g_ownFrames[6], left + inner, &one); // 72 player_name_plate_r
         }
 
         void CharacterSelectHooks()
