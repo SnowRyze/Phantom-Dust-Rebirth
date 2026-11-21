@@ -5362,7 +5362,9 @@ namespace pdnet::gamepatches
             std::wstring rest = path.substr(player + 7); // <folder>\<file>
             size_t slash = rest.find(L'\\');
             if (slash == std::wstring::npos) return L"";
-            std::string folder(rest.begin(), rest.begin() + slash), file(rest.begin() + slash + 1, rest.end());
+            std::string folder, file; // ASCII names: each wchar_t narrowed on purpose (no C4244 warning)
+            for (size_t i = 0; i < rest.size(); ++i)
+                if (i != slash) (i < slash ? folder : file).push_back(static_cast<char>(rest[i]));
             for (char& ch : file) ch = static_cast<char>(tolower(static_cast<unsigned char>(ch)));
             for (int slot = 0; slot < 4; ++slot)
             {
