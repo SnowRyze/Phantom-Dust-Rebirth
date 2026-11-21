@@ -224,6 +224,47 @@ namespace pdnet::variants
             return fixed;
         }
 
+        // Stray aura pieces (2026-11-21, the user): Mac's (npc08a) and Baroness's (npc09a) aura hull (shader saura) has its
+        // left hand and left wrist pieces upside down and below the floor in the bind pose (y -16, where every other
+        // model has them at +16 like the right ones); in battle they showed as a glow flying around the character. NPCs
+        // never fight in the game, so it never showed there. The game's files stay as they are: in the built file these
+        // draws (by their place among the body run's draw records, and checked by their joint) get all their indices
+        // set to the first one - zero-area triangles, nothing drawn, the record's size and everything after it unchanged.
+        struct StrayDraw { const char* folder; int version; int draw; uint16_t joint; };
+        constexpr StrayDraw kStrayDraws[] = {
+            { "npc08a", 0, 23, 56 }, { "npc08a", 0, 24, 59 }, // Mac: left hand, left wrist
+            { "npc09a", 0, 23, 52 }, { "npc09a", 0, 24, 55 }, // Baroness: left hand, left wrist
+            { "npc03a", 1, 4, 54 },                           // Ubiquitous (second model): left hand (same fault, found by the check)
+        };
+
+        int HideStrayDraws(std::vector<uint8_t>& b, const Alr& a, const char* folder, int version)
+        {
+            int hidden = 0;
+            for (uint32_t r : a.roots)
+            {
+                std::vector<Record> c = Chain(b, r);
+                if (!HasType(c, 0x02)) continue;
+                int draw = 0;
+                for (const Record& x : c)
+                {
+                    if (x.type != 0x02) continue;
+                    for (const StrayDraw& s : kStrayDraws)
+                    {
+                        if (s.draw != draw || s.version != version || strcmp(s.folder, folder) != 0) continue;
+                        if (x.size < 0x68 || U16(b, x.at + 0x42) != s.joint) continue; // not the file this was made for
+                        uint32_t n = U32(b, x.at + 0x50);
+                        if (n == 0 || 0x68 + 2ull * n > x.size) continue;
+                        uint16_t first = U16(b, x.at + 0x68);
+                        for (uint32_t i = 1; i < n; ++i) memcpy(&b[x.at + 0x68 + 2 * i], &first, 2);
+                        ++hidden;
+                    }
+                    ++draw;
+                }
+                break; // the body (first model run) only
+            }
+            return hidden;
+        }
+
         // ---------------------------------------------------------------- joint matching (joint_keys)
 
         bool Named(const Joint& j) { return j.name != 0xFFFFFFFF && j.name != 0; }
@@ -488,6 +529,7 @@ namespace pdnet::variants
         Alr dst = ReadAlr(model);
         if (!dst.ok) { error = std::string("no model file for ") + c.name; return {}; }
         g_stats.renamed = FixJointNames(model, dst);
+        g_stats.hidden = HideStrayDraws(model, dst, c.folder, c.kind == Kind::Npc ? c.version : -1);
         dst = ReadAlr(model);
         std::vector<Joint> body = BodySkeleton(dst);
         if (body.empty()) { error = std::string("no skeleton in ") + c.name + "'s model"; return {}; }

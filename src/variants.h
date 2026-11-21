@@ -52,6 +52,6 @@ namespace pdnet::variants
     void SetLengths(const Pick& pick, int16_t lengths[6]);
 
     // How many joints of the destination skeleton got a track in the last BuildModel (diagnostics).
-    struct Stats { int runs = 0, tracks = 0, dropped = 0, joints = 0, renamed = 0; };
+    struct Stats { int runs = 0, tracks = 0, dropped = 0, joints = 0, renamed = 0, hidden = 0; };
     Stats LastStats();
 }

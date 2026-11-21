@@ -114,6 +114,13 @@ Check of the Advanced list's models (2026-11-21):
 | Kei, Maniac, Arthur, Mac, Tetsuya, Reindeer | none | - |
 | Germano, Belono | (the game's own monsters, not rebuilt) | - |
 
+## Broken pieces in a model
+
+A draw that is wrong in the game's own model (and never showed because the NPC never fought) can be hidden in the
+built file without touching the game's files: add `{ folder, version, draw number, joint }` to `kStrayDraws` in
+variants.cpp (the draw number counts the body run's draw records from 0; the joint is checked so another file is never
+changed). In use: Mac and Baroness (aura draws 23, 24), Ubiquitous (version 1, aura draw 4).
+
 ## Testing
 
 - Offline: Lab > Test Arsenal, Y on the character select, pick the new entry. `variant_test=<character>,<colour>,<dodge>,<set>`

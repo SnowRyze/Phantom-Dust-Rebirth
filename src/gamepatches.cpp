@@ -5219,8 +5219,8 @@ namespace pdnet::gamepatches
             BOOL ok = WriteFile(f, bytes.data(), static_cast<DWORD>(bytes.size()), &written, nullptr) && written == bytes.size();
             CloseHandle(f);
             variants::Stats st = variants::LastStats();
-            Log(L"variants: %s -> %s (%u bytes, %llu ms; %d runs, %d tracks, %d dropped, %d joints, %d renamed)%s", forName, target.c_str(), static_cast<unsigned>(bytes.size()),
-                GetTickCount64() - started, st.runs, st.tracks, st.dropped, st.joints, st.renamed, ok ? L"" : L" - WRITE FAILED");
+            Log(L"variants: %s -> %s (%u bytes, %llu ms; %d runs, %d tracks, %d dropped, %d joints, %d renamed, %d stray draws hidden)%s", forName, target.c_str(), static_cast<unsigned>(bytes.size()),
+                GetTickCount64() - started, st.runs, st.tracks, st.dropped, st.joints, st.renamed, st.hidden, ok ? L"" : L" - WRITE FAILED");
             if (!ok) return L"";
             g_builtFiles.insert(target);
             return target;
