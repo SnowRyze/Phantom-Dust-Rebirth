@@ -92,6 +92,14 @@ skill (750 jump, 751 cartwheel / roll). A set is a battle folder for all other m
 charaset record whose movement stats (turning, speeds) go with it. The pop-ups grow by themselves (up to 8 rows), and
 names are shared online, so every PC needs the same lists.
 
+## Joint names
+
+Skills place their effects on joints found by name (`raddha`, `laddha`, `rhand`, `rsword`, `lteku2`, ...; the names
+every battle character's body skeleton has). A model without one of them crashed the game when such a skill was used
+(Piece of Thunder as Ai or Mikan, whose models say `raddh`). pdnet now renames `raddh` / `laddh` in the built file and
+gives any other missing name a stand-in joint (logged once: `variants: joint ... asked for ..., which this model lacks`).
+An imported model should still use the battle characters' joint names; that log line shows which ones it lacks.
+
 ## Testing
 
 - Offline: Lab > Test Arsenal, Y on the character select, pick the new entry. `variant_test=<character>,<colour>,<dodge>,<set>`

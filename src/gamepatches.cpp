@@ -4603,6 +4603,57 @@ namespace pdnet::gamepatches
             draw(g_ownFrames[6], left + inner, &one); // 72 player_name_plate_r
         }
 
+        // A model's joint by name: FUN_14018aa50 (model, part, base-40 name) binary-searches the part's sorted name table
+        // and returns the joint's matrix, or null when the name isn't there. Some skill-effect callers use the result
+        // unchecked (0x14018ae75), so a character without a joint a skill names crashes the game (2026-11-21: Piece of
+        // Thunder as Ai or Mikan - their models spell "raddh" for "raddha"; variants.cpp now renames it in the built file).
+        // This is the safety net for the rest (e.g. Ai has no lteku2 / rnino2 / alpha, imported characters may lack more):
+        // a missing name is retried with a stand-in joint, logged once per name (only for the callers that don't check).
+        using JointFn = void* (*)(void* model, int part, uint32_t name);
+        JointFn g_joint = nullptr;
+        struct JointStandIn { uint32_t name; uint32_t standIns[3]; const wchar_t* text; };
+        constexpr JointStandIn kJointStandIns[] = {
+            { 0xACA1B65B, { 0xACA1B650, 0xADB07630, 0 }, L"raddha -> raddh / rhand" },
+            { 0x8802B65B, { 0x8802B650, 0x89117630, 0 }, L"laddha -> laddh / lhand" },
+            { 0xACA1B650, { 0xACA1B65B, 0xADB07630, 0 }, L"raddh -> raddha / rhand" },
+            { 0x8802B650, { 0x8802B65B, 0x89117630, 0 }, L"laddh -> laddha / lhand" },
+            { 0xAF73AAAE, { 0xADB07630, 0, 0 }, L"rsword -> rhand" },
+            { 0x8AD4AAAE, { 0x89117630, 0, 0 }, L"lsword -> lhand" },
+            { 0x8AEA0E1B, { 0x8AEA0E24, 0, 0 }, L"lteku2 -> ltekub" },
+            { 0xAF890E1B, { 0xAF890E24, 0, 0 }, L"rteku2 -> rtekub" },
+            { 0x8A03A7EB, { 0x8A03A807, 0, 0 }, L"lnino2 -> lninou" },
+            { 0xAEA2A7EB, { 0xAEA2A807, 0, 0 }, L"rnino2 -> rninou" },
+        };
+        constexpr uint32_t kLastResort[] = { 0x4D1D1738, 0x4D1D1710, 0x70DC9400 }; // body2, body1, hip
+        std::mutex g_jointLogLock;
+        std::set<uint32_t> g_jointLogged;
+
+        void* HookedJoint(void* model, int part, uint32_t name)
+        {
+            void* found = g_joint(model, part, name);
+            if (found || name == 0 || name == 0xFFFFFFFF) return found;
+            // 0x14018976a checks for null itself (a default matrix): left to the game, as unmodded
+            if (_ReturnAddress() == At(0x14018976f)) return found;
+            const wchar_t* how = L"body2 / body1 / hip (no stand-in for this name)";
+            for (const JointStandIn& s : kJointStandIns)
+            {
+                if (s.name != name) continue;
+                how = s.text;
+                for (uint32_t other : s.standIns)
+                    if (other && (found = g_joint(model, part, other)) != nullptr) break;
+                break;
+            }
+            for (uint32_t other : kLastResort)
+                if (!found && (found = g_joint(model, part, other)) != nullptr) break;
+            {
+                std::lock_guard guard(g_jointLogLock);
+                if (g_jointLogged.insert(name).second)
+                    Log(L"variants: joint %08X asked for (part %d, from %llX), which this model lacks - stand-in %s%s", name, part,
+                        static_cast<unsigned long long>(GhidraAddress(_ReturnAddress())), how, found ? L"" : L": none found either, left null");
+            }
+            return found;
+        }
+
         void CharacterSelectHooks()
         {
             if (!GetConfig().charselPortraits) return;
@@ -4615,6 +4666,10 @@ namespace pdnet::gamepatches
             static const std::vector<uint8_t> kInputStart = { 0x40, 0x53, 0x48, 0x83, 0xEC, 0x40, 0x48, 0x8B, 0xD9 };
             if (!g_windowInput)
                 g_windowInput = reinterpret_cast<WindowInputFn>(InlineHookBytes(0x140248b50, kInputStart, kInputStart, reinterpret_cast<void*>(&HookedWindowInput), L"Advanced list input lock"));
+            // FUN_14018aa50 starts sub rsp,8 / mov [rsp],rdi (8 position-independent bytes)
+            static const std::vector<uint8_t> kJointStart = { 0x48, 0x83, 0xEC, 0x08, 0x48, 0x89, 0x3C, 0x24 };
+            if (!g_joint)
+                g_joint = reinterpret_cast<JointFn>(InlineHookBytes(0x14018aa50, kJointStart, kJointStart, reinterpret_cast<void*>(&HookedJoint), L"joint lookup stand-ins"));
             Log(L"gamepatch: character select: monster portraits %s, Advanced list (Y) %s, its picks %s", sprite && text ? L"on" : L"off (hook not set)", sprite ? L"on" : L"off",
                 store ? L"on" : L"off");
         }
@@ -5164,8 +5219,8 @@ namespace pdnet::gamepatches
             BOOL ok = WriteFile(f, bytes.data(), static_cast<DWORD>(bytes.size()), &written, nullptr) && written == bytes.size();
             CloseHandle(f);
             variants::Stats st = variants::LastStats();
-            Log(L"variants: %s -> %s (%u bytes, %llu ms; %d runs, %d tracks, %d dropped, %d joints)%s", forName, target.c_str(), static_cast<unsigned>(bytes.size()),
-                GetTickCount64() - started, st.runs, st.tracks, st.dropped, st.joints, ok ? L"" : L" - WRITE FAILED");
+            Log(L"variants: %s -> %s (%u bytes, %llu ms; %d runs, %d tracks, %d dropped, %d joints, %d renamed)%s", forName, target.c_str(), static_cast<unsigned>(bytes.size()),
+                GetTickCount64() - started, st.runs, st.tracks, st.dropped, st.joints, st.renamed, ok ? L"" : L" - WRITE FAILED");
             if (!ok) return L"";
             g_builtFiles.insert(target);
             return target;

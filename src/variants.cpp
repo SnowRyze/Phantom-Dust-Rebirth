@@ -177,6 +177,52 @@ namespace pdnet::variants
             return {};
         }
 
+        // Joint names some NPC models spell differently from every battle character (2026-11-21: Ai, Mikan, Spokesman
+        // have "raddh" where the players have "raddha"). Skills look their effect joints up by name (FUN_14018aa50, a
+        // binary search that returns null when the name is missing, and some callers use the result unchecked): Piece of
+        // Thunder crashed the game as Ai or Mikan. The body skeleton's names are put right in the built file, which also
+        // lets the animation set's tracks for that joint match.
+        struct NameFix { uint32_t from, to; };
+        constexpr NameFix kNameFixes[] = {
+            { 0xACA1B650, 0xACA1B65B }, // raddh -> raddha
+            { 0x8802B650, 0x8802B65B }, // laddh -> laddha
+        };
+
+        int FixJointNames(std::vector<uint8_t>& b, const Alr& a)
+        {
+            int fixed = 0;
+            for (uint32_t r : a.roots)
+            {
+                std::vector<Record> c = Chain(b, r);
+                if (!HasType(c, 0x02)) continue;
+                for (const Record& x : c)
+                {
+                    if (x.type != 0x03) continue;
+                    uint32_t n = U16(b, x.at + 8);
+                    auto has = [&](uint32_t name) {
+                        for (uint32_t i = 0; i < n && x.at + 0x10 + 0x40 * i + 0x40 <= b.size(); ++i)
+                            if (U32(b, x.at + 0x10 + 0x40 * i + 0x2C) == name) return true;
+                        return false;
+                    };
+                    for (const NameFix& f : kNameFixes)
+                    {
+                        if (has(f.to)) continue;
+                        for (uint32_t i = 0; i < n && x.at + 0x10 + 0x40 * i + 0x40 <= b.size(); ++i)
+                        {
+                            uint32_t at = x.at + 0x10 + 0x40 * i + 0x2C;
+                            if (U32(b, at) != f.from) continue;
+                            memcpy(&b[at], &f.to, 4);
+                            ++fixed;
+                            break;
+                        }
+                    }
+                    break; // the run's own skeleton only
+                }
+                break; // the body (first model run) only
+            }
+            return fixed;
+        }
+
         // ---------------------------------------------------------------- joint matching (joint_keys)
 
         bool Named(const Joint& j) { return j.name != 0xFFFFFFFF && j.name != 0; }
@@ -440,6 +486,8 @@ namespace pdnet::variants
         std::vector<uint8_t> model = ModelBytes(c, pick.colour < ColourCount(c) ? pick.colour : 0, read);
         Alr dst = ReadAlr(model);
         if (!dst.ok) { error = std::string("no model file for ") + c.name; return {}; }
+        g_stats.renamed = FixJointNames(model, dst);
+        dst = ReadAlr(model);
         std::vector<Joint> body = BodySkeleton(dst);
         if (body.empty()) { error = std::string("no skeleton in ") + c.name + "'s model"; return {}; }
         g_stats.joints = static_cast<int>(body.size());
