@@ -3630,6 +3630,8 @@ namespace pdnet::gamepatches
         };
         const CharacterColours* g_shownCharacter = nullptr;
         int g_gameNameX = 0, g_gameNameY = 0; // where the game draws the name line (command 23), for the Advanced list's plate
+        uint8_t g_nameTextColours[16]; bool g_haveNameColours = false; // 0x14054c9b0 (command 27's text colours) at the name line
+        int g_gamePlateY = 0; uint32_t g_gamePlateColour = 0; bool g_haveGamePlate = false; // the game's plate sprite 71 (command 95)
         std::string g_charselName; // the name line's text as drawn ("player" for Alpha), for the portrait (HookedDrawSprite)
         // MNet.alr's portraits (MakeMnetCopy, CharacterSelectSprite).
         constexpr int kMnetGameSprites = 84;
@@ -3704,6 +3706,8 @@ namespace pdnet::gamepatches
                     g_shownCharacter = nullptr;
                     g_charselName = value;
                     g_gameNameX = static_cast<int>(args[0]), g_gameNameY = static_cast<int>(args[1]);
+                    memcpy(g_nameTextColours, At(0x14054c9b0), sizeof(g_nameTextColours)); // the name's yellow (test 8)
+                    g_haveNameColours = true;
                     if (_stricmp(value.c_str(), "player") == 0) value = "Alpha";
                 }
                 for (std::string candidate : { PlainText(text.c_str()), PlainText(value.c_str()) })
@@ -4108,6 +4112,12 @@ namespace pdnet::gamepatches
             static std::set<std::pair<int64_t, int64_t>> seen;
             if (seen.size() < 60 && seen.emplace(args[0], args[1]).second)
                 Log(L"gamepatch: character select draws sheet %lld sprite %lld at %lld,%lld (name line '%S')", args[0], args[1], args[2], args[3], g_charselName.c_str());
+            if (args[0] == 3 && args[1] == kNamePlateRight - 1) // 71: the game's plate, its y and colour for pdnet's (test 8)
+            {
+                g_gamePlateY = static_cast<int>(args[3]), g_gamePlateColour = static_cast<uint32_t>(args[4]), g_haveGamePlate = true;
+                static int told = 0;
+                if (told++ < 2) Log(L"gamepatch: character select: plate sprite at %lld,%lld colour %llX, name line at %d,%d", args[2], args[3], args[4], g_gameNameX, g_gameNameY);
+            }
             if (g_charselAdvanced && args[0] == 3 &&
                 ((args[1] >= kPortraitFirst && args[1] <= kPortraitLast) || (args[1] >= kFirstFrameSprite && args[1] <= kNamePlateRight)))
                 return 1; // pdnet's grid is drawn after the screen's window (DrawCharselPopup)
@@ -4225,13 +4235,19 @@ namespace pdnet::gamepatches
             int64_t* window = reinterpret_cast<int64_t*>(manager + 0x10408);
             int64_t previous = *window;
             *window = reinterpret_cast<int64_t>(WindowAt(manager, 12));
-            // Text lands ~9 px higher on screen than a sprite at the same y.
-            int x = kGridX + (cursor % kGridColumns) * kGridPitchX + kGridPitchX / 2, y = kGridY + (cursor / kGridColumns + 1) * kGridPitchY + 9;
-            DrawNamePlate(variants::Characters()[cursor].name, x, kGridY + (cursor / kGridColumns + 1) * kGridPitchY);
+            // the plate under the entry; the name where the game has it against its own plate (test 8: 9 px was too low)
+            int x = kGridX + (cursor % kGridColumns) * kGridPitchX + kGridPitchX / 2, plateY = kGridY + (cursor / kGridColumns + 1) * kGridPitchY;
+            int y = plateY + (g_haveGamePlate ? g_gameNameY - g_gamePlateY : 1);
+            DrawNamePlate(variants::Characters()[cursor].name, x, plateY);
             static char name[64];
             sprintf_s(name, "\a200c%s", variants::Characters()[cursor].name);
             int64_t a[8] = { x - 100, y, reinterpret_cast<int64_t>(name) };
+            uint8_t colours[16];
+            uint8_t* textColours = At(0x14054c9b0);
+            memcpy(colours, textColours, sizeof(colours));
+            if (g_haveNameColours) memcpy(textColours, g_nameTextColours, sizeof(colours)); // the game's yellow for names
             reinterpret_cast<MenuCommandFn>(At(0x140207870))(a);
+            memcpy(textColours, colours, sizeof(colours));
             *window = previous;
         }
 
@@ -4436,7 +4452,7 @@ namespace pdnet::gamepatches
             }
             int inner = width + 8, left = centreX - inner / 2;
             float one = 1.0f, stretch = inner / 8.0f;
-            uint32_t white = 0xffffffff;
+            uint32_t white = g_haveGamePlate ? g_gamePlateColour : 0xff401010; // the game's plate colour (test 8: plain white)
             auto draw = [&](uint32_t handle, int x, const float* scaleX)
             {
                 reinterpret_cast<SpriteObjectFn>(At(0x1401983e0))(nullptr, handle, x, y, 0, scaleX, &one, &white, 0, 0);

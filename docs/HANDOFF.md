@@ -101,6 +101,8 @@ Ideas, not planned (notes in the change log and reference notes):
 
 ## November 2026
 
+Advanced list, after menu test 8 (2026-11-21; not yet seen in game): the plate sprites were over the portraits but white, the name white and too low. The plate now takes the colour the game draws its sprite 71 with (command 95's colour argument), the name the text colours at 0x14054c9b0 (set by command 27) as they are when the game draws its name line, and its y the game's own name-to-plate offset.
+
 Advanced list, after menu test 7 (2026-11-21; not yet seen in game): drawn with the game's name line, the plate and name lay under the portraits; drawn after the grid (test 6) the name was over them but the plate (command 29 rectangle) still under: filled rectangles lie under every sprite. The plate is now the game's own plate sprites, 71 / 70 (stretched to the name's width) / 72, drawn after the grid with the name (DrawAdvancedName from DrawCharselPopup).
 
 Advanced list, after menu test 6 (2026-11-21; not yet seen in game): the plate lay under the portraits (drawn right after window 12). pdnet's name and plate are now drawn when the game draws its own (empty) name line, in that line's drawing layer (command 99 comes before it), as the game's own plate is. Wanted order (the user): background, scanlines, portrait shadow, portraits, cursor, plate, name, pop-up window, pop-up text.
