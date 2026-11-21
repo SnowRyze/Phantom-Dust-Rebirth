@@ -133,11 +133,21 @@ if [ $action = logs ]; then
     exit 0
 fi
 
+# Data files pdnet reads next to pdnet.dll (on Windows it runs from the kit folder; here it runs from the game's).
+# charsel-portraits.bin: the Advanced character select's portraits and lobby banners (without it the grid shows the
+# game's own monster pictures and the lobby shows the carrier monsters' banners).
+copy_extras() {
+    local f
+    for f in charsel-portraits.bin; do
+        if [ -f "$kit/$f" ]; then cp -f "$kit/$f" "$game/"; fi
+    done
+}
+
 # --- --remove -------------------------------------------------------------------------------------------------------
 if [ $action = remove ]; then
     [ -n "$game" ] || fail "Phantom Dust is not installed in $data."
     running && fail "close Phantom Dust first."
-    rm -f "$game"/{pdnet.dll,pdnet.ini,eos.ini,EOSSDK-Win64-Shipping.dll,xaudio2_9redist.dll,kit-version.txt,before-start.sh}
+    rm -f "$game"/{pdnet.dll,pdnet.ini,eos.ini,EOSSDK-Win64-Shipping.dll,xaudio2_9redist.dll,kit-version.txt,charsel-portraits.bin,before-start.sh}
     # only what this script wrote
     grep -qs 'written by setup-linux.sh' "$launcher" && rm -f "$launcher"
     grep -qs 'written by setup-linux.sh' "$menu_entry" && rm -f "$menu_entry"
@@ -197,6 +207,7 @@ if [ $action = update ]; then
     update_game() {
         [ -f "$game/pdnet.dll" ] || exec bash "$kit/setup-linux.sh" ${keep_name:+--name "$keep_name"}
         cp -f "$kit/pdnet.dll" "$kit/EOSSDK-Win64-Shipping.dll" "$kit/kit-version.txt" "$game/"
+        copy_extras
     }
 
     repo=$(sed -n 's/^\xEF\xBB\xBF//; s/^update_repo=//p' "$kit/pdnet.ini" 2>/dev/null | tr -d '\r' | tail -1 || true)
@@ -230,7 +241,8 @@ print("update", best[0], best[1], m.group(1).lower() if m else "-", "revert" if 
         current)
             say "Up to date (build ${build:-?})."
             if [ -n "$game" ] && [ -f "$game/pdnet.dll" ] &&
-               { ! cmp -s "$kit/pdnet.dll" "$game/pdnet.dll" || ! cmp -s "$kit/kit-version.txt" "$game/kit-version.txt"; }; then
+               { ! cmp -s "$kit/pdnet.dll" "$game/pdnet.dll" || ! cmp -s "$kit/kit-version.txt" "$game/kit-version.txt" ||
+                 { [ -f "$kit/charsel-portraits.bin" ] && ! cmp -s "$kit/charsel-portraits.bin" "$game/charsel-portraits.bin"; }; }; then
                 say "The game's pdnet files aren't this kit's; copying the kit's."
                 update_game
             fi
@@ -349,6 +361,7 @@ name=$(printf '%s' "${name:-Player}" | tr -d '\r\n=$' | sed 's/^ *//; s/ *$//' |
 cp -f "$kit/pdnet.dll" "$kit/EOSSDK-Win64-Shipping.dll" "$game/"
 # pdnet reads it next to itself: the build on the main menu and the Updates row in Options
 if [ -f "$kit/kit-version.txt" ]; then cp -f "$kit/kit-version.txt" "$game/"; fi
+copy_extras
 install -m 600 "$kit/eos.ini" "$game/eos.ini"
 # EOS needs xaudio2_9redist.dll next to it for voice; Wine's own XAudio2 works under that name.
 cp -f "$libdir/xaudio2_9.dll" "$game/xaudio2_9redist.dll"

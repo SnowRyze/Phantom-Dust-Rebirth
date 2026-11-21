@@ -100,6 +100,8 @@ Ideas, not planned (notes in the change log and reference notes):
 
 ## November 2026
 
+Linux: Advanced list portraits and lobby banners missing (2026-11-21, a Flatpak tester): on Linux pdnet.dll runs from the game's folder (wine-uwp `stage/msesper`), and setup-linux.sh copied only pdnet.dll, the EOS DLL, kit-version.txt, eos.ini and pdnet.ini there, so `charsel-portraits.bin` was missing ("character select portraits left as they are (kit\pdnet\charsel-portraits.bin missing or not readable)"): the grid showed the game's monster pictures and the lobby the carrier monsters' banners. The picks themselves worked (variants built, shared and applied). setup-linux.sh now copies it on setup and every update (`copy_extras`), removes it on --remove, and an "up to date" check copies it when the game's copy is missing or different, so an installed kit fixes itself at the second game start after the update.
+
 Theater button bar: page keys (2026-11-21, Experimental 190, the user's request): "LB / RB Page" added as plain text after Select (no LB / RB icon code is known in the bar's codes). Not yet seen on screen.
 
 Theater button bar (2026-11-21, Experimental 189, the user's request): the bar now shows the Y icon with Delete (kTheatreBar: Select, A Watch, Y Delete, B Back; the Y icon is the bar code the character select uses for Y Advanced).
