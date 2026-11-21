@@ -146,7 +146,8 @@ Germano and Belono (2026-11-21): only the Color pop-up; they are picked as the g
 variant, nothing built and nothing to share. Ubiquitous Keyboard / Ubiquitous sit side by side (Reindeer after them).
 
 Hitboxes (charaset +0xC..+0x12, s16 / 10 -> entry +0x18..+0x24): a variant takes its character's record's, height at
-least 18 (Freia's). Ai and Mikan (16) take Freia's record outright (the user, 2026-11-21: competitive picks).
+least 18 (Freia's). Ai and Mikan (16) take Freia's record outright (the user, 2026-11-21: competitive picks). Ubiquitous (12) and Kei (14) keep
+their own small hitboxes (meme picks).
 
 ### Online (2026-11-21, not yet tested)
 

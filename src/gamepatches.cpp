@@ -4989,7 +4989,9 @@ namespace pdnet::gamepatches
                 if (g_variants[s].on && hitboxRecord == kCarriers[s].record) own = g_variants[s].saved;
             if (own) memcpy(e + 0x18, own + 0x18, 16);
             float minHeight = 180.0f / *reinterpret_cast<float*>(At(0x1402f7f7c));
-            if (*reinterpret_cast<float*>(e + 0x18) < minHeight) *reinterpret_cast<float*>(e + 0x18) = minHeight;
+            // Ubiquitous (both models, 12) and Kei (14) keep their own small hitbox: meme picks (the user, 2026-11-21)
+            bool small = strncmp(c.name, "Ubiquitous", 10) == 0 || strcmp(c.name, "Kei") == 0;
+            if (!small && *reinterpret_cast<float*>(e + 0x18) < minHeight) *reinterpret_cast<float*>(e + 0x18) = minHeight;
             const float* box = reinterpret_cast<const float*>(e + 0x18);
             Log(L"variants: slot %d hitbox %.1f / %.1f / %.1f / %.1f (from record %d%s)", slot, box[0], box[1], box[2], box[3], hitboxRecord,
                 hitboxRecord != c.record ? L", Freia's" : L"");
