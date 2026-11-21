@@ -177,8 +177,9 @@ namespace pdnet::variants
             return {};
         }
 
-        // Joint names some NPC models spell differently from every battle character (2026-11-21: Ai, Mikan, Spokesman
-        // have "raddh" where the players have "raddha"). Skills look their effect joints up by name (FUN_14018aa50, a
+        // Joint names some NPC models spell differently from every battle character (2026-11-21 check of every entry:
+        // Spokesman, Mikan, Ai, Kajikawa, 03, Baroness and both Ubiquitous have "raddh" where all 11 players have
+        // "raddha"; the game names RADDHA / LADDHA in its effect joint table). Skills look their effect joints up by name (FUN_14018aa50, a
         // binary search that returns null when the name is missing, and some callers use the result unchecked): Piece of
         // Thunder crashed the game as Ai or Mikan. The body skeleton's names are put right in the built file, which also
         // lets the animation set's tracks for that joint match.

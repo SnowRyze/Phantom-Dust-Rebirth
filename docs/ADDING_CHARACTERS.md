@@ -100,6 +100,20 @@ every battle character's body skeleton has). A model without one of them crashed
 gives any other missing name a stand-in joint (logged once: `variants: joint ... asked for ..., which this model lacks`).
 An imported model should still use the battle characters' joint names; that log line shows which ones it lacks.
 
+The 39 names all 11 playable characters have (an imported model should have all of them): body1 body2 neck head hip
+camera alpha, and on each side (l / r) kata ninou tekub teku2 nino2 hand fin01 fin02 fin03 addha sword momo knee foot
+shoes kick (lkata, rkata, ...). The game's own effect table names LHAND, RHAND, BODY1, LADDHA, RADDHA, LKATA, RKATA,
+LFOOT, RFOOT and NECK.
+
+Check of the Advanced list's models (2026-11-21):
+
+| Character | Missing names | Handled by |
+|---|---|---|
+| Spokesman, Ai | raddha (has raddh), alpha, lteku2, rteku2, lnino2, rnino2 | rename; stand-ins (body2, ltekub, rtekub, lninou, rninou) |
+| Mikan, Kajikawa, 03, Baroness, Ubiquitous Keyboard, Ubiquitous | raddha (has raddh) | rename |
+| Kei, Maniac, Arthur, Mac, Tetsuya, Reindeer | none | - |
+| Germano, Belono | (the game's own monsters, not rebuilt) | - |
+
 ## Testing
 
 - Offline: Lab > Test Arsenal, Y on the character select, pick the new entry. `variant_test=<character>,<colour>,<dodge>,<set>`
