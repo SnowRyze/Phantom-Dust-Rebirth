@@ -5,5 +5,4 @@
 #   repo    its newest release's first .zip or .7z is the download, checked against GitHub's sha256 for it (or a line
 #           "sha256 <file name> <hex>" in the release notes, which wins)
 #   plugin  only for mods with DLLs under plugins/, after someone has read their source
-mod-test        SnowRyze/PD-mod-test  plugin
 map-aquarium    eradication0/phantom-dust-map-aquarium
