@@ -37,6 +37,7 @@ namespace modsync
             std::string warning;                  // shown in the Mods list, doesn't stop the mod (step 8)
             std::vector<std::string> after, before, touches, files; // files: lowercase game paths
             bool plugins = false, enabled = true, read = false;
+            bool keepCopy = false; // live: loads at game start and is in use, so PDPL's copy stays as it is
         };
 
         // ---- small helpers ----
@@ -1254,6 +1255,7 @@ namespace modsync
         // ---- while the game runs: can these changes be made now? ----
         // What the game or PDPL reads only at start must stay exactly as the last sync left it (mods-state.txt): the same
         // mods with such files, in the same order. Nothing has been changed yet at this point.
+        std::vector<std::string> pending; // mods whose change waits for the next game start
         if (beforeFiles)
         {
             auto bootOnly = [](const std::string& touches)
@@ -1262,8 +1264,7 @@ namespace modsync
                     if (t != "maps" && t != "models" && t != "animation" && t != "audio" && t != "ui") return true;
                 return false;
             };
-            std::vector<std::string> before, after;
-            std::map<std::string, std::string> names;
+            std::map<std::string, std::string> before; // what's loaded of them: id -> sha256 (12)
             std::vector<std::vector<std::string>> rows(1, std::vector<std::string>(1)); // lines of fields, empty ones kept (Split drops them)
             for (char c : ReadText(pdnetDir + L"\\mods-state.txt"))
             {
@@ -1275,25 +1276,23 @@ namespace modsync
             {
                 if (f[0] != "mod") continue;
                 f.resize((std::max<size_t>)(f.size(), 17));
-                if (f[2] != "on" || f[12].empty() || f[11].rfind("has plugins", 0) == 0 || !bootOnly(f[8])) continue;
-                before.push_back(f[1] + ":" + f[16]);
-                names[before.back()] = f[4].empty() ? f[1] : f[4];
+                if (f[2] == "on" && !f[12].empty() && f[11].rfind("has plugins", 0) != 0 && bootOnly(f[8])) before[f[1]] = f[16];
             }
-            for (const auto& m : mods)
-            {
-                if (!m.enabled || m.path.empty() || m.problem.rfind("has plugins", 0) == 0 || !bootOnly(Join(m.touches, ','))) continue;
-                after.push_back(m.id + ":" + m.sha.substr(0, 12));
-                names[after.back()] = m.name.empty() ? m.id : m.name;
-            }
+            // Such a mod keeps the state it started with, and everything else changes now (2026-11-23: a harmless test mod
+            // turned off held back a lobby's maps). Only a lobby's own mods (gameplay ones) must match exactly: then why
+            // names what can't.
             std::string why;
-            if (before != after)
+            for (auto& m : mods)
             {
-                std::set<std::string> a(before.begin(), before.end()), b(after.begin(), after.end());
-                for (const auto& [key, name] : names)
-                    if (a.count(key) != b.count(key)) why += (why.empty() ? "" : ", ") + name;
-                if (why.empty()) why = "the order of mods that load at game start";
-            }
-            if (!beforeFiles(why))
+                if (m.path.empty() || m.problem.rfind("has plugins", 0) == 0 || !bootOnly(Join(m.touches, ','))) continue;
+                auto was = before.find(m.id);
+                bool loaded = was != before.end(), same = loaded == m.enabled && (!loaded || was->second == m.sha.substr(0, 12));
+                if (same) continue;
+                if (lobbyStart && m.online != "local") { why += (why.empty() ? "" : ", ") + (m.name.empty() ? m.id : m.name); continue; }
+                m.enabled = loaded;
+                if (loaded && was->second != m.sha.substr(0, 12)) m.keepCopy = true, m.sha = was->second;
+                pending.push_back(m.name.empty() ? m.id : m.name);
+            }            if (!beforeFiles(why))
             {
                 // A lobby's request was for this sync: it's the next start's again.
                 if (lobbyStart) MoveFileExW((pdnetDir + L"\\lobby-mods.used.txt").c_str(), (pdnetDir + L"\\lobby-mods.txt").c_str(), MOVEFILE_REPLACE_EXISTING);
@@ -1335,6 +1334,7 @@ namespace modsync
                 if (Move(pdplDir + L"\\" + it->second, target)) ++renamed;
             }
             uint64_t size = 0, time = 0;
+            if (m.keepCopy && Exists(target)) continue;
             if (!FileInfo(target, size, time) || size != m.size || time != m.mtime)
             {
                 if (CopyFileW(m.path.c_str(), target.c_str(), FALSE)) ++copied; // keeps the write time, so it's copied only when it changes
@@ -1439,6 +1439,7 @@ namespace modsync
         state += "loose\t" + std::to_string(loose) + "\n";
         // For the Mods list's update check: whether the catalog itself was read, and the mods that are on whose newest
         // release couldn't be had (an older download may still be in use).
+        for (const auto& name : pending) state += "pending\t" + Field(name) + "\n";
         state += std::string("catalog\t") + (g_catalogRead ? "read" : "old") + "\n";
         for (const auto& [id, why] : notDownloaded) state += "notdownloaded\t" + Field(id) + "\t" + Field(why) + "\n";
         for (const auto& m : mods)

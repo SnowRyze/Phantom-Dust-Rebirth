@@ -33,6 +33,7 @@ namespace pdnet::gamepatches
         void LeaveModList(); // (below)
         std::atomic<bool> g_modsSwapped{ false }; // mods changed while the game runs: ReloadMapSlots (below) is due
         void ReloadMapSlots();
+        void ModsLoadingTick(); // (below)
         std::atomic<uint8_t> g_bodyTags{ 0 }; // nametags on dead bodies wanted (the lobby host's setting)
         // What the game's nametag code reads (routines below), kept current by NametagColours: dead bodies keep their
         // tag only in Tag Team, and each other player's tag colour by match slot (ally / enemy, both ARGB twice).
@@ -927,10 +928,20 @@ namespace pdnet::gamepatches
         // editor opened from the lobby (OpenLobbyArsenalEditor) sets 0 too, and back in the lobby it is 1 again.
         void SetLobbyAvailable(bool available)
         {
+            available = available && !mods::LobbyLoading(); // the lobby's mods are loading: the red hand stays on
             *reinterpret_cast<volatile int32_t*>(At(0x1405277c4)) = available ? 1 : 0;
             *reinterpret_cast<volatile int32_t*>(At(0x140594e90)) = 1;
             *reinterpret_cast<volatile int32_t*>(At(0x140594e94)) = 1;
         }
+        // Session command 62 (the lobby's script says available as its main window shows): not while its mods load.
+        int64_t (*g_lobbyStatus)(int32_t* args) = nullptr;
+        int64_t HookedLobbyStatus(int32_t* args)
+        {
+            if (!args || !args[0] || !mods::LobbyLoading()) return g_lobbyStatus(args);
+            int32_t held[8] = { 0 };
+            return g_lobbyStatus(held);
+        }
+
         // Back in the lobby from its Arsenal Lab: available again, but only once the skill preview's town session (see
         // SkillPreviewScene) has fully closed, so the host can't start the match on top of it.
         void LobbyAvailableAfterPreview();
@@ -2129,6 +2140,7 @@ namespace pdnet::gamepatches
         ULONGLONG g_modNoticeUntil = 0;
         bool g_catalogRead = true;                                             // mods-state.txt: the last sync read the catalog
         std::vector<std::pair<std::string, std::string>> g_modsNotDownloaded; // id, why
+        std::string g_modsPending; // mods whose change waits for the next game start
 
         std::vector<std::string> SplitFields(const std::string& s, char sep) // empty fields kept
         {
@@ -2154,6 +2166,7 @@ namespace pdnet::gamepatches
             g_looseFiles = 0;
             g_catalogRead = true;
             g_modsNotDownloaded.clear();
+            g_modsPending.clear();
             bool lobbys = false;
             std::ifstream in(LocalStatePath() + L"\\pdnet\\mods-state.txt", std::ios::binary);
             std::string line;
@@ -2164,6 +2177,7 @@ namespace pdnet::gamepatches
                 if (f[0] == "loose" && f.size() > 1) g_looseFiles = atoi(f[1].c_str());
                 else if (f[0] == "lobbystart") lobbys = true;
                 else if (f[0] == "catalog" && f.size() > 1) g_catalogRead = f[1] == "read";
+                else if (f[0] == "pending" && f.size() > 1) g_modsPending += (g_modsPending.empty() ? "" : ", ") + f[1];
                 else if (f[0] == "notdownloaded" && f.size() > 2) g_modsNotDownloaded.emplace_back(f[1], f[2]);
                 else if (f[0] == "conflict" && f.size() > 3) g_modOverlaps.emplace_back(f[1], f[2], atoi(f[3].c_str()));
                 else if (f[0] == "mod" && f.size() > 12)
@@ -2315,6 +2329,7 @@ namespace pdnet::gamepatches
                 if (m.on) enabled += (enabled.empty() ? "" : ",") + m.id;
             }
             SaveSettings({ { "mods_order", order }, { "mods_enabled", enabled } });
+            DeleteFileW((LocalStatePath() + L"\\pdnet\\lobby-mods.txt").c_str()); // the player's own list now, not a lobby's asked for earlier
             Log(L"mods menu: saved - order %S; on: %S", order.c_str(), enabled.empty() ? "none" : enabled.c_str());
             return true;
         }
@@ -2386,6 +2401,7 @@ namespace pdnet::gamepatches
                 if (!updated.empty()) add("Updated: " + updated + ".");
                 if (!added.empty()) add("New in the list: " + added + ".");
                 if (!failed.empty()) add("Couldn't download: " + failed + ".");
+                if (!g_modsPending.empty()) add("At the next game start: " + g_modsPending + ".");
                 if (!g_catalogRead) add("The mod catalog couldn't be reached, so nothing new was found.");
                 if (text.empty()) text = "Everything is up to date.";
             }
@@ -2729,6 +2745,7 @@ namespace pdnet::gamepatches
         // Every 50 ms (MenuTextPatches): leaving the Settings screen with unsaved changes drops them.
         void SettingsTick()
         {
+            ModsLoadingTick();
             if (!InSettings()) g_confirmingSave = false;
             if (!InSettings() && g_modsDirty && GetTickCount64() - g_settingsOpenedAt > 1000) LeaveModList(); // the Mods list left some other way than back
             if (!InSettings() && GetTickCount64() - g_settingsOpenedAt > 1000 && (g_settingsDirty || g_typingName))
@@ -2840,9 +2857,67 @@ namespace pdnet::gamepatches
         int64_t CharacterSelectButtons(int64_t buttons); // (below)
         void DrawCharselPopup(int64_t* args);
 
+        // "Loading mods..." in the lobby while its mods load: drawn after SESSION INFO (window 3), the last window the lobby
+        // draws each frame, and up until they're loaded. Meanwhile the lobby's main window only takes B (leave); with its
+        // prompt open the pop-up makes room. The red hand is on throughout (HookedLobbyStatus).
+        constexpr int kLobbyMainWindow = 1, kLobbyInfoWindow = 3, kModsPopupWindow = 14;
+        bool ModsPopupUp()
+        {
+            int64_t manager = MenuManager();
+            return manager && mods::LobbyLoading() && CurrentMenu(manager) == kLobbyMenu && *reinterpret_cast<int16_t*>(manager + 0x10402) == kLobbyMainWindow;
+        }
+
+        void DrawModsPopup()
+        {
+            static ULONGLONG last = 0;
+            int64_t manager = MenuManager();
+            int16_t* current = reinterpret_cast<int16_t*>(manager + 0x10402);
+            int16_t was = *current;
+            auto cmd = [](uint64_t fn, int64_t a0, int64_t a1) { int64_t args[8] = { a0, a1 }; reinterpret_cast<MenuCommandFn>(At(fn))(args); };
+            if (GetTickCount64() - last > 500) // the window is the lobby's own again whenever it opens
+            {
+                cmd(0x140207cd0, kModsPopupWindow, 2);
+                cmd(0x140207d20, kPopupW, kPopupH);
+                cmd(0x140207d50, kPopupX, kPopupY);
+                cmd(0x140207d80, reinterpret_cast<int64_t>("MODS"), 0);
+                for (int i = 0; i < 3; ++i) cmd(0x140207e20, reinterpret_cast<int64_t>(""), 0);
+                *current = was;
+                Log(L"gamepatch: lobby: Loading mods pop-up shown (red hand on)");
+            }
+            last = GetTickCount64();
+            int64_t popup[8] = { kModsPopupWindow };
+            g_drawWindow(popup);
+            *reinterpret_cast<int64_t*>(manager + 0x10408) = reinterpret_cast<int64_t>(WindowAt(manager, kModsPopupWindow));
+            auto text = [](int x, int y, const char* s) { int64_t a[8] = { x, y, reinterpret_cast<int64_t>(s) }; reinterpret_cast<MenuCommandFn>(At(0x140207870))(a); };
+            static char lines[2][128];
+            std::string detail = mods::LobbyLoadingText();
+            size_t cut = detail.find('\n');
+            text(kPopupX, kPopupY + 12, "\a340cLoading mods...");
+            sprintf_s(lines[0], "\a340c%s", detail.substr(0, (std::min<size_t>)(cut, 100)).c_str());
+            sprintf_s(lines[1], "\a340c%s", cut != std::string::npos ? detail.substr(cut + 1, 100).c_str() : detail.empty() ? "B: leave" : "");
+            text(kPopupX, kPopupY + 36, lines[0]);
+            text(kPopupX, kPopupY + 58, lines[1]);
+            *reinterpret_cast<int64_t*>(manager + 0x10408) = 0;
+        }
+
+        // Every 50 ms: the red hand as loading begins and ends (in between, HookedLobbyStatus keeps it).
+        void ModsLoadingTick()
+        {
+            static bool was = false;
+            bool now = mods::LobbyLoading();
+            if (now == was) return;
+            was = now;
+            int64_t manager = MenuManager();
+            if (!manager || CurrentMenu(manager) != kLobbyMenu) return; // the lobby says it itself as it opens
+            if (now) SetLobbyAvailable(false);
+            else if (*reinterpret_cast<int16_t*>(manager + 0x10402) == kLobbyMainWindow) SetLobbyAvailable(true);
+            Log(L"gamepatch: lobby: red hand %s (mods %s)", now ? L"on" : L"off", now ? L"loading" : L"loaded");
+        }
+
         int64_t HookedDrawWindow(int64_t* args)
         {
             int64_t result = g_drawWindow(args);
+            if (args && args[0] == kLobbyInfoWindow && ModsPopupUp()) { DrawModsPopup(); return result; }
             if (CurrentMenu(MenuManager()) == kCharacterMenu) { DrawCharselPopup(args); return result; }
             int64_t manager = MenuManager();
             if (!args || !g_confirmingSave || !InSettings() || !manager) return result;
@@ -2912,6 +2987,7 @@ namespace pdnet::gamepatches
         {
             int64_t buttons = g_buttons(args);
             if (g_modsSwapped) ReloadMapSlots(); // a live mod change: the game's thread, in a menu
+            if (ModsPopupUp()) return buttons & 0x2020; // B only
             if ((!args || args[0] == 0) && CurrentMenu(MenuManager()) == kCharacterMenu) return CharacterSelectButtons(buttons);
             if (InSettings() && g_theatre && (!args || args[0] == 0))
             {
@@ -3376,7 +3452,13 @@ namespace pdnet::gamepatches
         int64_t HookedStageQuery(int64_t* args)
         {
             if (args && args[0] == 0x39 && IsMapSlot(static_cast<int32_t>(args[1]))) return 1;
-            return g_stageQuery(args);
+            // A lobby's new map that this PC doesn't have (yet): its name (kinds 0x33 full, 0x34 short, 0x35 internal) reads
+            // "Modded map". The table has nothing there, and the lobby's SESSION INFO shows the map by its name.
+            if (args && args[0] >= 0x33 && args[0] <= 0x35)
+            {
+                int entry = static_cast<int32_t>(args[1]);
+                if (entry >= 30 && (entry >= *reinterpret_cast<int32_t*>(At(0x14050a5d0)) || entry >= 65 || !IsMapSlot(entry))) return reinterpret_cast<int64_t>("Modded map");
+            }            return g_stageQuery(args);
         }
 
         MenuCommandFn g_drawSheetSprite = nullptr;
@@ -3401,6 +3483,12 @@ namespace pdnet::gamepatches
                     __except (EXCEPTION_EXECUTE_HANDLER) { return g_drawSheetSprite(args); }
                     int64_t a[8] = { args[0], sprite, args[2], args[3] };
                     return g_drawSheetSprite(a);
+                }
+                if (k >= 0) // no picture of it here (yet): words in its place
+                {
+                    int64_t a[8] = { 48, 261 + 46, reinterpret_cast<int64_t>("\a254cModded map") };
+                    reinterpret_cast<MenuCommandFn>(At(0x140207870))(a);
+                    return 1;
                 }
             }
             return g_drawSheetSprite(args);
@@ -5266,11 +5354,12 @@ namespace pdnet::gamepatches
         WindowInputFn g_windowInput = nullptr;
         int64_t HookedWindowInput(void* window)
         {
-            if (!g_charselAdvanced || !window || CurrentMenu(MenuManager()) != kCharacterMenu) return g_windowInput(window);
+            bool loading = window && ModsPopupUp() && window == WindowAt(MenuManager(), kLobbyMainWindow); // the Loading mods pop-up: B only
+            if (!loading && (!g_charselAdvanced || !window || CurrentMenu(MenuManager()) != kCharacterMenu)) return g_windowInput(window);
             uint32_t* pads = reinterpret_cast<uint32_t*>(At(0x14059b800));
             uint32_t saved[4][3];
             for (int p = 0; p < 4; ++p)
-                for (int w = 0; w < 3; ++w) saved[p][w] = pads[p * 13 + w], pads[p * 13 + w] = 0;
+                for (int w = 0; w < 3; ++w) saved[p][w] = pads[p * 13 + w], pads[p * 13 + w] &= loading ? 0x2020u : 0u;
             int64_t result = g_windowInput(window);
             for (int p = 0; p < 4; ++p)
                 for (int w = 0; w < 3; ++w) pads[p * 13 + w] = saved[p][w];
@@ -8317,6 +8406,8 @@ namespace pdnet::gamepatches
             WrapCommand<MenuCommandFn>(0x1403eefe0 + 37 * 8, 0x140207d50, &HookedPlaceWindow, g_placeWindow, L"settings window position");
             WrapCommand<MenuCommandFn>(0x1403eefe0 + 88 * 8, 0x140207650, &HookedButtonBar, g_buttonBar, L"settings save button");
             WrapCommand<MenuCommandFn>(0x1403eefe0 + 42 * 8, 0x140207f00, &HookedDrawWindow, g_drawWindow, L"settings save pop-up");
+            bool hand = WrapCommand<SessionCommandFn>(0x1403f1150 + 62 * 8, 0x140213e00, &HookedLobbyStatus, g_lobbyStatus, L"lobby status (mods loading)");
+            Log(L"gamepatch: lobby: the red hand while mods load %s", hand ? L"ready" : L"NOT ready");
             WrapCommand<NativeFn>(0x1403fb108, 0x1402168a0, &HookedButtons, g_buttons, L"settings save confirmation");
             InstallBackButton(); // also takes session command 154, which the Settings rows use
             if (g_optionChanged) Log(L"gamepatch: in-game Settings ready (multiplayer menu > Online Settings)");
@@ -8393,6 +8484,7 @@ namespace pdnet::gamepatches
     {
         std::lock_guard guard(g_shareLock);
         if (lobbyId != g_variantLobby) return;
+        mods::LobbyLeft();
         int mySlot = *reinterpret_cast<int32_t*>(At(0x140527bc4));
         for (auto& [user, slot] : g_memberSlot)
             if (slot != mySlot) ClearVariant(slot);
@@ -8454,6 +8546,7 @@ namespace pdnet::gamepatches
         int64_t manager = MenuManager();
         int menu = manager ? CurrentMenu(manager) : -1;
         if (!manager || InMatch() || g_testBattle || g_testPicking != kPickingNone) return false;
+        if (mods::LobbyLoading()) return menu != 1; // in (or joining) a lobby whose mods load: its match can't start
         {
             std::lock_guard guard(g_shareLock);
             if (!g_variantLobby.empty()) return false; // in a game lobby, whatever menu is on screen

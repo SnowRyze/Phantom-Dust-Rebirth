@@ -37,6 +37,16 @@ namespace pdnet::mods
     bool LiveAvailable();
     Live ApplyLive(const char* reason, DWORD timeoutMs, std::string& why);
 
+    // A lobby with other mods (the user, 2026-11-23: anyone can join one). The player joins at once, and its mods load
+    // while they're in the lobby: JoinLobby (before the join) starts it, and until it's done LobbyLoading is true, which
+    // keeps the player's red hand on (the host can't start) and the "Loading mods..." pop-up up (gamepatches). A download
+    // that fails is tried again as long as they stay. False: PDPL here can't load mods while the game runs, so the lobby
+    // can't be joined with other mods. LobbyLeft: the join failed or the lobby was left; this PC's own mods come back.
+    bool JoinLobby(const std::string& lobbyId, const std::string& lobbyTag);
+    bool LobbyLoading();
+    std::string LobbyLoadingText(); // the pop-up's second line
+    void LobbyLeft();
+
     // The mods in use are a lobby's (pdlaunch read lobby-mods.txt).
     bool LobbyStart();
 

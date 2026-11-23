@@ -805,32 +805,23 @@ namespace pdnet::mpsd
                 }
                 else
                 {
-                    // Mods (Conceptual, step 7): the lobby's gameplay mods must be this start's. PDPL can't change them now,
-                    // so a lobby with others is refused and set up for the next game start (mods::RequestForNextStart).
+                    // Mods: a lobby with other gameplay mods is joined, and they load in the lobby (mods::JoinLobby). Only where
+                    // PDPL can't do that is it refused and set up for the next game start (mods::RequestForNextStart).
                     if (auto peek = lobbies::Read(lobbyId))
                     {
                         std::string tag = lobbies::Joined(peek->attributes, "PD_MODS");
-                        if (mods::Differs(tag))
+                        if (doc.templateName == L"SearchableGame" && mods::Differs(tag) && !mods::JoinLobby(lobbyId, tag))
                         {
                             std::string why;
                             bool asked = mods::RequestForNextStart(lobbyId, tag, why);
-                            // Loaded now, if PDPL can and nothing that loads only at start is involved (up to 15 s: the
-                            // join goes on; a longer download goes on by itself, and the next try joins).
-                            mods::Live live = asked && mods::LiveAvailable() ? mods::ApplyLive("joining a lobby", 15000, why) : mods::Live::NotNow;
-                            if (mods::Differs(tag))
-                            {
-                                if (live == mods::Live::Done) mods::RequestForNextStart(lobbyId, tag, why); // the live sync used the request up
-                                Log(L"xsapi-pdnet: not joining lobby %S: its mods (%S) aren't the ones in use (%S) - %S", lobbyId.c_str(), tag.empty() ? "none" : tag.c_str(),
-                                    mods::LobbyTag().empty() ? "none" : mods::LobbyTag().c_str(),
-                                    live == mods::Live::Busy ? "still loading them, join again" : asked ? "restart the game and join again" : why.c_str());
-                                status = mp::WriteSessionStatus::HandleNotFound; // the game's "couldn't join"
-                                if (asked) gamepatches::ModLobbyRefused(); // its message says why
-                                return nullptr;
-                            }
-                            Log(L"xsapi-pdnet: lobby %S's mods are loaded - joining", lobbyId.c_str());
+                            Log(L"xsapi-pdnet: not joining lobby %S: its mods (%S) aren't the ones in use (%S) - %S", lobbyId.c_str(), tag.empty() ? "none" : tag.c_str(),
+                                mods::LobbyTag().empty() ? "none" : mods::LobbyTag().c_str(), asked ? "restart the game and join again" : why.c_str());
+                            status = mp::WriteSessionStatus::HandleNotFound; // the game's "couldn't join"
+                            if (asked) gamepatches::ModLobbyRefused(); // its message says why
+                            return nullptr;
                         }
-                    }
-                    lobby = lobbies::Join(lobbyId, MemberAttributes(*mine));
+                    }                    lobby = lobbies::Join(lobbyId, MemberAttributes(*mine));
+                    if (!lobby && mods::LobbyLoading()) mods::LobbyLeft(); // not joined after all
                     if (!lobby && remote)
                     {
                         status = doc.members.size() >= doc.maxMembers ? mp::WriteSessionStatus::Conflict : mp::WriteSessionStatus::HandleNotFound;

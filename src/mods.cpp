@@ -79,7 +79,7 @@ namespace pdnet::mods
             if (_wfopen_s(&f, tmp.c_str(), L"wb") || !f) return;
             fwrite(text.data(), 1, text.size(), f);
             fclose(f);
-            MoveFileExW(tmp.c_str(), path.c_str(), MOVEFILE_REPLACE_EXISTING);
+            for (int i = 0; i < 400 && !MoveFileExW(tmp.c_str(), path.c_str(), MOVEFILE_REPLACE_EXISTING); ++i) Sleep(5); // (pdlaunch may be reading it)
         }
 
         // One live change, start to end (pdlaunch.cpp, WatchLiveMods, is the other side of the files).
@@ -213,6 +213,111 @@ namespace pdnet::mods
         fclose(f);
         Log(L"mods: lobby %S has other mods (%S) - set up for the next game start (lobby-mods.txt)", lobbyId.c_str(), lobbyTag.empty() ? "none" : lobbyTag.c_str());
         return true;
+    }
+
+    namespace
+    {
+        std::mutex g_joinLock;
+        std::string g_joinText;                    // guarded by g_joinLock
+        std::atomic<uint32_t> g_joinNumber{ 0 };   // the lobby being loaded for: a newer one (or leaving) ends an older
+        std::atomic<bool> g_joinLoading{ false };
+
+        void JoinText(const std::string& text)
+        {
+            std::lock_guard guard(g_joinLock);
+            g_joinText = text;
+        }
+
+        // What of a lobby's mods isn't in use here.
+        std::string Missing(const std::string& lobbyTag)
+        {
+            std::vector<std::string> mine;
+            if (std::string own = LobbyTag(); !own.empty()) mine = Fields(own, ',');
+            std::string out;
+            if (!lobbyTag.empty())
+                for (const auto& entry : Fields(lobbyTag, ','))
+                    if (std::find(mine.begin(), mine.end(), entry) == mine.end()) out += (out.empty() ? "" : ", ") + Fields(entry, ':')[0];
+            return out;
+        }
+    }
+
+    bool JoinLobby(const std::string& lobbyId, const std::string& lobbyTag)
+    {
+        if (!LiveAvailable()) return false;
+        uint32_t number = ++g_joinNumber;
+        JoinText("");
+        g_joinLoading = true;
+        Log(L"mods: lobby %S has other mods (%S; here %S) - joining, they load in the lobby", lobbyId.c_str(), lobbyTag.empty() ? "none" : lobbyTag.c_str(),
+            LobbyTag().empty() ? "none" : LobbyTag().c_str());
+        std::thread([number, lobbyId, lobbyTag]
+        {
+            auto wanted = [number] { return g_joinNumber == number; };
+            for (int attempt = 1; wanted(); ++attempt)
+            {
+                std::string why;
+                Live result = Live::Done;
+                if (Differs(lobbyTag))
+                {
+                    if (!RequestForNextStart(lobbyId, lobbyTag, why))
+                    {
+                        JoinText("Not loaded: " + why + ". B: leave");
+                        return;
+                    }
+                    result = ApplyLive("joining a lobby", 900000, why);
+                }
+                if (!wanted()) return;
+                if (!Differs(lobbyTag))
+                {
+                    Log(L"mods: the lobby's mods are loaded (try %d)", attempt);
+                    g_joinLoading = false;
+                    return;
+                }
+                if (result == Live::Restart)
+                {
+                    RequestForNextStart(lobbyId, lobbyTag, why); // for that restart
+                    JoinText("Some load only at game start. Press B to leave,\nrestart the game and join again.");
+                    Log(L"mods: the lobby's mods need a game restart: %S", why.c_str());
+                    return;
+                }
+                std::string missing = Missing(lobbyTag);
+                if (attempt > 1 || result != Live::NotNow)
+                    JoinText((missing.empty() ? "Not loaded yet" : "Couldn't get " + missing.substr(0, 40)) + ". Trying again...\nB: leave");
+                Log(L"mods: the lobby's mods aren't all here (try %d): %S %S", attempt, missing.c_str(), why.c_str());
+                for (int i = 0; i < (result == Live::NotNow ? 10 : 100) && wanted(); ++i) Sleep(100);
+            }
+        }).detach();
+        return true;
+    }
+
+    bool LobbyLoading() { return g_joinLoading; }
+
+    std::string LobbyLoadingText()
+    {
+        std::lock_guard guard(g_joinLock);
+        return g_joinText;
+    }
+
+    void LobbyLeft()
+    {
+        uint32_t number = ++g_joinNumber;
+        bool loading = g_joinLoading.exchange(false);
+        if (loading) Log(L"mods: lobby left while its mods were loading");
+        // This PC's own mods again, once out of the lobby (a restart the lobby needs keeps its request: nothing was changed).
+        std::thread([number]
+        {
+            for (int i = 0; i < 300; ++i)
+            {
+                Sleep(1000);
+                if (g_joinNumber != number) return; // another lobby already
+                std::lock_guard one(g_liveLock); // after a change still going on
+                LobbyTag();
+                if (!g_lobbyStart) return;
+                if (!gamepatches::CanSwapMods()) continue;
+                DeleteFileW((LocalStatePath() + L"\\pdnet\\lobby-mods.txt").c_str());
+                std::string why;
+                if (RunLive("out of the lobby: this PC's own mods", why) == Live::Done) return;
+            }
+        }).detach();
     }
 
     namespace { std::atomic<ULONGLONG> g_listOpenedAt{ 0 }; }

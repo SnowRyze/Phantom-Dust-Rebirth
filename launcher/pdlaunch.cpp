@@ -219,7 +219,9 @@ namespace
         if (_wfopen_s(&f, tmp.c_str(), L"wb") || !f) return;
         fwrite(text.data(), 1, text.size(), f);
         fclose(f);
-        MoveFileExW(tmp.c_str(), path.c_str(), MOVEFILE_REPLACE_EXISTING);
+        // The game reads the reply 20 times a second, and a file that's open can't be replaced: a lost reply left it waiting
+        // 5 minutes (2026-11-23), so it's tried until it works.
+        for (int i = 0; i < 400 && !MoveFileExW(tmp.c_str(), path.c_str(), MOVEFILE_REPLACE_EXISTING); ++i) Sleep(5);
     }
 
     std::string ReadLive(const std::wstring& path)
