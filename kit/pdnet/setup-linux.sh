@@ -213,13 +213,26 @@ if [ $action = update ]; then
     repo=$(sed -n 's/^\xEF\xBB\xBF//; s/^update_repo=//p' "$kit/pdnet.ini" 2>/dev/null | tr -d '\r' | tail -1 || true)
     repo=${repo:-SnowRyze/Phantom-Dust-Rebirth}
     say "This kit: ${label:-unknown} (build ${build:-?}), $channel channel. Checking github.com/$repo..."
-    json=$(curl -fsSL --connect-timeout 4 --max-time 10 -H 'Accept: application/vnd.github+json' "https://api.github.com/repos/$repo/releases?per_page=30") ||
-        fail "GitHub could not be reached."
+    # Newest first, 100 to a page. Experimentals and Conceptual kits pile up on top of the newest Stable, so reading goes
+    # on until a Stable has been seen, 5 pages at most (pdlaunch.exe does the same).
+    json=""
+    for page in 1 2 3 4 5; do
+        more=$(curl -fsSL --connect-timeout 4 --max-time 10 -H 'Accept: application/vnd.github+json' "https://api.github.com/repos/$repo/releases?per_page=100&page=$page") ||
+            { [ "$page" -gt 1 ] && break; fail "GitHub could not be reached."; }
+        json="$json$more"
+        case $more in *'/download/stable-'*) break ;; *'"tag_name"'*) ;; *) break ;; esac
+        [ "$channel" = experimental ] && break
+    done
     pick=$(printf '%s' "$json" | python3 -I -c '
 import json, re, sys
 channel, build, label = sys.argv[1], int(sys.argv[2] or 0), sys.argv[3]
 best = None
-for rel in json.load(sys.stdin):
+text, releases, at = sys.stdin.read(), [], 0
+while text[at:].strip():  # one list for each page
+    at += len(text[at:]) - len(text[at:].lstrip())
+    page, at = json.JSONDecoder().raw_decode(text, at)
+    releases += page
+for rel in releases:
     if rel.get("prerelease") and channel != "experimental":
         continue
     for a in rel.get("assets", []):
