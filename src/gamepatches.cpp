@@ -7925,14 +7925,15 @@ namespace pdnet::gamepatches
         constexpr ULONGLONG kKeepHoldMs = 20000;
         ULONGLONG g_holdSince[16]{};
 
-        std::string PeerEosId(int i)
+        std::string PeerIdText(const uint8_t* e)
         {
-            const uint8_t* e = At(0x140595ea8) + i * 0x298 + 0x4e;
             std::string id;
             bool any = false;
             for (int k = 0; k < 16; ++k) { char two[3]; sprintf_s(two, "%02x", e[k]); id += two; any = any || e[k]; }
             return any ? id : std::string();
         }
+
+        std::string PeerEosId(int i) { return PeerIdText(At(0x140595ea8) + i * 0x298 + 0x4e); }
 
         void HoldQuietPeers(int count)
         {
@@ -7979,6 +7980,100 @@ namespace pdnet::gamepatches
                     Log(L"peers: the game's keepalive dropped peer %d (slot %d; countdown was %d, ping %d, highest seen %d, keepalive runs %u; game state %d). Entry: %s",
                         i, before[i].slot, before[i].keepalive, before[i].ping, g_keepaliveMax, g_keepaliveCalls.load(),
                         *reinterpret_cast<int32_t*>(At(0x1404bc950)), PeerBytes(i).c_str());
+        }
+
+        // Blank lobby rows (a ping, but no name, character or rating; Nui 2026-11-23, and Experimental 138's). Each game
+        // keeps the others by slot: the host introduces a newcomer to everyone (message 5, FUN_140125f70), and the game
+        // ignores that when the slot is taken. A player who had the slot before (left, or restarted the game) can still
+        // be listed here when the host has already given it away, and then stays listed for good: the newcomer's packets
+        // refresh the entry by slot, pings are answered to where they came from, but this game's own packets (its name,
+        // character, rating: message 1) go to the old player. The newcomer sees this PC as a blank row. So an entry the
+        // introduction contradicts is dropped first, the way the game drops a peer that leaves (FUN_140126080). The host
+        // does the same when a player it still lists joins again (message 2, FUN_140125d50): that took a second slot.
+        // Players are told apart by the pdnet snapshot in their address: size, then PDN1 (device id at +26, new each
+        // game run; EOS id at +34; net::Snapshot::Serialize).
+        using PeerMessageFn = int64_t (*)(uint8_t*, uint8_t*, uint8_t*);
+        using ResetPeerSlotFn = void (*)(int64_t, int32_t);
+        PeerMessageFn g_peerJoin = nullptr, g_peerIntroduced = nullptr;
+        constexpr int kDeviceIdAt = 26, kEosIdAt = 34, kSnapshotEnd = 50;
+
+        // The snapshot of an address (size, then bytes), or null: not pdnet's, or without an EOS id.
+        const uint8_t* PeerSnapshot(const uint8_t* address)
+        {
+            uint32_t size;
+            memcpy(&size, address, 4);
+            const uint8_t* s = address + 4;
+            return size >= kSnapshotEnd && size <= 300 && memcmp(s, "PDN1", 4) == 0 && s[4] == 2 ? s : nullptr;
+        }
+
+        // Drops the listed peers that can't be there any more, now that `address` joins in `slot` (-1: not given yet).
+        // True: that very player is already listed in that slot.
+        bool DropReplacedPeers(const uint8_t* address, int32_t slot)
+        {
+            const uint8_t* joining = PeerSnapshot(address);
+            if (!joining) return false;
+            bool listed = false;
+            int32_t count = *reinterpret_cast<int32_t*>(At(0x140594ea4));
+            for (int i = 0; i < count && i < 3; ++i)
+            {
+                uint8_t* e = At(0x140595ea8) + i * 0x298;
+                auto fields = reinterpret_cast<int32_t*>(e);
+                const uint8_t* old = PeerSnapshot(e + 0x28);
+                int32_t oldSlot = fields[1];
+                if (!fields[0] || !old || oldSlot < 0 || oldSlot > 3) continue;
+                bool samePlayer = memcmp(old + kEosIdAt, joining + kEosIdAt, kSnapshotEnd - kEosIdAt) == 0;
+                bool sameRun = samePlayer && memcmp(old + kDeviceIdAt, joining + kDeviceIdAt, kEosIdAt - kDeviceIdAt) == 0;
+                if (sameRun && oldSlot == slot) { listed = true; continue; }
+                if (!samePlayer && oldSlot != slot) continue;
+                Log(L"peers: slot %d still had %S (%s) when slot %d went to %S - dropped, or the lobby row would stay blank", oldSlot,
+                    PeerEosId(i).substr(0, 8).c_str(), sameRun ? L"same player and game run" : samePlayer ? L"same player, earlier game run" : L"another player",
+                    slot, PeerIdText(joining + kEosIdAt).substr(0, 8).c_str());
+                fields[0] = 0;
+                reinterpret_cast<ResetPeerSlotFn>(At(0x140191610))(0, oldSlot);
+                if (*reinterpret_cast<int64_t*>(At(0x140582978))) *reinterpret_cast<int32_t*>(At(0x14058290c) + oldSlot * 0x10) = 0; // its voice
+                *reinterpret_cast<int32_t*>(At(0x140594e90)) = 1; // the list changed: everyone's details are exchanged again
+                *reinterpret_cast<int32_t*>(At(0x140594e94)) = 1;
+                g_holdSince[i] = 0;
+            }
+            return listed;
+        }
+
+        // Message 5: +8 slot, +0xc address.
+        int64_t HookedPeerIntroduced(uint8_t* list, uint8_t* message, uint8_t* from)
+        {
+            int32_t slot = *reinterpret_cast<int32_t*>(message + 8);
+            // Already listed: it may have left and come back within the keepalive (4.5 s), so this PC's details are sent
+            // to it once more (0x1405279a0: sent, by slot).
+            if (slot >= 0 && slot < 4 && DropReplacedPeers(message + 0xc, slot)) *reinterpret_cast<int32_t*>(At(0x1405279a0) + slot * 4) = 0;
+            return g_peerIntroduced(list, message, from);
+        }
+
+        // Message 2: +0x10 address. Only while the host takes players (the game's own check).
+        int64_t HookedPeerJoin(uint8_t* list, uint8_t* message, uint8_t* from)
+        {
+            auto state = reinterpret_cast<int32_t*>(list);
+            if (((state[0] - 1) & ~2) == 0 && state[2] != 0) DropReplacedPeers(message + 0x10, -1);
+            return g_peerJoin(list, message, from);
+        }
+
+        // The peer messages' handlers: 16-byte entries at 0x1403e6810, by message number.
+        bool SwapPeerHandler(int message, uint64_t expected, PeerMessageFn hook, PeerMessageFn& original)
+        {
+            auto entry = reinterpret_cast<uint64_t*>(At(0x1403e6810) + message * 16);
+            if (*entry != reinterpret_cast<uint64_t>(At(expected))) return false;
+            DWORD old;
+            if (!VirtualProtect(entry, 8, PAGE_READWRITE, &old)) return false;
+            original = reinterpret_cast<PeerMessageFn>(*entry);
+            *entry = reinterpret_cast<uint64_t>(hook);
+            VirtualProtect(entry, 8, old, &old);
+            return true;
+        }
+
+        void FixReplacedPeers()
+        {
+            bool join = SwapPeerHandler(2, 0x140125d50, HookedPeerJoin, g_peerJoin);
+            bool introduced = SwapPeerHandler(5, 0x140125f70, HookedPeerIntroduced, g_peerIntroduced);
+            Log(L"gamepatch: replaced players dropped from the lobby's list (join %s, introduction %s)", join ? L"ready" : L"NOT ready", introduced ? L"ready" : L"NOT ready");
         }
 
         void WatchPeerDrops()
@@ -8183,6 +8278,7 @@ namespace pdnet::gamepatches
             WatchCrashes();
             SafeMultiplayerUpdate();
             WatchPeerDrops();
+            FixReplacedPeers();
             labtests::Install(); // the dead camera and Theatre playback
             film::Start();       // Theatre films: every online match is recorded
             {
