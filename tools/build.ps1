@@ -11,6 +11,8 @@
 #   promote <N>               make Experimental N the next "Stable <M>" (the public version) with
 #                             private\public-links.ini, tag stable-<M> and publish it (the whole kit for first installs,
 #                             plus pdnet-update-<build>.zip for updates)
+#   fix "notes"               (on branch stable: the last whole Stable plus bug fixes) publish the next bug-fix Stable,
+#                             "Stable <M>.0.<K>": only pdnet-update-<build>.zip, no full kit, tag stable-<M>.0.<K>
 #   conceptual "notes"        publish to Conceptual kits' own updates, and save the kit as the next "PhantomDust-pdnet Conceptual <N>.zip" (from the Conceptual
 #                             branch); its pdlaunch updates only from Conceptual releases
 # Needs: Visual Studio 2022 (or Build Tools) with "Desktop development with C++", and Epic's EOS SDK in deps\eos-sdk.
@@ -81,7 +83,7 @@ function RepoSlug {
 
 # Creates a GitHub release with its assets; returns its web page, or $null (with the reason printed) if it didn't happen.
 # $labels maps an asset's file name to the name GitHub shows for it (the file name, which the updater looks for, stays).
-function PublishRelease([string]$tag, [string]$target, [string]$title, [bool]$prerelease, [string]$notes, [string[]]$assetPaths, [hashtable]$labels = @{}) {
+function PublishRelease([string]$tag, [string]$target, [string]$title, [bool]$prerelease, [string]$notes, [string[]]$assetPaths, [hashtable]$labels = @{}, [bool]$latest = $true) {
     $tokenFile = Join-Path $root 'private\github-token.txt'
     if (-not (Test-Path $tokenFile)) { Write-Host "Not published to GitHub: no private\github-token.txt (see README, Publishing updates)." -ForegroundColor Yellow; return $null }
     $headers = @{ Authorization = "Bearer $((Get-Content $tokenFile -Raw).Trim())"; Accept = 'application/vnd.github+json'; 'User-Agent' = 'pdnet-build' }
@@ -90,6 +92,7 @@ function PublishRelease([string]$tag, [string]$target, [string]$title, [bool]$pr
     try {
         $body = @{ tag_name = $tag; name = $title; body = $notes; prerelease = $prerelease }
         if ($target) { $body.target_commitish = $target }
+        if (-not $latest) { $body.make_latest = 'false' } # GitHub's "Latest" stays on the release with the full kit
         $release = Invoke-RestMethod -Method Post -Uri "https://api.github.com/repos/$repo/releases" -Headers $headers -Body ($body | ConvertTo-Json) -ContentType 'application/json'
         foreach ($assetPath in $assetPaths) {
             $leaf = Split-Path $assetPath -Leaf
@@ -111,6 +114,26 @@ function ReleaseNotes([int]$build, [string]$assetPath, [string]$text) {
     "Build $build`r`n`r`n$text`r`n`r`nsha256 $(Split-Path $assetPath -Leaf) $sha`r`n`r`nInstalled kits update themselves at game start (Main menu > Options > Updates). This download has no eos.ini and no Discord links: a first install needs the kit from the newest Stable release."
 }
 
+# The published Stables: the newest whole number, its highest bug fix (<M>.0.<K>) and the highest build number of any.
+# The stable channel takes the highest build number, so each Stable needs a higher one than every Stable before it.
+function PublishedStables {
+    [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+    $whole = 0; $fix = 0; $build = 0
+    for ($page = 1; $page -le 8; ++$page) {
+        $list = @(Invoke-RestMethod -Uri "https://api.github.com/repos/$(RepoSlug)/releases?per_page=100&page=$page" -Headers @{ 'User-Agent' = 'pdnet-build' } | ForEach-Object { $_ })
+        foreach ($release in $list) {
+            if ($release.tag_name -notmatch '^stable-(\d+)(?:\.0\.(\d+))?$') { continue }
+            $m = [int]$Matches[1]; $k = if ($Matches[2]) { [int]$Matches[2] } else { 0 }
+            if ($m -gt $whole) { $whole = $m; $fix = 0 }
+            if ($m -eq $whole -and $k -gt $fix) { $fix = $k }
+            foreach ($asset in $release.assets) { if ($asset.name -match '^pdnet-update-(\d+)\.zip$') { $build = [Math]::Max($build, [int]$Matches[1]) } }
+        }
+        if ($list.Count -lt 100) { break }
+    }
+    if (-not $whole) { Fail 'No Stable found on GitHub.' }
+    @{ Whole = $whole; Fix = $fix; Build = $build }
+}
+
 # ---- promote: Experimental N as the next "Stable <M>", the public version --------------------------------------------
 # Stable is the version for everyone since 2026-11-10 (the Public kind is gone). The kit is the Experimental's, with
 # kit-version.txt saying Stable <M> and the Discord links from private\public-links.ini (same keys as links.ini).
@@ -123,6 +146,8 @@ if ($Mode -eq 'promote') {
     $publicLinks = Join-Path $root 'private\public-links.ini'
     if (-not (Test-Path $publicLinks)) { Fail "No private\public-links.ini (discord_webhook=, log_webhook=, discord_invite= for Stable kits)." }
     $number = (LastNumber 'Stable') + 1
+    $stables = PublishedStables
+    if ($n -le $stables.Build) { Fail "Stable build $($stables.Build) is already published (bug fixes count up too): an Experimental up to that number would never reach players on it. Build a new Experimental and promote that." }
     $label = "PhantomDust-pdnet Stable $number"
     $to = Join-Path $kits "$label.zip"
     $unpacked = Join-Path $out 'promote-kit'
@@ -172,7 +197,27 @@ if ($Mode -eq 'promote') {
     if ($page) { Write-Host "Published: $page" -ForegroundColor Green }
     exit 0
 }
-if ($Mode -notin 'build', 'experimental', 'conceptual') { Fail "Unknown argument '$Mode'. Use: build.bat [experimental `"notes`" | conceptual `"notes`" | promote N]" }
+if ($Mode -notin 'build', 'experimental', 'conceptual', 'fix') { Fail "Unknown argument '$Mode'. Use: build.bat [experimental `"notes`" | fix `"notes`" | conceptual `"notes`" | promote N]" }
+
+# ---- fix: what has to be true before a bug-fix Stable is built -------------------------------------------------------
+if ($Mode -eq 'fix') {
+    if (-not $Arg) { Fail 'build.bat fix needs notes: what was fixed.' }
+    $ErrorActionPreference = 'Continue'
+    git -C $root fetch -q origin --tags 2>$null
+    $stables = PublishedStables
+    $branch = git -C $root rev-parse --abbrev-ref HEAD 2>$null
+    git -C $root merge-base --is-ancestor "stable-$($stables.Whole)" HEAD 2>$null; $based = $LASTEXITCODE -eq 0
+    $changed = git -C $root status --porcelain -- src xsapi launcher kit deps 2>$null
+    $local = git -C $root rev-parse HEAD 2>$null; $remote = git -C $root rev-parse origin/stable 2>$null
+    $ErrorActionPreference = 'Stop'
+    if ($branch -ne 'stable') { Fail "Bug-fix Stables are built on branch stable (this is $branch)." }
+    if (-not $based) { Fail "Branch stable doesn't come from stable-$($stables.Whole), the newest whole Stable. Move it there first." }
+    if ($changed) { Fail 'Commit the changes first.' }
+    if ($local -ne $remote) { Fail 'Push branch stable first.' }
+    $fixNumber = "$($stables.Whole).0.$($stables.Fix + 1)"
+    $fixBuild = $stables.Build + 1
+    Write-Host "Stable $fixNumber, build $fixBuild"
+}
 
 # ---- tools ---------------------------------------------------------------------------------------------------------
 Step 'Looking for Visual Studio and Epic''s SDK'
@@ -302,9 +347,10 @@ $label = if ($Mode -eq 'experimental') {
     $number = [Math]::Max((LastNumber 'Experimental'), $(if (Test-Path $counterFile) { [int](Get-Content $counterFile -Raw).Trim() } else { 0 })) + 1
     "PhantomDust-pdnet Experimental $number"
 } elseif ($Mode -eq 'conceptual') { "PhantomDust-pdnet Conceptual $((LastNumber 'Conceptual') + 1)" }
+elseif ($Mode -eq 'fix') { "PhantomDust-pdnet Stable $fixNumber" }
 else { 'PhantomDust-pdnet development build' }
 if ($Mode -eq 'conceptual') { $conceptualNumber = (LastNumber 'Conceptual') + 1 }
-$version = "$label`r`npdnet.dll MD5 $md5`r`n" + $(if ($Mode -eq 'experimental') { "Build: $number`r`n" } elseif ($Mode -eq 'conceptual') { "Build: $conceptualNumber`r`n" } else { '' }) +
+$version = "$label`r`npdnet.dll MD5 $md5`r`n" + $(if ($Mode -eq 'experimental') { "Build: $number`r`n" } elseif ($Mode -eq 'conceptual') { "Build: $conceptualNumber`r`n" } elseif ($Mode -eq 'fix') { "Build: $fixBuild`r`n" } else { '' }) +
            "Source: $(if ($commit) { $commit } else { 'unknown (not built from a git clone)' })$dirty`r`n" + $(if ($Mode -ne 'build' -and $Arg) { "$Arg`r`n" } else { '' })
 [IO.File]::WriteAllText((Join-Path $files 'kit-version.txt'), $version, (New-Object Text.UTF8Encoding $false))
 Zip $kit (Join-Path $out 'PhantomDust-pdnet.zip')
@@ -340,6 +386,21 @@ if ($Mode -eq 'conceptual') {
         $page = PublishRelease "conceptual-$conceptualNumber" $fullCommit "Conceptual $conceptualNumber" $true (ReleaseNotes $conceptualNumber $asset $(if ($Arg) { $Arg } else { "Conceptual $conceptualNumber." })) $asset
         if ($page) { Write-Host "Published: $page" -ForegroundColor Green }
     }
+}
+
+if ($Mode -eq 'fix') {
+    # Only the update zip (the user, 2026-11-23): a first install is the whole Stable's kit, which updates itself to this.
+    $asset = Join-Path $out "pdnet-update-$fixBuild.zip"
+    UpdateZip $kit $asset
+    $sha = (Get-FileHash $asset -Algorithm SHA256).Hash.ToLower()
+    $leaf = Split-Path $asset -Leaf
+    git -C $root tag "stable-$fixNumber" HEAD
+    $ErrorActionPreference = 'Continue'; git -C $root push origin "stable-$fixNumber" 2>$null | Out-Null; $tagPushed = $LASTEXITCODE -eq 0; $ErrorActionPreference = 'Stop'
+    if (-not $tagPushed) { git -C $root tag -d "stable-$fixNumber" | Out-Null; Fail "The tag stable-$fixNumber couldn't be pushed; nothing was published." }
+    $notes = "Build $fixBuild`r`n`r`nPhantom Dust Rebirth, Stable $fixNumber (bug fixes for Stable $($stables.Whole)).`r`n`r`n$Arg`r`n`r`n**Don't download this one: there is nothing here to install by hand.** Installed kits on the Stable channel update themselves at game start (Main menu > Options > Updates). First install: the kit from Stable $($stables.Whole), which then updates itself to this.`r`n`r`nsha256 $leaf $sha"
+    $updateLabel = @{ $leaf = "DO NOT DOWNLOAD - automatic updates only ($leaf)" }
+    $page = PublishRelease "stable-$fixNumber" $null "Stable $fixNumber" $false $notes @($asset) $updateLabel $false
+    if ($page) { Write-Host "Published: $page" -ForegroundColor Green } else { Fail "stable-$fixNumber is tagged but the release wasn't made." }
 }
 
 if ($Mode -eq 'experimental') {

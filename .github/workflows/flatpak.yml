@@ -18,7 +18,8 @@ permissions:
 
 jobs:
   flatpak:
-    if: github.event_name == 'workflow_dispatch' || !github.event.release.prerelease
+    # bug-fix Stables (stable-16.0.1) have no kit to build it from: the Flatpak updates itself to them
+    if: github.event_name == 'workflow_dispatch' || (!github.event.release.prerelease && !contains(github.event.release.tag_name, '.'))
     runs-on: ubuntu-24.04
     env:
       GH_TOKEN: ${{ github.token }}
