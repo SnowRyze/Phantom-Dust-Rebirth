@@ -671,12 +671,14 @@ namespace modsync
             return out;
         }
 
+        bool g_catalogRead = false; // this sync read the catalog itself (not an earlier copy)
         std::vector<CatalogEntry> LoadCatalog(const std::wstring& storeDir, const std::wstring& url)
         {
             std::string text;
             bool fetched = false;
             if (url.rfind(L"https://", 0) == 0) fetched = g_net && g_net->get(url, text, 8000);
             else if (!url.empty()) fetched = !(text = ReadText(url)).empty(); // a local file (testing)
+            g_catalogRead = fetched;
             std::wstring cache = storeDir + L"\\catalog.txt";
             if (fetched) WriteText(cache, text);
             else
@@ -882,6 +884,7 @@ namespace modsync
     {
         g_log = log;
         g_net = net;
+        g_catalogRead = false;
         size_t cut = localState.find_last_of(L'\\');
         if (localState.empty() || cut == std::wstring::npos) { log(L"mods: no LocalState folder - mods not synced"); return false; }
         std::wstring pdnetDir = localState + L"\\pdnet", roaming = localState.substr(0, cut) + L"\\RoamingState";
@@ -978,8 +981,12 @@ namespace modsync
                 auto cached = releases.find(e.id);
                 bool fromCatalog = !e.url.empty();
                 std::string webTag;
-                bool web = !fromCatalog && g_net->latestTag && g_net->latestTag(Wide(e.repo), webTag, 8000);
+                // The website is asked for every mod, also those with release fields (2026-11-23: Aquarium 0.6 was in the
+                // catalog, but games read GitHub's 5-minute-old copy of it, and the Action only runs every few hours):
+                // its tag isn't cached, costs no API lookup, and wins over a catalog line with another release.
+                bool web = g_catalogRead && g_net->latestTag && g_net->latestTag(Wide(e.repo), webTag, 5000);
                 if (web) webTag = PercentDecode(webTag);
+                if (web && webTag != e.tag) fromCatalog = false;
                 bool known = !fromCatalog && cached != releases.end() && (web ? cached->second.tag == webTag : !cached->second.url.empty());
                 bool answered = false;
                 if (known && cached->second.url.empty()) // that release was looked at: no usable file in it
@@ -1006,6 +1013,11 @@ namespace modsync
                     releases[e.id] = r;
                     changed = true;
                 }
+                else if (!e.url.empty()) // the API didn't answer (its hourly limit): the catalog's release meanwhile
+                {
+                    log(L"mods: %S: %S - using the catalog's release (%S)", e.id.c_str(), why.c_str(), e.tag.c_str());
+                    r = CatalogRelease(e);
+                }
                 else if (cached != releases.end() && !cached->second.url.empty())
                 {
                     log(L"mods: %S: %S - using the release found earlier (%S)", e.id.c_str(), why.c_str(), cached->second.tag.c_str());
@@ -1021,7 +1033,15 @@ namespace modsync
                     changed = true;
                     continue;
                 }
-                if (!Download(e, r, storeDir + L"\\" + Wide(e.id), why))
+                bool downloaded = Download(e, r, storeDir + L"\\" + Wide(e.id), why);
+                // A release whose file was replaced (its sha256 in the catalog or releases.txt is the old file's): looked up again.
+                if (!downloaded && why.find("sha256") != std::string::npos && LookUpRelease(e, "", r, why, answered))
+                {
+                    releases[e.id] = r;
+                    changed = true;
+                    downloaded = Download(e, r, storeDir + L"\\" + Wide(e.id), why);
+                }
+                if (!downloaded)
                 {
                     log(L"mods: %S %S: %S", e.id.c_str(), r.tag.c_str(), why.c_str());
                     notDownloaded[e.id] = why;
@@ -1196,26 +1216,40 @@ namespace modsync
                 for (const auto& m : mods) found = found || (m.id == l.id && m.enabled);
                 if (!found) log(L"mods: the lobby's %S isn't here (or isn't the same file) - joining will be refused again", l.id.c_str());
             }
-        std::vector<std::string> lobbyOrder;
-        for (const auto& l : lobbyMods) lobbyOrder.push_back(l.id);
-        auto rank = [&](const Mod& m)
-        {
-            const auto& list = lobbyStart ? lobbyOrder : order;
-            auto it = std::find(list.begin(), list.end(), m.id);
-            if (it != list.end()) return static_cast<size_t>(it - list.begin());
-            if (!lobbyStart) return order.size();
-            auto own = std::find(order.begin(), order.end(), m.id); // after the lobby's, in the player's own order
-            return list.size() + (own == order.end() ? order.size() : static_cast<size_t>(own - order.begin()));
-        };
-        std::stable_sort(mods.begin(), mods.end(), [&](const Mod& a, const Mod& b)
+        // The order (the top one wins where two change the same file) is fixed: it comes from the mods themselves and is the
+        // same on every PC (the user, 2026-11-23: "make the mod order NEVER change"). By id, except that a mod goes above
+        // the ones it must load over (load_after) and below those that must load over it (load_before); mods that are off
+        // count too, so turning one on or off moves nothing. The player's own PDPL archives come last, by file name, as
+        // PDPL mounts them. (mods_order in settings.ini only says which mods the player has seen in the list.)
+        std::stable_sort(mods.begin(), mods.end(), [](const Mod& a, const Mod& b)
         {
             bool aPdpl = a.source == Source::Pdpl, bPdpl = b.source == Source::Pdpl;
             if (aPdpl != bPdpl) return !aPdpl; // our links first: "!rb" sorts before the player's own names
-            if (aPdpl) return LowerW(a.file) < LowerW(b.file); // PDPL's order: by name
-            size_t ra = rank(a), rb = rank(b);
-            if (ra != rb) return ra < rb;
+            if (aPdpl) return LowerW(a.file) < LowerW(b.file);
             return a.id < b.id;
         });
+        {
+            std::vector<Mod> placed, left;
+            for (auto& m : mods) left.push_back(std::move(m));
+            auto above = [](const Mod& a, const Mod& b) // a must be above b
+            {
+                return std::find(a.after.begin(), a.after.end(), b.id) != a.after.end() || std::find(b.before.begin(), b.before.end(), a.id) != b.before.end();
+            };
+            while (!left.empty())
+            {
+                size_t pick = 0; // a loop in load_after / load_before: the first one left
+                for (size_t i = 0; i < left.size(); ++i)
+                {
+                    bool free = true;
+                    for (size_t j = 0; j < left.size() && free; ++j)
+                        free = i == j || left[i].source == Source::Pdpl || left[j].source == Source::Pdpl || !above(left[j], left[i]);
+                    if (free) { pick = i; break; }
+                }
+                placed.push_back(std::move(left[pick]));
+                left.erase(left.begin() + pick);
+            }
+            mods = std::move(placed);
+        }
 
         // ---- while the game runs: can these changes be made now? ----
         // What the game or PDPL reads only at start must stay exactly as the last sync left it (mods-state.txt): the same
@@ -1403,6 +1437,10 @@ namespace modsync
         state += "# mod id on|off source name version author online touches plugins files problem path load_after load_before description sha256(12) tag plugin_files warning map\n";
         if (lobbyStart) state += "lobbystart\t1\n"; // this start uses a lobby's mods (the Mods list says so)
         state += "loose\t" + std::to_string(loose) + "\n";
+        // For the Mods list's update check: whether the catalog itself was read, and the mods that are on whose newest
+        // release couldn't be had (an older download may still be in use).
+        state += std::string("catalog\t") + (g_catalogRead ? "read" : "old") + "\n";
+        for (const auto& [id, why] : notDownloaded) state += "notdownloaded\t" + Field(id) + "\t" + Field(why) + "\n";
         for (const auto& m : mods)
             state += "mod\t" + m.id + "\t" + (m.enabled ? "on" : "off") + "\t" + Utf8(SourceName(m.source)) + "\t" + Field(m.name) + "\t" +
                      Field(m.version) + "\t" + Field(m.author) + "\t" + m.online + "\t" + Join(m.touches, ',') + "\t" + (m.plugins ? "1" : "0") + "\t" +

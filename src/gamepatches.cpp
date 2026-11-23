@@ -2096,15 +2096,13 @@ namespace pdnet::gamepatches
         // Mods (Conceptual, mod loader step 4): the multiplayer menu's Mods item (was Quick Join) opens this same screen with
         // the mods as its rows, from LocalState\pdnet\mods-state.txt: what pdlaunch put in PDPL's mods folder at this game
         // start (launcher\modsync.cpp), in priority order (the top one wins when two change the same file). A turns the
-        // highlighted mod on or off; X picks it up, up / down then carry it, X puts it down; Y sorts (load_after /
-        // load_before first, then cosmetic mods above models, maps, skills and the rest); LB / RB turn pages. Leaving saves
-        // mods_order and mods_enabled to settings.ini, and pdlaunch applies them at the next game start (PDPL 1.2.2 can't be
-        // told to change its mods while the game runs). The player's own PDPL archives (RoamingState\mods) stay below the
-        // others in name order, as PDPL mounts them by name.
+        // highlighted mod on or off, Y checks for updates, LB / RB turn pages. The order is fixed (modsync.cpp: by the mods
+        // themselves, the same on every PC; the user, 2026-11-23). Leaving saves mods_order (the mods seen) and mods_enabled
+        // to settings.ini, and they're loaded at once (mods::ApplyLive) or at the next game start.
         constexpr int kModRows = 10;
         struct ModRow
         {
-            std::string id, source, name, version, author, online, problem, description, pluginFiles, warning;
+            std::string id, source, name, version, author, online, problem, description, pluginFiles, warning, sha, tag;
             std::vector<std::string> touches, after, before;
             bool on = true, plugins = false;
             int files = 0;
@@ -2115,10 +2113,22 @@ namespace pdnet::gamepatches
         int g_looseFiles = 0;
         char g_modRow[kModRows][112];
         char g_modHint[kModRows][300];
-        int g_modRows = 0, g_modPage = 0, g_movingMod = -1;
+        int g_modRows = 0, g_modPage = 0;
         std::atomic<bool> g_modsDirty{ false };
         // \a2# A, \a3# B, \a5# Y (the lobby's "\a5#Invite"), \a4# X (the character select's X "Toggle Monsters").
-        const char* kModsBar = "\a8#Select  LB / RB Page \a2#On / Off \a580r\a4#Move \a5#Auto Sort \a3#Back";
+        const char* kModsBar = "\a8#Select \a2#On / Off \a580r\a5#Update \a3#Back";
+        const char* kModsPagesBar = "\a8#Select  LB / RB Page \a2#On / Off \a580r\a5#Update \a3#Back";
+        // The update check (CheckModUpdates): a live sync without any change of the player's. While it runs the list can't
+        // be changed; its result shows as every row's hint for 20 s (g_modNotice; game thread).
+        std::atomic<bool> g_checkingMods{ false }, g_checkDone{ false };
+        std::mutex g_checkLock;
+        mods::Live g_checkResult = mods::Live::Failed; // guarded by g_checkLock
+        std::string g_checkWhy;                        // "
+        std::map<std::string, std::pair<std::string, std::string>> g_checkBefore; // id -> sha, version (or tag) when it began
+        std::string g_modNotice;
+        ULONGLONG g_modNoticeUntil = 0;
+        bool g_catalogRead = true;                                             // mods-state.txt: the last sync read the catalog
+        std::vector<std::pair<std::string, std::string>> g_modsNotDownloaded; // id, why
 
         std::vector<std::string> SplitFields(const std::string& s, char sep) // empty fields kept
         {
@@ -2142,6 +2152,9 @@ namespace pdnet::gamepatches
             g_mods.clear();
             g_modOverlaps.clear();
             g_looseFiles = 0;
+            g_catalogRead = true;
+            g_modsNotDownloaded.clear();
+            bool lobbys = false;
             std::ifstream in(LocalStatePath() + L"\\pdnet\\mods-state.txt", std::ios::binary);
             std::string line;
             while (std::getline(in, line))
@@ -2149,6 +2162,9 @@ namespace pdnet::gamepatches
                 if (!line.empty() && line.back() == '\r') line.pop_back();
                 auto f = SplitFields(line, '\t');
                 if (f[0] == "loose" && f.size() > 1) g_looseFiles = atoi(f[1].c_str());
+                else if (f[0] == "lobbystart") lobbys = true;
+                else if (f[0] == "catalog" && f.size() > 1) g_catalogRead = f[1] == "read";
+                else if (f[0] == "notdownloaded" && f.size() > 2) g_modsNotDownloaded.emplace_back(f[1], f[2]);
                 else if (f[0] == "conflict" && f.size() > 3) g_modOverlaps.emplace_back(f[1], f[2], atoi(f[3].c_str()));
                 else if (f[0] == "mod" && f.size() > 12)
                 {
@@ -2167,29 +2183,42 @@ namespace pdnet::gamepatches
                     if (f.size() > 13) m.after = SplitList(f[13]);
                     if (f.size() > 14) m.before = SplitList(f[14]);
                     if (f.size() > 15) m.description = f[15];
+                    if (f.size() > 16) m.sha = f[16];
+                    if (f.size() > 17) m.tag = f[17];
                     if (f.size() > 18) m.pluginFiles = f[18]; // plugin DLLs (step 8), ';'-separated
                     if (f.size() > 19) m.warning = f[19];
                     g_mods.push_back(std::move(m));
                 }
             }
+            // The player's saved choices over it: changes that wait for the next start (mods-state.txt has what's loaded)
+            // would show as undone, and the next save would undo them. Not while a lobby's mods are in use.
+            if (!lobbys)
+            {
+                std::ifstream settings(LocalStatePath() + L"\\pdnet\\settings.ini", std::ios::binary);
+                std::vector<std::string> order, enabled;
+                bool haveEnabled = false;
+                while (std::getline(settings, line))
+                {
+                    if (!line.empty() && line.back() == '\r') line.pop_back();
+                    if (line.rfind("mods_order=", 0) == 0) order = SplitList(line.substr(11));
+                    else if (line.rfind("mods_enabled=", 0) == 0) enabled = SplitList(line.substr(13)), haveEnabled = true;
+                }
+                auto place = [&](const ModRow& m) { return std::find(order.begin(), order.end(), m.id) - order.begin(); };
+                if (haveEnabled)
+                    for (ModRow& m : g_mods)
+                        if (place(m) < static_cast<ptrdiff_t>(order.size())) m.on = std::find(enabled.begin(), enabled.end(), m.id) != enabled.end();
+            }
             Log(L"mods: list: %zu mod(s) from mods-state.txt", g_mods.size());
         }
 
-        int ModPages() { return g_mods.empty() ? 1 : static_cast<int>((g_mods.size() + kModRows - 1) / kModRows); }
+        // Pages are as long as the rows the list opened with (a live update can add mods while it's open).
+        int ModPages() { return g_mods.empty() || g_modRows < 1 ? 1 : static_cast<int>((g_mods.size() + g_modRows - 1) / g_modRows); }
         int ModIndex(const std::string& id)
         {
             for (size_t i = 0; i < g_mods.size(); ++i)
                 if (g_mods[i].id == id) return static_cast<int>(i);
             return -1;
         }
-        int LastMovableMod()
-        {
-            int last = -1;
-            for (size_t i = 0; i < g_mods.size(); ++i)
-                if (g_mods[i].Movable()) last = static_cast<int>(i);
-            return last;
-        }
-
         // "Wins over X for 12 files" / "X wins for 3 files": with both on, the one higher in the list wins.
         std::string ModOverlapText(int i)
         {
@@ -2214,36 +2243,36 @@ namespace pdnet::gamepatches
             if (g_mods.empty())
             {
                 strcpy_s(g_modRow[0], "\a160wNo mods yet\f\a1#\a230c\f\a0#");
-                strcpy_s(g_modHint[0], "Put a .zip or .7z in LocalState\\pdnet\\mods (or PDPL's RoamingState\\mods), then start the game again.");
+                strcpy_s(g_modHint[0], GetTickCount64() < g_modNoticeUntil ? g_modNotice.substr(0, sizeof(g_modHint[0]) - 1).c_str() : "Put a .zip or .7z in LocalState\\pdnet\\mods (or PDPL's RoamingState\\mods), then start the game again.");
                 return;
             }
             char page[48] = "";
             if (ModPages() > 1) sprintf_s(page, " (page %d of %d: LB / RB)", g_modPage + 1, ModPages());
             for (int r = 0; r < g_modRows; ++r)
             {
-                size_t i = static_cast<size_t>(g_modPage) * kModRows + r;
+                size_t i = static_cast<size_t>(g_modPage) * g_modRows + r;
                 if (i >= g_mods.size())
                 {
                     g_modRow[r][0] = 0;
-                    strcpy_s(g_modHint[r], page);
+                    strcpy_s(g_modHint[r], (GetTickCount64() < g_modNoticeUntil ? g_modNotice + page : std::string(page)).substr(0, sizeof(g_modHint[r]) - 1).c_str());
                     continue;
                 }
                 const ModRow& m = g_mods[i];
                 bool notDownloaded = m.source == "catalog" && m.problem.rfind("not downloaded", 0) == 0;
                 const char* kind = notDownloaded ? "Download" : m.source == "pdpl" ? "PDPL" : m.online == "local" ? "Only you" : "Online";
-                _snprintf_s(g_modRow[r], _TRUNCATE, "\a160w%s[%s] %s\f\a1#\a230c%s %s\f\a0#", static_cast<int>(i) == g_movingMod ? "> " : "",
+                _snprintf_s(g_modRow[r], _TRUNCATE, "\a160w[%s] %s\f\a1#\a230c%s %s\f\a0#",
                             m.on ? "x" : "  ", m.name.c_str(), m.version.c_str(), kind);
                 std::string hint = notDownloaded ? "From the mod catalog: " + m.name + "." : m.description.empty() ? m.name : m.description;
                 if (!m.author.empty()) hint += " By " + m.author + ".";
                 hint += ModOverlapText(static_cast<int>(i));
                 if (!m.pluginFiles.empty()) hint += " Contains code (" + m.pluginFiles + "): it runs inside the game.";
                 if (!m.warning.empty()) hint += " (" + m.warning + ")";
-                if (notDownloaded) hint += m.on ? " Downloads at the next game start." : " Turn it on and it downloads at the next game start.";
+                if (notDownloaded) hint += mods::LiveAvailable() ? (m.on ? " Downloads when you leave this list." : " Turn it on and it downloads when you leave this list.")
+                                                                  : (m.on ? " Downloads at the next game start." : " Turn it on and it downloads at the next game start.");
                 if (notDownloaded && m.problem != "not downloaded") hint += " (" + m.problem.substr(16) + ")"; // after "not downloaded: "
                 else if (!notDownloaded && !m.problem.empty()) hint += " (" + m.problem + ")";
-                if (!m.Movable()) hint += " PDPL folder: ordered by file name.";
-                if (static_cast<int>(i) == g_movingMod) hint += " Up / down to move, X to put it down.";
                 if (g_modsDirty) hint += mods::LiveAvailable() ? "\nChanges load when you leave this list (plugins, skills and text at the next start)." : "\nChanges apply at the next game start.";
+                if (GetTickCount64() < g_modNoticeUntil) hint = g_modNotice; // the update check's result
                 hint += page;
                 strcpy_s(g_modHint[r], hint.substr(0, sizeof(g_modHint[r]) - 1).c_str());
             }
@@ -2253,7 +2282,6 @@ namespace pdnet::gamepatches
         {
             LoadModList();
             g_modPage = 0;
-            g_movingMod = -1;
             g_modsDirty = false;
             g_modRows = g_mods.empty() ? 1 : (std::min)(kModRows, static_cast<int>(g_mods.size()));
             FillModPage();
@@ -2268,97 +2296,18 @@ namespace pdnet::gamepatches
             FillModPage();
         }
 
-        // The mod being carried goes to `target` (its place among the movable mods; the player's PDPL archives stay put).
-        void MoveModTo(size_t target)
-        {
-            int last = LastMovableMod();
-            if (g_movingMod < 0 || last < 0) return;
-            int to = (std::min)(static_cast<int>(target), last);
-            if (to == g_movingMod) return;
-            ModRow m = std::move(g_mods[g_movingMod]);
-            g_mods.erase(g_mods.begin() + g_movingMod);
-            g_mods.insert(g_mods.begin() + to, std::move(m));
-            g_movingMod = to;
-            g_modsDirty = true;
-            FillModPage();
-        }
-
-        void TurnModPage(int step, int row)
+        void TurnModPage(int step)
         {
             int pages = ModPages();
             if (pages <= 1) return;
             g_modPage = (g_modPage + step + pages) % pages;
-            if (g_movingMod >= 0 && row >= 0) MoveModTo(static_cast<size_t>(g_modPage) * kModRows + row); // carried along
-            FillModPage();
-        }
-
-        // Auto sort: cosmetic mods (only looks or sound, or "online": "local") at the top, then models / animation, maps,
-        // skills / text, and plugins / anything else at the bottom; load_after / load_before always kept ("load_after": X =
-        // my files win over X's, so I go above X). Ties by name. A loop in load_after / load_before keeps its current order.
-        int ModTier(const ModRow& m)
-        {
-            auto has = [&](const char* k) { return std::find(m.touches.begin(), m.touches.end(), k) != m.touches.end(); };
-            bool cosmetic = !m.touches.empty() && std::all_of(m.touches.begin(), m.touches.end(), [](const std::string& t) { return t == "ui" || t == "audio" || t == "shaders"; });
-            if (cosmetic || m.online == "local") return 0;
-            if (has("plugins") || has("other")) return 4;
-            if (has("skills") || has("text")) return 3;
-            if (has("maps")) return 2;
-            return 1;
-        }
-
-        void AutoSortMods()
-        {
-            std::vector<ModRow> movable, fixed;
-            for (auto& m : g_mods) (m.Movable() ? movable : fixed).push_back(m);
-            size_t n = movable.size();
-            std::vector<std::vector<size_t>> below(n); // below[a]: the mods a must be above
-            std::vector<int> above(n, 0);              // how many must be above each
-            auto index = [&](const std::string& id) { for (size_t i = 0; i < n; ++i) if (movable[i].id == id) return static_cast<int>(i); return -1; };
-            auto edge = [&](int a, int b) { if (a >= 0 && b >= 0 && a != b) { below[a].push_back(static_cast<size_t>(b)); ++above[b]; } };
-            for (size_t a = 0; a < n; ++a)
-            {
-                for (auto& id : movable[a].after) edge(static_cast<int>(a), index(id));
-                for (auto& id : movable[a].before) edge(index(id), static_cast<int>(a));
-            }
-            std::vector<bool> placed(n, false);
-            std::vector<ModRow> sorted;
-            auto lower = [](std::string s) { for (char& c : s) c = static_cast<char>(tolower(static_cast<unsigned char>(c))); return s; };
-            for (size_t done = 0; done < n; ++done)
-            {
-                int pick = -1;
-                for (size_t i = 0; i < n; ++i)
-                {
-                    if (placed[i] || above[i] > 0) continue;
-                    if (pick < 0 || std::make_pair(ModTier(movable[i]), lower(movable[i].name)) < std::make_pair(ModTier(movable[pick]), lower(movable[pick].name))) pick = static_cast<int>(i);
-                }
-                if (pick < 0) // a loop: the first unplaced one in the current order goes next
-                {
-                    for (size_t i = 0; i < n && pick < 0; ++i)
-                        if (!placed[i]) pick = static_cast<int>(i);
-                    movable[pick].problem = "load order loop";
-                    Log(L"mods menu: auto sort: load_after / load_before loop at %S", movable[pick].id.c_str());
-                }
-                placed[pick] = true;
-                for (size_t b : below[pick]) --above[b];
-                sorted.push_back(movable[pick]);
-            }
-            sorted.insert(sorted.end(), fixed.begin(), fixed.end());
-            bool changed = false;
-            for (size_t i = 0; i < sorted.size(); ++i) changed = changed || sorted[i].id != g_mods[i].id;
-            g_mods = std::move(sorted);
-            g_movingMod = -1;
-            if (changed) g_modsDirty = true;
-            std::string order;
-            for (auto& m : g_mods) order += (order.empty() ? "" : ", ") + m.id;
-            Log(L"mods menu: auto sort%s: %S", changed ? L"" : L" (no change)", order.c_str());
             FillModPage();
         }
 
         // Leaving the list (back, or any other way out): changes go to settings.ini for the next game start.
-        void LeaveModList()
+        bool SaveModList() // false: nothing to save
         {
-            g_movingMod = -1;
-            if (!g_modsDirty.exchange(false)) return;
+            if (!g_modsDirty.exchange(false)) return false;
             std::string order, enabled;
             for (auto& m : g_mods)
             {
@@ -2367,6 +2316,88 @@ namespace pdnet::gamepatches
             }
             SaveSettings({ { "mods_order", order }, { "mods_enabled", enabled } });
             Log(L"mods menu: saved - order %S; on: %S", order.c_str(), enabled.empty() ? "none" : enabled.c_str());
+            return true;
+        }
+
+        void ShowModNotice(const std::string& text)
+        {
+            g_modNotice = text;
+            g_modNoticeUntil = GetTickCount64() + 20000;
+            FillModPage();
+        }
+
+        // Y in the Mods list: pdlaunch reads the catalog again, downloads new releases of the mods that are on, and
+        // they load now if they can (the player's unsaved changes go with it). FinishModCheck shows what came of it.
+        void CheckModUpdates()
+        {
+            if (!mods::LiveAvailable())
+            {
+                ShowModNotice("Updates are checked at every game start (this PDPL can't change mods while the game runs).");
+                return;
+            }
+            if (g_checkingMods.exchange(true)) return;
+            SaveModList();
+            g_checkBefore.clear();
+            for (const ModRow& m : g_mods) g_checkBefore[m.id] = { m.sha, m.version.empty() ? m.tag : m.version };
+            Log(L"mods menu: checking for updates");
+            ShowModNotice("Checking for updates...");
+            g_modNoticeUntil = GetTickCount64() + 600000; // until it's done
+            std::thread([]
+            {
+                std::string why;
+                mods::Live result = mods::ApplyLive("update check", 600000, why);
+                {
+                    std::lock_guard guard(g_checkLock);
+                    g_checkResult = result;
+                    g_checkWhy = why;
+                }
+                g_checkDone = true;
+                g_checkingMods = false;
+            }).detach();
+        }
+
+        void FinishModCheck() // game thread, in the list
+        {
+            if (!g_checkDone.exchange(false)) return;
+            mods::Live result;
+            std::string why, text;
+            {
+                std::lock_guard guard(g_checkLock);
+                result = g_checkResult;
+                why = g_checkWhy;
+            }
+            auto add = [&](const std::string& s) { text += (text.empty() ? "" : " ") + s; };
+            auto list = [](std::string& to, const std::string& s) { to += (to.empty() ? "" : ", ") + s; };
+            if (result == mods::Live::Done)
+            {
+                LoadModList();
+                g_modPage = (std::min)(g_modPage, ModPages() - 1);
+                std::string updated, added, failed;
+                for (const ModRow& m : g_mods)
+                {
+                    const std::string& name = m.name.empty() ? m.id : m.name;
+                    auto old = g_checkBefore.find(m.id);
+                    std::string version = m.version.empty() ? m.tag : m.version;
+                    if (old == g_checkBefore.end()) list(added, name);
+                    else if (!m.sha.empty() && m.sha != old->second.first)
+                        list(updated, old->second.first.empty() ? name + " " + version + " (downloaded)" : old->second.second != version ? name + " " + old->second.second + " -> " + version : name);
+                }
+                for (const auto& [id, reason] : g_modsNotDownloaded) list(failed, id + " (" + reason + ")");
+                if (!updated.empty()) add("Updated: " + updated + ".");
+                if (!added.empty()) add("New in the list: " + added + ".");
+                if (!failed.empty()) add("Couldn't download: " + failed + ".");
+                if (!g_catalogRead) add("The mod catalog couldn't be reached, so nothing new was found.");
+                if (text.empty()) text = "Everything is up to date.";
+            }
+            else if (result == mods::Live::Restart) text = "These change at the next game start: " + why + ".";
+            else text = "Couldn't check now: " + (why.empty() ? std::string("see pdlaunch.log") : why) + ".";
+            Log(L"mods menu: update check: %S", text.c_str());
+            ShowModNotice(text);
+        }
+
+        void LeaveModList()
+        {
+            if (!SaveModList()) return;
             // Now, if PDPL can and nothing that loads only at start changed; else at the next start.
             if (mods::LiveAvailable())
                 std::thread([]
@@ -2923,54 +2954,47 @@ namespace pdnet::gamepatches
             if (InSettings() && g_modsList && (!args || args[0] == 0))
             {
                 // Each button acts once per press: the script reads the buttons several times a frame.
-                static bool held[5] = {}; // RB, LB, X, Y, A
+                static bool held[4] = {}; // RB, LB, A, Y
                 uint8_t keys[256];
                 bool haveKeys = KeysHeld(keys);
-                bool now[5] = {
+                bool now[4] = {
                     AnyPadHolds(0x800) || (haveKeys && (keys[VK_NEXT] || keys['E'])),  // RB, Page Down, E: next page
                     AnyPadHolds(0x400) || (haveKeys && (keys[VK_PRIOR] || keys['Q'])), // LB, Page Up, Q: previous page
-                    AnyPadHolds(0x10) || (haveKeys && keys['X']),                      // X: pick up / put down
-                    AnyPadHolds(0x20) || (haveKeys && keys['Y']),                      // Y: auto sort
                     (buttons & 0x1010) != 0,                                           // A: on / off
+                    AnyPadHolds(0x20) || (haveKeys && keys['Y']),                      // Y: check for updates
                 };
-                bool pressed[5];
-                for (int i = 0; i < 5; ++i) { pressed[i] = now[i] && !held[i]; held[i] = now[i]; }
+                bool pressed[4];
+                for (int i = 0; i < 4; ++i) { pressed[i] = now[i] && !held[i]; held[i] = now[i]; }
+                FinishModCheck();
+                static bool noticeShown = false; // an old notice gives the hints back
+                bool notice = GetTickCount64() < g_modNoticeUntil;
+                if (noticeShown && !notice) FillModPage();
+                noticeShown = notice;
                 int64_t manager = MenuManager();
                 int window = manager ? *reinterpret_cast<int16_t*>(manager + 0x10402) : -1;
                 int row = ListCursorRow(g_modRows); // the cursor (as in the Theatre)
-                size_t at = static_cast<size_t>(g_modPage) * kModRows + (row >= 0 ? row : 0);
+                size_t at = static_cast<size_t>(g_modPage) * g_modRows + (row >= 0 ? row : 0);
                 auto sound = [](int64_t which) { int64_t s[2] = { which, 0 }; reinterpret_cast<InputFn>(At(0x140261750))(s); };
-                if (g_movingMod >= 0 && row >= 0 && row < kModRows && static_cast<int>(at) != g_movingMod && at < g_mods.size()) MoveModTo(at); // carried with the cursor
                 if (pressed[0] || pressed[1])
                 {
                     sound(37);
-                    TurnModPage(pressed[0] ? 1 : -1, row);
+                    TurnModPage(pressed[0] ? 1 : -1);
                 }
-                if (pressed[4] && row >= 0 && at < g_mods.size())
+                if (g_checkingMods && (pressed[2] || pressed[3])) // the list stays as it is until the check is done
                 {
-                    sound(37);
-                    ToggleMod(at);
+                    sound(1);
+                    pressed[2] = pressed[3] = false;
+                }
+                if (pressed[3])
+                {
+                    sound(0);
+                    CheckModUpdates();
                 }
                 if (pressed[2] && row >= 0 && at < g_mods.size())
                 {
-                    if (g_movingMod >= 0)
-                    {
-                        Log(L"mods menu: %S put down at %d", g_mods[g_movingMod].id.c_str(), g_movingMod + 1);
-                        g_movingMod = -1;
-                        sound(0);
-                    }
-                    else if (g_mods[at].Movable())
-                    {
-                        g_movingMod = static_cast<int>(at);
-                        sound(0);
-                    }
-                    else sound(1); // the player's PDPL archives go by file name
-                    FillModPage();
-                }
-                if (pressed[3] && !g_mods.empty())
-                {
+                    g_modNoticeUntil = 0;
                     sound(37);
-                    AutoSortMods();
+                    ToggleMod(at);
                 }
                 return buttons & ~0x1010ll; // A is the list's, not the script's row action
             }
@@ -3004,7 +3028,7 @@ namespace pdnet::gamepatches
         bool CharacterSelectBar(const char* text, char* out, size_t size); // (below)
         int64_t HookedButtonBar(int64_t* args)
         {
-            const char* kSave = g_theatre ? kTheatreBar : g_modsList ? kModsBar : g_confirmingSave ? kConfirmBar : kNormalBar;
+            const char* kSave = g_theatre ? kTheatreBar : g_modsList ? (ModPages() > 1 ? kModsPagesBar : kModsBar) : g_confirmingSave ? kConfirmBar : kNormalBar;
             char text[64];
             if (args && args[0] == 1 && CopyString(reinterpret_cast<const char*>(args[1]), text, sizeof(text)) && strcmp(text, "LOADING") == 0 &&
                 CurrentMenu(MenuManager()) == kLobbyMenu && !g_matchLoadingSince)
