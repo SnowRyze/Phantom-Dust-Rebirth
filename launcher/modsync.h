@@ -6,6 +6,7 @@
 // turned off wait in RoamingState\mods\disabled\. PDPL's 1.2.2 DLL exports nothing, so pdnet can't look inside archives
 // through it; pdlaunch runs outside the game's sandbox and reads them: .zip with Windows' tar.exe, .7z with 7-Zip when
 // it's installed (tar.exe can't read .7z). An archive it can't read still goes to PDPL, just without its details.
+#include <functional>
 #include <string>
 
 namespace modsync
@@ -43,5 +44,10 @@ namespace modsync
     // of each mod are kept. Catalog mods that aren't
     // downloaded are listed in the state file too, without a path. net null: no catalog, no downloads.
     // gameDir: the game folder (for new map slots: the game's stage list and MNet.alr, mapslots.h); empty: no map slots.
-    void Sync(const std::wstring& localState, LogFn log, const Net* net, const std::wstring& catalogUrl, const std::wstring& gameDir);
+    // beforeFiles (live mod loading, while the game runs): called after the downloads and before any file the game could
+    // use is touched, with "" or why these changes can't be made while the game runs (something changes that the game or
+    // PDPL only reads at start: plugins, skill data, text, shaders, unknown files; BootOnly). False from it: nothing is
+    // changed and Sync returns false (a lobby's mods are put back for the next start).
+    bool Sync(const std::wstring& localState, LogFn log, const Net* net, const std::wstring& catalogUrl, const std::wstring& gameDir,
+              const std::function<bool(const std::string& needsRestart)>& beforeFiles = {});
 }

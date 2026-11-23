@@ -1,8 +1,11 @@
 #include "pch.h"
 #include "mods.h"
 #include "config.h"
+#include "gamepatches.h"
+#include "pdpl.h"
 #include "log.h"
 #include <algorithm>
+#include <condition_variable>
 #include <fstream>
 
 namespace pdnet::mods
@@ -11,7 +14,11 @@ namespace pdnet::mods
     {
         std::mutex g_resultsLock;
         std::vector<std::string> g_results;
-        bool g_lobbyStart = false;
+        std::atomic<bool> g_lobbyStart{ false };
+        std::mutex g_tagLock;
+        std::string g_tag;        // guarded by g_tagLock
+        bool g_tagRead = false;   // "
+        std::mutex g_liveLock;    // one live change at a time
 
         std::vector<std::string> Fields(const std::string& line, char sep)
         {
@@ -30,11 +37,12 @@ namespace pdnet::mods
         }
     }
 
-    const std::string& LobbyTag()
+    namespace
     {
-        static std::string tag = []
+        std::string ReadTag()
         {
             std::string out;
+            g_lobbyStart = false;
             if (!GetModuleHandleW(L"pd_loader_core.dll")) return out; // no PDPL this start: no mods loaded
             std::ifstream in(LocalStatePath() + L"\\pdnet\\mods-state.txt", std::ios::binary);
             std::string line;
@@ -54,10 +62,106 @@ namespace pdnet::mods
             }
             std::string list;
             for (auto& n : names) list += (list.empty() ? "" : ", ") + n;
-            Log(L"mods: gameplay mods this start (what lobbies compare): %S%s", list.empty() ? "none" : list.c_str(), g_lobbyStart ? L" - a lobby's, as asked when joining it" : L"");
+            Log(L"mods: gameplay mods in use (what lobbies compare): %S%s", list.empty() ? "none" : list.c_str(), g_lobbyStart ? L" - a lobby's, as asked when joining it" : L"");
             return out;
-        }();
-        return tag;
+        }
+
+        std::string LiveFile(const wchar_t* name)
+        {
+            std::ifstream in(LocalStatePath() + L"\\pdnet\\" + name, std::ios::binary);
+            return std::string(std::istreambuf_iterator<char>(in), {});
+        }
+
+        void WriteLiveFile(const wchar_t* name, const std::string& text)
+        {
+            std::wstring path = LocalStatePath() + L"\\pdnet\\" + name, tmp = path + L".tmp";
+            FILE* f = nullptr;
+            if (_wfopen_s(&f, tmp.c_str(), L"wb") || !f) return;
+            fwrite(text.data(), 1, text.size(), f);
+            fclose(f);
+            MoveFileExW(tmp.c_str(), path.c_str(), MOVEFILE_REPLACE_EXISTING);
+        }
+
+        // One live change, start to end (pdlaunch.cpp, WatchLiveMods, is the other side of the files).
+        Live RunLive(const std::string& reason, std::string& why)
+        {
+            if (!LiveAvailable()) { why = "PDPL here can't change mods while the game runs"; return Live::NotNow; }
+            if (!gamepatches::CanSwapMods()) { why = "a match or its lobby is on screen"; return Live::NotNow; }
+            static std::atomic<uint32_t> counter{ GetTickCount() };
+            std::string number = std::to_string(++counter);
+            Log(L"mods: live: asking pdlaunch (%S, request %S)", reason.c_str(), number.c_str());
+            WriteLiveFile(L"mods-live.txt", number);
+            bool working = false, unmounted = false;
+            Live result = Live::Failed;
+            ULONGLONG start = GetTickCount64();
+            for (;;)
+            {
+                Sleep(50);
+                std::string reply = LiveFile(L"mods-reply.txt");
+                std::string state = reply.rfind(number + "\t", 0) == 0 ? reply.substr(number.size() + 1) : "";
+                working = working || !state.empty();
+                ULONGLONG waited = GetTickCount64() - start;
+                if (!working && waited > 4000) { DeleteFileW((LocalStatePath() + L"\\pdnet\\mods-live.txt").c_str()); why = "pdlaunch didn't answer"; break; }
+                if (waited > 300000) { why = "pdlaunch took too long"; break; }
+                if (state == "ready" && !unmounted)
+                {
+                    std::string bad;
+                    if (!gamepatches::CanSwapMods()) bad = "a match or its lobby came on screen";
+                    else if (!pdpl::UnmountArchives(bad)) pdpl::MountArchives(); // some may be out already
+                    else unmounted = true;
+                    WriteLiveFile(L"mods-go.txt", number + (unmounted ? "\tgo" : "\tno"));
+                    if (!unmounted) { why = bad; result = Live::NotNow; break; }
+                }
+                else if (state == "done") { result = Live::Done; break; }
+                else if (state.rfind("restart", 0) == 0) { why = state.size() > 8 ? state.substr(8) : ""; result = Live::Restart; break; }
+                else if (state == "failed") { why = "pdlaunch couldn't (see pdlaunch.log)"; break; }
+            }
+            if (unmounted) pdpl::MountArchives(); // whatever is in the folder now: the new mods, or the old ones
+            if (result == Live::Done)
+            {
+                {
+                    std::lock_guard guard(g_tagLock);
+                    g_tag = ReadTag();
+                    g_tagRead = true;
+                }
+                gamepatches::ModsSwapped();
+            }
+            Log(L"mods: live: %s%S (%llu ms)", result == Live::Done ? L"done" : result == Live::Restart ? L"at the next game start, these load only then: " : L"not done: ", why.c_str(), GetTickCount64() - start);
+            return result;
+        }
+    }
+
+    std::string LobbyTag()
+    {
+        std::lock_guard guard(g_tagLock);
+        if (!g_tagRead) g_tag = ReadTag(), g_tagRead = true;
+        return g_tag;
+    }
+
+    bool LiveAvailable() { return pdpl::LiveReady(); }
+
+    Live ApplyLive(const char* reason, DWORD timeoutMs, std::string& why)
+    {
+        struct Shared { std::mutex lock; std::condition_variable ready; bool finished = false; Live result = Live::Failed; std::string why; };
+        auto shared = std::make_shared<Shared>();
+        std::thread([shared, text = std::string(reason)]
+        {
+            std::string w;
+            Live r;
+            {
+                std::lock_guard one(g_liveLock);
+                r = RunLive(text, w);
+            }
+            std::lock_guard guard(shared->lock);
+            shared->result = r;
+            shared->why = w;
+            shared->finished = true;
+            shared->ready.notify_all();
+        }).detach();
+        std::unique_lock guard(shared->lock);
+        if (!shared->ready.wait_for(guard, std::chrono::milliseconds(timeoutMs), [&] { return shared->finished; })) return Live::Busy;
+        why = shared->why;
+        return shared->result;
     }
 
     size_t Count(const std::string& lobbyTag) { return lobbyTag.empty() ? 0 : Fields(lobbyTag, ',').size(); }

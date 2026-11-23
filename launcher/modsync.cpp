@@ -877,12 +877,13 @@ namespace modsync
         }
     }
 
-    void Sync(const std::wstring& localState, LogFn log, const Net* net, const std::wstring& catalogUrl, const std::wstring& gameDir)
+    bool Sync(const std::wstring& localState, LogFn log, const Net* net, const std::wstring& catalogUrl, const std::wstring& gameDir,
+              const std::function<bool(const std::string& needsRestart)>& beforeFiles)
     {
         g_log = log;
         g_net = net;
         size_t cut = localState.find_last_of(L'\\');
-        if (localState.empty() || cut == std::wstring::npos) { log(L"mods: no LocalState folder - mods not synced"); return; }
+        if (localState.empty() || cut == std::wstring::npos) { log(L"mods: no LocalState folder - mods not synced"); return false; }
         std::wstring pdnetDir = localState + L"\\pdnet", roaming = localState.substr(0, cut) + L"\\RoamingState";
         std::wstring pdplDir = roaming + L"\\mods", disabledDir = pdplDir + L"\\disabled", localDir = pdnetDir + L"\\mods",
                      storeDir = pdnetDir + L"\\modstore", cacheDir = pdnetDir + L"\\modinfo";
@@ -1216,6 +1217,56 @@ namespace modsync
             return a.id < b.id;
         });
 
+        // ---- while the game runs: can these changes be made now? ----
+        // What the game or PDPL reads only at start must stay exactly as the last sync left it (mods-state.txt): the same
+        // mods with such files, in the same order. Nothing has been changed yet at this point.
+        if (beforeFiles)
+        {
+            auto bootOnly = [](const std::string& touches)
+            {
+                for (const auto& t : Split(touches, ','))
+                    if (t != "maps" && t != "models" && t != "animation" && t != "audio" && t != "ui") return true;
+                return false;
+            };
+            std::vector<std::string> before, after;
+            std::map<std::string, std::string> names;
+            std::vector<std::vector<std::string>> rows(1, std::vector<std::string>(1)); // lines of fields, empty ones kept (Split drops them)
+            for (char c : ReadText(pdnetDir + L"\\mods-state.txt"))
+            {
+                if (c == '\n') rows.emplace_back(1);
+                else if (c == '\t') rows.back().emplace_back();
+                else if (c != '\r') rows.back().back() += c;
+            }
+            for (auto& f : rows)
+            {
+                if (f[0] != "mod") continue;
+                f.resize((std::max<size_t>)(f.size(), 17));
+                if (f[2] != "on" || f[12].empty() || f[11].rfind("has plugins", 0) == 0 || !bootOnly(f[8])) continue;
+                before.push_back(f[1] + ":" + f[16]);
+                names[before.back()] = f[4].empty() ? f[1] : f[4];
+            }
+            for (const auto& m : mods)
+            {
+                if (!m.enabled || m.path.empty() || m.problem.rfind("has plugins", 0) == 0 || !bootOnly(Join(m.touches, ','))) continue;
+                after.push_back(m.id + ":" + m.sha.substr(0, 12));
+                names[after.back()] = m.name.empty() ? m.id : m.name;
+            }
+            std::string why;
+            if (before != after)
+            {
+                std::set<std::string> a(before.begin(), before.end()), b(after.begin(), after.end());
+                for (const auto& [key, name] : names)
+                    if (a.count(key) != b.count(key)) why += (why.empty() ? "" : ", ") + name;
+                if (why.empty()) why = "the order of mods that load at game start";
+            }
+            if (!beforeFiles(why))
+            {
+                // A lobby's request was for this sync: it's the next start's again.
+                if (lobbyStart) MoveFileExW((pdnetDir + L"\\lobby-mods.used.txt").c_str(), (pdnetDir + L"\\lobby-mods.txt").c_str(), MOVEFILE_REPLACE_EXISTING);
+                return false;
+            }
+        }
+
         // ---- PDPL's mods folder ----
         std::map<std::string, std::wstring> existing; // id -> our current file there
         for (const auto& f : List(pdplDir))
@@ -1372,5 +1423,6 @@ namespace modsync
         if (copied || renamed || removed || moved) log(L"mods: PDPL's mods folder: %d copied, %d renamed, %d removed, %d moved to or from disabled", copied, renamed, removed, moved);
         if (loose) log(L"mods: %zu loose file(s) in PDPL's mods folder: they win over every archive", loose);
         if (!conflicts.empty()) log(L"mods: some mods change the same files (mods-state.txt has the counts)");
+        return true;
     }
 }

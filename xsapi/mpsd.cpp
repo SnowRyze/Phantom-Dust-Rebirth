@@ -814,11 +814,20 @@ namespace pdnet::mpsd
                         {
                             std::string why;
                             bool asked = mods::RequestForNextStart(lobbyId, tag, why);
-                            Log(L"xsapi-pdnet: not joining lobby %S: its mods (%S) aren't this start's (%S) - %S", lobbyId.c_str(), tag.empty() ? "none" : tag.c_str(),
-                                mods::LobbyTag().empty() ? "none" : mods::LobbyTag().c_str(), asked ? "restart the game and join again" : why.c_str());
-                            status = mp::WriteSessionStatus::HandleNotFound; // the game's "couldn't join"
-                            if (asked) gamepatches::ModLobbyRefused(); // its message says why
-                            return nullptr;
+                            // Loaded now, if PDPL can and nothing that loads only at start is involved (up to 15 s: the
+                            // join goes on; a longer download goes on by itself, and the next try joins).
+                            mods::Live live = asked && mods::LiveAvailable() ? mods::ApplyLive("joining a lobby", 15000, why) : mods::Live::NotNow;
+                            if (mods::Differs(tag))
+                            {
+                                if (live == mods::Live::Done) mods::RequestForNextStart(lobbyId, tag, why); // the live sync used the request up
+                                Log(L"xsapi-pdnet: not joining lobby %S: its mods (%S) aren't the ones in use (%S) - %S", lobbyId.c_str(), tag.empty() ? "none" : tag.c_str(),
+                                    mods::LobbyTag().empty() ? "none" : mods::LobbyTag().c_str(),
+                                    live == mods::Live::Busy ? "still loading them, join again" : asked ? "restart the game and join again" : why.c_str());
+                                status = mp::WriteSessionStatus::HandleNotFound; // the game's "couldn't join"
+                                if (asked) gamepatches::ModLobbyRefused(); // its message says why
+                                return nullptr;
+                            }
+                            Log(L"xsapi-pdnet: lobby %S's mods are loaded - joining", lobbyId.c_str());
                         }
                     }
                     lobby = lobbies::Join(lobbyId, MemberAttributes(*mine));

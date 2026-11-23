@@ -1,7 +1,9 @@
 #include "pch.h"
 #include "pdpl.h"
 #include "log.h"
+#include <algorithm>
 #include <cstdio>
+#include <set>
 #include <share.h>
 #include <thread>
 #include <tlhelp32.h>
@@ -170,6 +172,140 @@ namespace pdnet::pdpl
         }
     }
 
+    namespace
+    {
+        struct Functions
+        {
+            int (*mount)(const char* path, const char* point, int append) = nullptr;
+            int (*unmount)(const char* path) = nullptr;
+            char** (*searchPath)() = nullptr;
+            void (*freeList)(void*) = nullptr;
+            int (*lastError)() = nullptr;
+            const char* (*errorText)(int) = nullptr;
+            int (*isInit)() = nullptr;
+            HANDLE* openMutex = nullptr; // PDPL's variable
+            bool ok = false;
+        };
+
+        const Functions& Pdpl()
+        {
+            static Functions f = []
+            {
+                Functions r;
+                HMODULE m = GetModuleHandleW(L"pd_loader_core.dll");
+                if (!m) return r;
+                auto get = [&](auto& to, const char* name) { to = reinterpret_cast<std::remove_reference_t<decltype(to)>>(GetProcAddress(m, name)); return to != nullptr; };
+                r.ok = get(r.mount, "PHYSFS_mount") && get(r.unmount, "PHYSFS_unmount") && get(r.searchPath, "PHYSFS_getSearchPath") &&
+                       get(r.freeList, "PHYSFS_freeList") && get(r.lastError, "PHYSFS_getLastErrorCode") && get(r.errorText, "PHYSFS_getErrorByCode") &&
+                       get(r.isInit, "PHYSFS_isInit") && get(r.openMutex, "open_mutex");
+                Log(L"pdpl: live mod loading: %s", r.ok ? L"PDPL's functions are there" : L"this PDPL doesn't export its functions - mods change at game start only");
+                return r;
+            }();
+            return f;
+        }
+
+        // PDPL's lock, held by its hook while it opens a file for the game.
+        struct OpenLock
+        {
+            bool held = false;
+            OpenLock()
+            {
+                HANDLE h = Pdpl().openMutex ? *Pdpl().openMutex : nullptr;
+                DWORD wait = h ? WaitForSingleObject(h, 5000) : WAIT_FAILED;
+                held = wait == WAIT_OBJECT_0 || wait == WAIT_ABANDONED;
+            }
+            ~OpenLock() { if (held) ReleaseMutex(*Pdpl().openMutex); }
+        };
+
+        std::vector<std::string> SearchPath()
+        {
+            std::vector<std::string> out;
+            if (char** list = Pdpl().searchPath())
+            {
+                for (char** p = list; *p; ++p) out.push_back(*p);
+                Pdpl().freeList(list);
+            }
+            return out;
+        }
+
+        bool IsArchive(const std::string& path)
+        {
+            auto ends = [&](const char* e) { size_t n = strlen(e); return path.size() > n && _stricmp(path.c_str() + path.size() - n, e) == 0; };
+            return ends(".zip") || ends(".7z");
+        }
+
+        const char* LastError() { const char* t = Pdpl().errorText(Pdpl().lastError()); return t ? t : "?"; }
+    }
+
+    bool LiveReady()
+    {
+        const Functions& f = Pdpl();
+        return f.ok && f.isInit() && *f.openMutex;
+    }
+
+    bool UnmountArchives(std::string& why)
+    {
+        if (!LiveReady()) { why = "PDPL's functions aren't there"; return false; }
+        OpenLock lock;
+        if (!lock.held) { why = "PDPL is busy opening a file"; return false; }
+        int taken = 0;
+        for (const std::string& path : SearchPath())
+        {
+            if (!IsArchive(path)) continue; // the mods folder and the game folder
+            if (Pdpl().unmount(path.c_str())) { ++taken; continue; }
+            why = path + ": " + LastError();
+            return false;
+        }
+        Log(L"pdpl: live: %d archive(s) unmounted", taken);
+        return true;
+    }
+
+    int MountArchives()
+    {
+        if (!LiveReady()) return 0;
+        OpenLock lock;
+        std::vector<std::string> path = SearchPath();
+        std::string mods, game;
+        std::set<std::string> mounted;
+        for (const std::string& p : path)
+        {
+            if (IsArchive(p)) mounted.insert(p);
+            else if (mods.empty()) mods = p; // PDPL mounts its mods folder first and the game folder last
+            else game = p;
+        }
+        if (!lock.held || mods.empty())
+        {
+            Log(L"pdpl: live: archives not mounted (%s)", lock.held ? L"PDPL's mods folder isn't in its list" : L"PDPL is busy opening a file");
+            return 0;
+        }
+        std::vector<std::string> files; // the names, sorted as PhysicsFS sorts them for PDPL (by bytes)
+        WIN32_FIND_DATAW found;
+        HANDLE find = FindFirstFileW((std::wstring(winrt::to_hstring(mods)) + L"\\*").c_str(), &found);
+        if (find != INVALID_HANDLE_VALUE)
+        {
+            do
+            {
+                std::string name = winrt::to_string(found.cFileName);
+                if (!(found.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) && IsArchive(name)) files.push_back(name);
+            } while (FindNextFileW(find, &found));
+            FindClose(find);
+        }
+        std::sort(files.begin(), files.end());
+        // The game folder stays last: out, the archives in, back in. (Files it would answer are opened normally meanwhile.)
+        if (!game.empty()) Pdpl().unmount(game.c_str());
+        int count = 0;
+        for (const std::string& name : files)
+        {
+            std::string full = mods + "\\" + name;
+            if (mounted.count(full)) Pdpl().unmount(full.c_str()); // left from an unmount that failed half way: in its place
+            if (Pdpl().mount(full.c_str(), "/", 1)) ++count;
+            else Log(L"pdpl: live: %S not mounted: %S", name.c_str(), LastError());
+        }
+        if (!game.empty() && !Pdpl().mount(game.c_str(), "/", 1)) Log(L"pdpl: live: the game folder not mounted: %S", LastError());
+        Log(L"pdpl: live: %d of %zu archive(s) mounted", count, files.size());
+        return count;
+    }
+
     void BeforeLoad()
     {
         if (g_prepared.exchange(true)) return;
@@ -212,6 +348,19 @@ namespace pdnet::pdpl
             std::thread(ReadPipe).detach();
             output = true;
         }
+        // PDPL's last act is a loop that reads commands from its console while its variable "running" is true. The MinGW
+        // build (2026-11-23) uses msvcrt.dll, whose standard input was set up before the handles above were replaced, so
+        // its fgets returns at once and the loop used a whole CPU core (64531 ms in the first minute, seen in game). The
+        // DLL exports the variable: cleared, the loop ends (or never starts); its hook and plugins don't need it.
+        std::thread([]
+        {
+            for (int i = 0; i < 3000; ++i, Sleep(20)) // a minute
+                if (HMODULE m = GetModuleHandleW(L"pd_loader_core.dll"))
+                {
+                    if (auto running = reinterpret_cast<volatile bool*>(GetProcAddress(m, "running"))) *running = false;
+                    return;
+                }
+        }).detach();
         Log(L"pdpl: ready for PDPL (%s; input %s)", !output ? L"its output is lost" : g_console ? L"hidden console, read into pdnet\\pdpl.log" : L"no console: a pipe into pdnet\\pdpl.log, in 4 KB blocks",
             input ? L"an empty pipe" : L"NOT replaced");
     }
@@ -232,6 +381,7 @@ namespace pdnet::pdpl
                 Log(L"pdpl: not in the game (mods=off, safe mode, or pdlaunch couldn't load it: see pdlaunch.log)");
                 return;
             }
+            Pdpl(); // logs whether mods can change while the game runs
             Log(L"pdpl: pd_loader_core.dll is in the game%s", g_prepared ? L"" : L" (without pdnet's console and pipes: an older pdlaunch?)");
             // The mod list pdlaunch put in PDPL's mods folder this start (launcher\modsync.cpp).
             if (FILE* f = nullptr; !_wfopen_s(&f, (LocalStatePath() + L"\\pdnet\\mods-state.txt").c_str(), L"rb") && f)
