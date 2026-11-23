@@ -202,6 +202,7 @@ if ($Mode -notin 'build', 'experimental', 'conceptual', 'fix') { Fail "Unknown a
 # ---- fix: what has to be true before a bug-fix Stable is built -------------------------------------------------------
 if ($Mode -eq 'fix') {
     if (-not $Arg) { Fail 'build.bat fix needs notes: what was fixed.' }
+    if (Test-Path $Arg -PathType Leaf) { $Arg = (Get-Content $Arg -Raw -Encoding UTF8).Trim() } # a file with the notes: a batch file can't take several lines
     $ErrorActionPreference = 'Continue'
     git -C $root fetch -q origin --tags 2>$null
     $stables = PublishedStables
