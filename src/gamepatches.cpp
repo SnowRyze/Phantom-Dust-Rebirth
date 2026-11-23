@@ -7849,13 +7849,14 @@ namespace pdnet::gamepatches
         // While pdnet's link to that peer is still open, the countdown is now held at 2 for up to kKeepHoldMs: the game
         // waits for the peer (FUN_14012bbb0 holds frames while a peer's data is old), the link's reliable packets
         // arrive when EOS restores it, and the match goes on together. A peer that has left has no link, and is dropped
-        // as before. The peer's EOS id is in its entry (+0x5e, 16 bytes; the sda endpoint snapshot).
+        // as before. The peer's EOS id is in its entry (+0x4e, 16 bytes: in the sda
+        // endpoint snapshot, PDN1, at +0x2c). Until 2026-11-23 it was read at +0x5e, so no peer was ever held.
         constexpr ULONGLONG kKeepHoldMs = 20000;
         ULONGLONG g_holdSince[16]{};
 
         std::string PeerEosId(int i)
         {
-            const uint8_t* e = At(0x140595ea8) + i * 0x298 + 0x5e;
+            const uint8_t* e = At(0x140595ea8) + i * 0x298 + 0x4e;
             std::string id;
             bool any = false;
             for (int k = 0; k < 16; ++k) { char two[3]; sprintf_s(two, "%02x", e[k]); id += two; any = any || e[k]; }
@@ -7882,7 +7883,7 @@ namespace pdnet::gamepatches
                     Log(L"peers: peer %d (slot %d, %S) has gone quiet but its link is open - the game waits for it (up to %llu s)", i, e[1], id.substr(0, 8).c_str(), kKeepHoldMs / 1000);
                 }
                 if (now - g_holdSince[i] < kKeepHoldMs) e[3] = 2;
-                else if (e[3] == 2) Log(L"peers: peer %d (slot %d) quiet for %llu s - the game drops it", i, e[1], (now - g_holdSince[i]) / 1000);
+                else if (e[3] == 1) Log(L"peers: peer %d (slot %d) quiet for %llu s - the game drops it", i, e[1], (now - g_holdSince[i]) / 1000);
             }
         }
 
@@ -7921,6 +7922,120 @@ namespace pdnet::gamepatches
 
     namespace
     {
+        // Crash log (2026-11-23: SnowTide's game closed right after a lobby search and the log ended without a word). A
+        // memory error or bad instruction is logged as it happens, with its call stack (Ghidra addresses in the game's own
+        // code), once per place and at most 20 per run: some are caught and harmless, so only the last one before the log
+        // ends says anything. An exception nothing caught is logged as that. Fail-fast ends (0xC0000409 / 0xC000027B)
+        // skip every handler and can't be seen here.
+        LPTOP_LEVEL_EXCEPTION_FILTER g_nextFilter = nullptr;
+        thread_local bool g_inCrashLog = false;
+
+        std::wstring CodePlace(uint64_t address)
+        {
+            uint64_t image = reinterpret_cast<uint64_t>(At(kGhidraBase));
+            wchar_t one[MAX_PATH + 32];
+            if (address >= image && address < image + 0x1000000)
+            {
+                swprintf_s(one, L" %llx", address - image + kGhidraBase);
+                return one;
+            }
+            HMODULE module = nullptr;
+            wchar_t name[MAX_PATH] = L"?";
+            if (GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT, reinterpret_cast<LPCWSTR>(address), &module))
+                GetModuleFileNameW(module, name, MAX_PATH);
+            const wchar_t* file = wcsrchr(name, L'\\');
+            swprintf_s(one, L" %s+%llx", file ? file + 1 : name, address - reinterpret_cast<uint64_t>(module));
+            return one;
+        }
+
+        // The stack pointer is only followed inside this thread's stack: the registers of a crash may hold anything.
+        int CrashFrames(CONTEXT context, uint64_t* frames, int most)
+        {
+            ULONG_PTR low = 0, high = 0;
+            GetCurrentThreadStackLimits(&low, &high);
+            int count = 0;
+            for (; count < most && context.Rip; ++count)
+            {
+                frames[count] = context.Rip;
+                if (context.Rsp < low || context.Rsp + 8 > high) return count + 1;
+                DWORD64 base = 0;
+                PRUNTIME_FUNCTION entry = RtlLookupFunctionEntry(context.Rip, &base, nullptr);
+                if (!entry)
+                {
+                    context.Rip = *reinterpret_cast<DWORD64*>(context.Rsp);
+                    context.Rsp += 8;
+                    continue;
+                }
+                void* handlerData = nullptr;
+                DWORD64 establisher = 0;
+                RtlVirtualUnwind(UNW_FLAG_NHANDLER, base, context.Rip, entry, &context, &handlerData, &establisher, nullptr);
+            }
+            return count;
+        }
+
+        void LogCrash(const wchar_t* what, EXCEPTION_POINTERS* info)
+        {
+            const EXCEPTION_RECORD& r = *info->ExceptionRecord;
+            uint64_t frames[24] = {};
+            int count = CrashFrames(*info->ContextRecord, frames, 24);
+            std::wstring stack;
+            for (int i = 0; i < count; ++i) stack += CodePlace(frames[i]);
+            std::wstring access;
+            if (r.ExceptionCode == EXCEPTION_ACCESS_VIOLATION && r.NumberParameters >= 2)
+            {
+                wchar_t text[64];
+                swprintf_s(text, L", %s %llx", r.ExceptionInformation[0] == 1 ? L"writing" : r.ExceptionInformation[0] == 8 ? L"running" : L"reading",
+                           static_cast<uint64_t>(r.ExceptionInformation[1]));
+                access = text;
+            }
+            Log(L"crash: %s %08X%s (game state %d) at:%s", what, r.ExceptionCode, access.c_str(), *reinterpret_cast<int32_t*>(At(0x1404bc950)), stack.c_str());
+        }
+
+        LONG CALLBACK OnMemoryError(EXCEPTION_POINTERS* info)
+        {
+            DWORD code = info->ExceptionRecord->ExceptionCode;
+            if (code != EXCEPTION_ACCESS_VIOLATION && code != EXCEPTION_ILLEGAL_INSTRUCTION && code != EXCEPTION_PRIV_INSTRUCTION
+                && code != EXCEPTION_INT_DIVIDE_BY_ZERO) return EXCEPTION_CONTINUE_SEARCH;
+            if (g_inCrashLog) return EXCEPTION_CONTINUE_SEARCH;
+            constexpr int kPlaces = 20;
+            static std::atomic<uint64_t> places[kPlaces];
+            uint64_t at = reinterpret_cast<uint64_t>(info->ExceptionRecord->ExceptionAddress) | 1ull << 63; // never 0 (an empty place)
+            for (int i = 0; i < kPlaces; ++i)
+            {
+                uint64_t seen = 0;
+                if (places[i].compare_exchange_strong(seen, at))
+                {
+                    g_inCrashLog = true;
+                    LogCrash(L"error (caught and harmless if the game goes on)", info);
+                    g_inCrashLog = false;
+                    break;
+                }
+                if (seen == at) break;
+            }
+            return EXCEPTION_CONTINUE_SEARCH;
+        }
+
+        LONG WINAPI OnUncaught(EXCEPTION_POINTERS* info)
+        {
+            if (!g_inCrashLog)
+            {
+                g_inCrashLog = true;
+                LogCrash(L"nothing caught exception", info);
+                g_inCrashLog = false;
+            }
+            return g_nextFilter ? g_nextFilter(info) : EXCEPTION_CONTINUE_SEARCH;
+        }
+
+        void WatchCrashes()
+        {
+            AddVectoredExceptionHandler(0, OnMemoryError); // last: other handlers (the game's, PDPL's) go first
+            g_nextFilter = SetUnhandledExceptionFilter(OnUncaught);
+            Log(L"gamepatch: crashes are logged");
+        }
+    }
+
+    namespace
+    {
         // The game keeps running while its window is hidden (the user, 2026-11-22: alt-tabbed players hung others' joins
         // and, after a while, got players dropped from the lobby). The game's main loop (FUN_1400087c0, the usual Store
         // app loop) only updates the game while its "window visible" flag (+0x41, set from CoreWindow's VisibilityChanged)
@@ -7946,6 +8061,7 @@ namespace pdnet::gamepatches
         std::call_once(once, []
         {
             RunWhileHidden();
+            WatchCrashes();
             WatchPeerDrops();
             labtests::Install(); // the dead camera and Theatre playback
             film::Start();       // Theatre films: every online match is recorded

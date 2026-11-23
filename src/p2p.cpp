@@ -788,6 +788,7 @@ namespace pdnet::p2p
             for (auto& [peer, link] : g_links) links.push_back(peer);
             for (auto& [peer, path] : g_paths) peers.push_back(peer);
             for (auto& [peer, list] : g_early) peers.push_back(peer);
+            g_early.clear(); // else every later search closed the same connections again
         }
         for (auto& peer : links)
         {
