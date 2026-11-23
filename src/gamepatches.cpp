@@ -8036,6 +8036,54 @@ namespace pdnet::gamepatches
 
     namespace
     {
+        // Crash while looking for a lobby (SnowTide 2026-11-23 14:25; relic0 the same evening at 20:13 and 20:15, with call
+        // stacks). The game's multiplayer update, FUN_140068bc0 (each frame, main thread), takes its session manager
+        // [+0xd8] without a reference and waits for that object's lock (+0x60). Leaving multiplayer, FUN_14006d1e0 on
+        // another thread holds that lock while it empties the object (FUN_1400a1800), then frees it: the update wakes up
+        // holding a freed object's lock and walks its freed list. The update now holds a reference (the shared_ptr's
+        // control block at +0xe0: +8 uses, +0xc weak) while it runs; the emptied list is then simply empty.
+        using MultiplayerUpdateFn = void (*)(int64_t);
+        MultiplayerUpdateFn g_multiplayerUpdate = nullptr;
+
+        int64_t PinSessions(int64_t manager)
+        {
+            __try
+            {
+                int64_t control = *reinterpret_cast<volatile int64_t*>(manager + 0xe0);
+                if (!control) return 0;
+                auto uses = reinterpret_cast<volatile long*>(control + 8);
+                for (long n = *uses; n > 0;)
+                {
+                    long was = InterlockedCompareExchange(uses, n + 1, n);
+                    if (was == n) return control;
+                    n = was;
+                }
+            }
+            __except (EXCEPTION_EXECUTE_HANDLER) {}
+            return 0;
+        }
+
+        void HookedMultiplayerUpdate(int64_t manager)
+        {
+            int64_t control = PinSessions(manager);
+            g_multiplayerUpdate(manager);
+            if (!control || InterlockedDecrement(reinterpret_cast<volatile long*>(control + 8)) != 0) return;
+            Log(L"gamepatch: the session manager was freed during the multiplayer update (held until now)");
+            auto vtable = *reinterpret_cast<void (***)(int64_t)>(control);
+            vtable[0](control); // destroys the object
+            if (InterlockedDecrement(reinterpret_cast<volatile long*>(control + 12)) == 0) vtable[1](control); // the control block
+        }
+
+        void SafeMultiplayerUpdate()
+        {
+            const std::vector<uint8_t> start = { 0x40, 0x57, 0x48, 0x81, 0xec, 0xb0, 0x00, 0x00, 0x00 };
+            g_multiplayerUpdate = reinterpret_cast<MultiplayerUpdateFn>(InlineHookBytes(0x140068bc0, start, start, reinterpret_cast<void*>(&HookedMultiplayerUpdate), L"multiplayer update"));
+            if (g_multiplayerUpdate) Log(L"gamepatch: multiplayer update holds its session manager");
+        }
+    }
+
+    namespace
+    {
         // The game keeps running while its window is hidden (the user, 2026-11-22: alt-tabbed players hung others' joins
         // and, after a while, got players dropped from the lobby). The game's main loop (FUN_1400087c0, the usual Store
         // app loop) only updates the game while its "window visible" flag (+0x41, set from CoreWindow's VisibilityChanged)
@@ -8062,6 +8110,7 @@ namespace pdnet::gamepatches
         {
             RunWhileHidden();
             WatchCrashes();
+            SafeMultiplayerUpdate();
             WatchPeerDrops();
             labtests::Install(); // the dead camera and Theatre playback
             film::Start();       // Theatre films: every online match is recorded
