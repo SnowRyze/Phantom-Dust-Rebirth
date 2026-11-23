@@ -31,6 +31,8 @@ namespace pdnet::gamepatches
         std::atomic<bool> g_theatre{ false }; // the Settings screen (menu 68) is showing the Theatre's film list
         std::atomic<bool> g_modsList{ false }; // the Settings screen is showing the Mods list (Conceptual; was Quick Join)
         void LeaveModList(); // (below)
+        std::atomic<bool> g_modsSwapped{ false }; // mods changed while the game runs: ReloadMapSlots (below) is due
+        void ReloadMapSlots();
         std::atomic<uint8_t> g_bodyTags{ 0 }; // nametags on dead bodies wanted (the lobby host's setting)
         // What the game's nametag code reads (routines below), kept current by NametagColours: dead bodies keep their
         // tag only in Tag Team, and each other player's tag colour by match slot (ally / enemy, both ARGB twice).
@@ -1350,7 +1352,7 @@ namespace pdnet::gamepatches
         std::atomic<ULONGLONG> g_modRefusedAt{ 0 };
         constexpr char kNoSession[] = "Could not find a session.";
         constexpr char kTradeText[] = "You cannot join this game session because it is currently in a trade.";
-        constexpr char kModText[] = "This lobby uses mods. Restart the game\nto load them, then join again.";
+        constexpr char kModText[] = "This lobby uses mods. Join again soon,\nor restart the game first.";
         static_assert(sizeof(kModText) <= sizeof(kTradeText), "written over the trade message");
 
         std::set<uint32_t*> g_modSwapped; // the pushes ModMessageScript pointed at the modded-lobby message
@@ -2241,7 +2243,7 @@ namespace pdnet::gamepatches
                 else if (!notDownloaded && !m.problem.empty()) hint += " (" + m.problem + ")";
                 if (!m.Movable()) hint += " PDPL folder: ordered by file name.";
                 if (static_cast<int>(i) == g_movingMod) hint += " Up / down to move, X to put it down.";
-                if (g_modsDirty) hint += "\nChanges apply at the next game start.";
+                if (g_modsDirty) hint += mods::LiveAvailable() ? "\nChanges load when you leave this list (plugins, skills and text at the next start)." : "\nChanges apply at the next game start.";
                 hint += page;
                 strcpy_s(g_modHint[r], hint.substr(0, sizeof(g_modHint[r]) - 1).c_str());
             }
@@ -2364,7 +2366,14 @@ namespace pdnet::gamepatches
                 if (m.on) enabled += (enabled.empty() ? "" : ",") + m.id;
             }
             SaveSettings({ { "mods_order", order }, { "mods_enabled", enabled } });
-            Log(L"mods menu: saved for the next game start - order %S; on: %S", order.c_str(), enabled.empty() ? "none" : enabled.c_str());
+            Log(L"mods menu: saved - order %S; on: %S", order.c_str(), enabled.empty() ? "none" : enabled.c_str());
+            // Now, if PDPL can and nothing that loads only at start changed; else at the next start.
+            if (mods::LiveAvailable())
+                std::thread([]
+                {
+                    std::string why;
+                    mods::ApplyLive("the Mods list", 600000, why);
+                }).detach();
         }
 
         struct Colour { const char* name; uint32_t rgb; };
@@ -2871,6 +2880,7 @@ namespace pdnet::gamepatches
         int64_t HookedButtons(int64_t* args)
         {
             int64_t buttons = g_buttons(args);
+            if (g_modsSwapped) ReloadMapSlots(); // a live mod change: the game's thread, in a menu
             if ((!args || args[0] == 0) && CurrentMenu(MenuManager()) == kCharacterMenu) return CharacterSelectButtons(buttons);
             if (InSettings() && g_theatre && (!args || args[0] == 0))
             {
@@ -3281,7 +3291,7 @@ namespace pdnet::gamepatches
             {
                 const MapSlot* slot = nullptr;
                 for (const MapSlot& s : g_mapSlots) if (s.entry == n) slot = &s;
-                if (n < now && !slot) continue; // the game's own entry
+                if (n < now && !slot) continue; // an entry that's there already
                 uint8_t* e = table + n * kStageEntrySize;
                 if (slot) sprintf_s(g_stageText[n][0], "%s", slot->name.substr(0, 47).c_str()), sprintf_s(g_stageText[n][1], "st%02d", n);
                 else sprintf_s(g_stageText[n][0], "%02d Dummy", n), sprintf_s(g_stageText[n][1], "%02d Dummy", n);
@@ -3318,6 +3328,7 @@ namespace pdnet::gamepatches
         // From HookedAddIdItem, after the game added a row (position = the row's index) to window.
         void AddMapSlotRows(int64_t* args, int window, int position)
         {
+            if (position == 0) ReloadMapSlots();
             if (g_mapSlots.empty() || CurrentMenu(MenuManager()) != kStageMenu || window < 0 || position < 0) return;
             if (position == 0) memset(g_mapRowSlot, -1, sizeof(g_mapRowSlot));
             if (args[0] != 108) return; // stage 8: the script's last row
@@ -3398,6 +3409,7 @@ namespace pdnet::gamepatches
         QueueMapFileFn g_queueMapFile = nullptr;
         void HookedQueueMapFile(int64_t list, uint64_t* entry, uint64_t buffer)
         {
+            ReloadMapSlots();
             int map = *reinterpret_cast<int32_t*>(At(0x140530264));
             if (map >= 30 && map < 65 && g_mapFiles[map][0].name)
             {
@@ -3414,10 +3426,13 @@ namespace pdnet::gamepatches
             g_queueMapFile(list, entry, buffer);
         }
 
-        void MapSlots()
+        // map-slots.txt -> g_mapSlots and the map files' names (start-up, and on the game's thread after a live change).
+        void LoadMapSlots()
         {
+            g_mapSlots.clear();
+            g_mapWindow = -1;
             memset(g_mapRowSlot, -1, sizeof(g_mapRowSlot));
-            if (!GetModuleHandleW(L"pd_loader_core.dll")) return; // no PDPL: the game has its own stage list
+            for (auto& files : g_mapFiles) files[0].name = files[1].name = nullptr;
             std::ifstream in(LocalStatePath() + L"\\pdnet\\map-slots.txt", std::ios::binary);
             std::string line;
             while (std::getline(in, line))
@@ -3432,7 +3447,40 @@ namespace pdnet::gamepatches
                     g_mapSlots.push_back({ entry, sprite, name.empty() ? "Map " + std::to_string(entry) : name });
                 }
             }
-            if (g_mapSlots.empty()) return;
+            for (const MapSlot& s : g_mapSlots)
+                for (int f = 0; f < 2; ++f)
+                {
+                    sprintf_s(g_mapFileNames[s.entry][f], "st%02d.%s", s.entry, f ? "dat" : "alr");
+                    g_mapFiles[s.entry][f].name = g_mapFileNames[s.entry][f];
+                }
+        }
+
+        // A live change (mods::ApplyLive): applied on the game's thread, before anything uses the slots.
+        std::atomic<uint32_t> g_mnetGeneration{ 1 }; // pdnet's MNet.alr copy is made again for each (the map previews)
+        void ReloadMapSlots()
+        {
+            if (!g_modsSwapped.exchange(false) || !g_addIdItem || !g_queueMapFile) return;
+            g_mapPreviewSprite = -1; // until the game loads MNET again, with the new previews
+            ++g_mnetGeneration;
+            LoadMapSlots();
+            // The slots that went away: their entries stay (the table can't get shorter under the game) but aren't
+            // multiplayer maps any more; the others get their names again.
+            int count = *reinterpret_cast<int32_t*>(At(0x14050a5d0));
+            for (int n = 30; n < count && n < 65; ++n)
+            {
+                uint8_t* e = At(0x140509ba0) + n * kStageEntrySize;
+                *reinterpret_cast<int32_t*>(e + 0x20) = 0;
+            }
+            EnsureStageEntries(L"live change");
+            Log(L"gamepatch: map picker: %zu new map(s) after the live change", g_mapSlots.size());
+        }
+
+        void MapSlots()
+        {
+            memset(g_mapRowSlot, -1, sizeof(g_mapRowSlot));
+            if (!GetModuleHandleW(L"pd_loader_core.dll")) return; // no PDPL: the game has its own stage list
+            LoadMapSlots();
+            if (g_mapSlots.empty() && !mods::LiveAvailable()) return; // (live: maps can come later, so the hooks go in now)
             int count = *reinterpret_cast<int32_t*>(At(0x14050a5d0));
             if (!g_addIdItem)
             {
@@ -3443,12 +3491,6 @@ namespace pdnet::gamepatches
             bool hooks = WrapCommand<MenuCommandFn>(0x1403eefe0 + 87 * 8, 0x140208340, &HookedStageQuery, g_stageQuery, L"map picker stage query") &&
                          WrapCommand<MenuCommandFn>(0x1403eefe0 + 18 * 8, 0x140207730, &HookedDrawSheetSprite, g_drawSheetSprite, L"map picker preview") &&
                          WrapCommand<SessionCommandFn>(0x1403f1150 + 40 * 8, 0x140213c00, &HookedStagePick, g_stagePick, L"map picker pick");
-            for (const MapSlot& s : g_mapSlots)
-                for (int f = 0; f < 2; ++f)
-                {
-                    sprintf_s(g_mapFileNames[s.entry][f], "st%02d.%s", s.entry, f ? "dat" : "alr");
-                    g_mapFiles[s.entry][f].name = g_mapFileNames[s.entry][f];
-                }
             // mov [rsp+8], rbx / mov eax, [rdx+8] (the next instruction is RIP-relative)
             std::vector<uint8_t> start = { 0x48, 0x89, 0x5C, 0x24, 0x08, 0x8B, 0x42, 0x08 };
             g_queueMapFile = reinterpret_cast<QueueMapFileFn>(InlineHookBytes(0x14021ab70, start, start, reinterpret_cast<void*>(&HookedQueueMapFile), L"map load files"));
@@ -4309,7 +4351,7 @@ namespace pdnet::gamepatches
                 modTag = row >= 0 ? mods::SearchResultTag(static_cast<size_t>(row)) : std::string();
             }
             // Mods: "(Unrated, 2 mods)"; ", restart to join" when they aren't this start's (joining sets them up for the next).
-            const char* restart = !inLobby && mods::Differs(modTag) ? ", restart to join" : "";
+            const char* restart = !inLobby && mods::Differs(modTag) ? (mods::LiveAvailable() ? ", loaded on joining" : ", restart to join") : "";
             if (!modTag.empty())
             {
                 size_t n = mods::Count(modTag);
@@ -6515,16 +6557,21 @@ namespace pdnet::gamepatches
             }
             if (n > 14 && _wcsicmp(name + n - 13, L"menu\\MNet.alr") == 0 && (name[n - 14] == L'/' || name[n - 14] == L'\\') && (GetConfig().charselPortraits || MapPreviewsWanted()))
             {
-                static std::once_flag once;
+                // Made once, and again after a live mod change (the map previews are in it).
+                static std::mutex making;
                 static std::wstring copy;
-                std::call_once(once, [name, n]
+                static uint32_t made = 0;
+                std::lock_guard one(making);
+                if (uint32_t generation = g_mnetGeneration; made != generation)
                 {
+                    made = generation;
+                    copy.clear();
                     // the game's data folder as it names it (for variant builds before any player file is opened)
                     g_dataPrefix = std::wstring(name, name + n - 13);
                     Log(L"variants: data folder '%s'", g_dataPrefix.c_str());
                     std::wstring path = LocalStatePath() + L"\\pdnet\\MNet.alr";
                     if (MakeMnetCopy(name, path)) copy = path;
-                });
+                }
                 if (!copy.empty()) return g_createFile2(copy.c_str(), access, share, disposition, params);
             }
             // debug_menu=on (developer copies): the debug menu's script is menu 2's menu1_en.ssb; a copy that has it as
@@ -8281,6 +8328,20 @@ namespace pdnet::gamepatches
         int menu = manager ? CurrentMenu(manager) : -1;
         return menu == 38 || menu == 43;
     }
+
+    bool CanSwapMods()
+    {
+        int64_t manager = MenuManager();
+        int menu = manager ? CurrentMenu(manager) : -1;
+        if (!manager || InMatch() || g_testBattle || g_testPicking != kPickingNone) return false;
+        {
+            std::lock_guard guard(g_shareLock);
+            if (!g_variantLobby.empty()) return false; // in a game lobby, whatever menu is on screen
+        }
+        return menu != 1 && menu != kLobbyMenu && menu != kCharacterMenu && menu != kStageMenu && menu != kArsenalPickMenu;
+    }
+
+    void ModsSwapped() { g_modsSwapped = true; }
 
     void ModLobbyRefused()
     {

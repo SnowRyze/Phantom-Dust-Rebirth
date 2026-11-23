@@ -20,6 +20,7 @@
 #include <cstdio>
 #include <set>
 #include <string>
+#include <share.h>
 #include <thread>
 #include <vector>
 #include <SDL3/SDL.h>  // types only: SDL3.dll is loaded at run time (ReadControllers)
@@ -192,6 +193,81 @@ namespace
     // opens until its mods are mounted; the game mustn't run before that hook is in, or its first files would bypass PDPL.
     // MinHook puts a jump (E9) at the start of KERNELBASE!CreateFile2, which is at the same address in every process of
     // this boot, so pdlaunch reads that byte in the game until it changes (5 s at most).
+    std::wstring GameFolder(DWORD pid) // where PDUWP.exe runs from (new map slots read the game's stage list there)
+    {
+        std::wstring dir;
+        if (HANDLE game = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, pid))
+        {
+            wchar_t image[MAX_PATH] = {};
+            DWORD size = MAX_PATH;
+            if (QueryFullProcessImageNameW(game, 0, image, &size)) { dir = image; dir = dir.substr(0, dir.find_last_of(L'\\')); }
+            CloseHandle(game);
+        }
+        return dir;
+    }
+
+    // Live mod loading (pdnet's mods::ApplyLive): until the game exits, mods are synced again whenever pdnet asks. Files in
+    // LocalState\pdnet, each "<number>[<tab>text]" and written whole (a .tmp renamed):
+    //   mods-live.txt   pdnet:    a new request
+    //   mods-reply.txt  pdlaunch: "<n> working" at once; "<n> ready" once everything is downloaded and the changes can be made
+    //                             while the game runs; then "<n> done", or "<n> restart <why>" / "<n> failed" (nothing changed)
+    //   mods-go.txt     pdnet:    "<n> go" when its archives are unmounted (or "<n> no": not now)
+    void WriteLive(const std::wstring& path, const std::string& text)
+    {
+        std::wstring tmp = path + L".tmp";
+        FILE* f = nullptr;
+        if (_wfopen_s(&f, tmp.c_str(), L"wb") || !f) return;
+        fwrite(text.data(), 1, text.size(), f);
+        fclose(f);
+        MoveFileExW(tmp.c_str(), path.c_str(), MOVEFILE_REPLACE_EXISTING);
+    }
+
+    std::string ReadLive(const std::wstring& path)
+    {
+        char buf[512];
+        FILE* f = _wfsopen(path.c_str(), L"rb", _SH_DENYNO);
+        if (!f) return {};
+        size_t n = fread(buf, 1, sizeof(buf), f);
+        fclose(f);
+        return std::string(buf, n);
+    }
+
+    void WatchLiveMods(DWORD pid, std::wstring localState)
+    {
+        std::wstring dir = localState + L"\\pdnet\\", request = dir + L"mods-live.txt", reply = dir + L"mods-reply.txt", go = dir + L"mods-go.txt";
+        HANDLE game = OpenProcess(SYNCHRONIZE, FALSE, pid);
+        if (!game) return;
+        while (WaitForSingleObject(game, 250) == WAIT_TIMEOUT)
+        {
+            std::string number = ReadLive(request);
+            if (number.empty() || number.find_first_not_of("0123456789") != std::string::npos) continue;
+            DeleteFileW(request.c_str());
+            DeleteFileW(go.c_str());
+            WriteLive(reply, number + "\tworking");
+            Log(L"mods: live: the game asked for its mods again (request %S)", number.c_str());
+            std::string needs;
+            bool refused = false;
+            bool ok = modsync::Sync(localState, Log, &kModNet, Setting(L"mod_list_url", kModListUrl), GameFolder(pid), [&](const std::string& needsRestart)
+            {
+                needs = needsRestart;
+                if (!needs.empty()) return false;
+                WriteLive(reply, number + "\tready");
+                for (int i = 0; i < 100; ++i) // 10 s for the game to unmount its archives
+                {
+                    std::string answer = ReadLive(go);
+                    if (answer == number + "\tgo") return true;
+                    if (answer == number + "\tno" || WaitForSingleObject(game, 100) != WAIT_TIMEOUT) break;
+                }
+                refused = true;
+                return false;
+            });
+            DeleteFileW(go.c_str());
+            WriteLive(reply, number + (ok ? "\tdone" : !needs.empty() ? "\trestart\t" + needs.substr(0, 300) : "\tfailed"));
+            Log(L"mods: live: %s%S", ok ? L"done" : !needs.empty() ? L"not now, these load at game start: " : refused ? L"the game wasn't ready - nothing changed" : L"failed", needs.c_str());
+        }
+        CloseHandle(game);
+    }
+
     void InjectPdpl(DWORD pid, const std::wstring& localState)
     {
         if (_wcsicmp(Setting(L"mods", L"on").c_str(), L"off") == 0)
@@ -204,14 +280,8 @@ namespace
             Log(L"mods: the last start didn't reach the title screen - starting without mods (PDPL not loaded)");
             return;
         }
-        std::wstring gameDir; // the game folder: where PDUWP.exe runs from (new map slots read the game's stage list there)
-        if (HANDLE game = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, pid))
-        {
-            wchar_t image[MAX_PATH] = {};
-            DWORD size = MAX_PATH;
-            if (QueryFullProcessImageNameW(game, 0, image, &size)) { gameDir = image; gameDir = gameDir.substr(0, gameDir.find_last_of(L'\\')); }
-            CloseHandle(game);
-        }
+        std::wstring gameDir = GameFolder(pid);
+        for (const wchar_t* old : { L"mods-live.txt", L"mods-reply.txt", L"mods-go.txt" }) DeleteFileW((localState + L"\\pdnet\\" + old).c_str()); // from the last start
         modsync::Sync(localState, Log, &kModNet, Setting(L"mod_list_url", kModListUrl), gameDir); // catalog downloads, then PDPL's mods folder = the mod list, before PDPL reads it
         std::wstring dll = g_dir + L"pd_loader_core.dll", pdnet = g_dir + L"pdnet.dll";
         if (GetFileAttributesW(dll.c_str()) == INVALID_FILE_ATTRIBUTES)
@@ -1413,6 +1483,8 @@ int wmain(int argc, wchar_t** argv)
     std::thread keyboard(ReadKeyboard, pid, localState); // until the game exits
     bool injected = Inject(pid);
     if (injected) InjectPdpl(pid, localState);
+    std::thread liveMods; // until the game exits
+    if (injected && !localState.empty()) liveMods = std::thread(WatchLiveMods, pid, localState);
 
     HANDLE thread = OpenThread(THREAD_SUSPEND_RESUME, FALSE, tid);
     DWORD previous = thread ? ResumeThread(thread) : static_cast<DWORD>(-1);
@@ -1428,5 +1500,6 @@ int wmain(int argc, wchar_t** argv)
     KeepIdentity(localState, false); // a first sign-in made its credential while the game ran
     controllers.join();
     keyboard.join();
+    if (liveMods.joinable()) liveMods.join();
     return injected ? 0 : 1;
 }

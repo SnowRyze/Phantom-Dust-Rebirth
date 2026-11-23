@@ -20,4 +20,14 @@ namespace pdnet::pdpl
     // Safe mode: BeforeLoad writes LocalState\pdnet\mods-boot.txt and this deletes it once the title screen is passed. If
     // the game dies before that (a broken mod?), pdlaunch finds the file at the next start and leaves PDPL out once.
     void TitleReached();
+
+    // Live mod loading: PDPL's archives swapped while the game runs, through the functions its DLL exports since the
+    // build of 2026-11-23 (PhysicsFS's and its open_mutex, which its CreateFile2 hook holds for each file the game opens;
+    // it's held here too, so no file is being looked up meanwhile). LiveReady: all of them are there.
+    bool LiveReady();
+    // Takes every archive (what's mounted between PDPL's mods folder and the game folder) out. Loose files and the game's
+    // own stay. False (with the reason) if some couldn't be: those taken out are put back by MountArchives.
+    bool UnmountArchives(std::string& why);
+    // Mounts the .zip / .7z files now in PDPL's mods folder, in name order, as PDPL does at start. Returns how many.
+    int MountArchives();
 }
