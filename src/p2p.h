@@ -13,6 +13,7 @@
 //   1 game:    the game's own datagrams, unreliable and unordered (like UDP)
 //   2 ping:    ping/pong for QoS and link stats, unreliable (so losses show)
 //   3 look:    each player's camera tilt for Theatre films (SendLook), unreliable
+//   4 detour:  hellos, and game packets with a number, also through a third player (detour.h, DetourLoop)
 // Each link's ping, jitter, loss, direct-or-relayed path and traffic go to pdnet.log every 10 s ("p2p: link ...").
 #include "net.h"
 #include <memory>

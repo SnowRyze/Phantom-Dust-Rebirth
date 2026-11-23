@@ -26,6 +26,7 @@ namespace pdnet::p2p
 #else
 
 #include "eossdk.h"
+#include "detour.h"
 #include <iphlpapi.h>
 #pragma comment(lib, "iphlpapi.lib")
 #include <condition_variable>
@@ -42,7 +43,7 @@ namespace pdnet::p2p
     namespace
     {
         using namespace eossdk;
-        constexpr uint8_t kControl = 0, kGame = 1, kPing = 2, kLook = 3;
+        constexpr uint8_t kControl = 0, kGame = 1, kPing = 2, kLook = 3, kDetour = 4;
 
         struct Outgoing
         {
@@ -75,7 +76,26 @@ namespace pdnet::p2p
             ULONGLONG openedAt = 0;
             std::mutex heldLock;
             std::deque<std::vector<uint8_t>> held;
+
+            // Detour (DetourLoop): when this player and I stop hearing each other, our game packets also go through a
+            // third player.
+            std::atomic<ULONGLONG> heardAt{ 0 };  // a packet came straight from this player
+            std::atomic<ULONGLONG> helloAt{ 0 };  // their last hello: they take numbered packets, and pass detours on
+            uint32_t epoch = net::NewNonce();     // of this link's numbers
+            std::atomic<uint64_t> byDetour{ 0 };  // packets that came only through a third player
+            std::mutex sendLock;                  // below
+            uint32_t number = 0;
+            std::deque<std::pair<ULONGLONG, std::vector<uint8_t>>> recent; // the last seconds' numbered packets
+            std::vector<std::string> through;     // the players the detour goes through; empty: none
+            std::mutex seenLock;
+            detour::Seen seen;
+            std::map<std::string, uint32_t> theirHeard; // their last hello: ms since they heard each player (under seenLock)
+            // DetourLoop's own
+            bool quiet = false;
+            ULONGLONG quietSince = 0, fineSince = 0;
+            bool noWayLogged = false;
         };
+        constexpr ULONGLONG kQuietMs = 700, kFineMs = 3000, kRecentMs = 4000, kHelloFreshMs = 3000;
         constexpr ULONGLONG kHoldMs = 1500;
         constexpr size_t kHeldMax = 256;
 
@@ -192,6 +212,135 @@ namespace pdnet::p2p
             ToGame(link, data, bytes);
         }
 
+        // A game packet to this link's player: numbered when the player's pdnet knows detours (their hello has come), and
+        // also through the detour while there is one.
+        void SendGame(Link& link, const uint8_t* data, size_t size)
+        {
+            if (!link.helloAt || size + detour::kDetourHeader > EOS_P2P_MAX_PACKET_SIZE)
+            {
+                Queue({ link.peer, kGame, std::vector<uint8_t>(data, data + size) });
+                return;
+            }
+            std::vector<uint8_t> packet;
+            std::vector<std::string> through;
+            {
+                std::lock_guard guard(link.sendLock);
+                packet = detour::MakeDirect(link.epoch, ++link.number, data, size);
+                ULONGLONG now = GetTickCount64();
+                link.recent.push_back({ now, packet });
+                while (!link.recent.empty() && now - link.recent.front().first > kRecentMs) link.recent.pop_front();
+                through = link.through;
+            }
+            if (!through.empty())
+            {
+                static const detour::Id me = detour::ToId(winrt::to_string(eos::LocalUserId()));
+                detour::Id to = detour::ToId(link.peer);
+                if (me.size() == 16 && to.size() == 16)
+                    for (auto& helper : through) Queue({ helper, kDetour, detour::MakeDetour(to, me, packet) });
+            }
+            Queue({ link.peer, kDetour, std::move(packet) });
+        }
+
+        // Cross lag and lag for everyone (2026-11-23, relic0 / Snow / Nui / SnowRyze): Snow's connections to relic0 and to
+        // Nui broke down for half a minute while both had a perfect one to the host all along. Each game needs every
+        // other player's packets, so one broken pair stalled all four players, and after 20 s the two dropped each
+        // other and played on apart. Now every PC says hello to its links four times a second, with how long ago it
+        // heard each of the others. A player not heard straight for kQuietMs - or who says they haven't heard this PC -
+        // gets every game packet a second time through the players that both hear (and the last seconds' packets once
+        // more); the packets are numbered, so each reaches the game once. Both PCs and the one between need this build.
+        void DetourLoop()
+        {
+            for (;;)
+            {
+                Sleep(250);
+                std::vector<std::shared_ptr<Link>> links;
+                {
+                    std::lock_guard guard(g_lock);
+                    for (auto& [peer, link] : g_links) links.push_back(link);
+                }
+                if (links.empty()) continue;
+                std::string meText = winrt::to_string(eos::LocalUserId());
+                detour::Id me = detour::ToId(meText);
+                if (me.size() != 16) continue;
+                for (auto& c : meText) c = static_cast<char>(tolower(c));
+                ULONGLONG now = GetTickCount64();
+                auto age = [&](Link& link) { ULONGLONG at = (std::max)(link.heardAt.load(), link.openedAt); return at < now ? now - at : 0; };
+
+                std::vector<std::pair<detour::Id, uint32_t>> heard;
+                for (auto& link : links) heard.push_back({ detour::ToId(link->peer), static_cast<uint32_t>((std::min)(age(*link), ULONGLONG(65535))) });
+                auto hello = detour::MakeHello(heard);
+                for (auto& link : links) Queue({ link->peer, kDetour, hello });
+
+                for (auto& link : links)
+                {
+                    bool known = link->helloAt != 0;
+                    bool quiet = age(*link) > kQuietMs;
+                    if (known && !quiet && now - link->helloAt < 2000)
+                    {
+                        std::lock_guard guard(link->seenLock);
+                        if (auto it = link->theirHeard.find(meText); it != link->theirHeard.end() && it->second > kQuietMs) quiet = true; // they don't hear me
+                    }
+                    if (!known) quiet = false; // an older pdnet, or still connecting
+                    if (quiet) link->fineSince = 0;
+                    else if (!link->fineSince) link->fineSince = now;
+                    bool ended = link->quiet && !quiet && now - link->fineSince >= kFineMs;
+
+                    std::vector<std::string> through;
+                    if (quiet || (link->quiet && !ended))
+                        for (auto& helper : links)
+                        {
+                            if (helper == link || !helper->helloAt || now - helper->helloAt > kHelloFreshMs || age(*helper) > kQuietMs) continue;
+                            std::lock_guard guard(helper->seenLock);
+                            auto them = helper->theirHeard.find(link->peer);
+                            auto mine = helper->theirHeard.find(meText);
+                            if (them == helper->theirHeard.end() || them->second > kQuietMs) continue; // the helper doesn't hear them
+                            if (mine != helper->theirHeard.end() && mine->second > kQuietMs) continue; // or me
+                            through.push_back(helper->peer);
+                        }
+
+                    size_t again = 0;
+                    bool began = quiet && !link->quiet, newWay = false;
+                    {
+                        std::lock_guard guard(link->sendLock);
+                        for (auto& helper : through)
+                            if (std::find(link->through.begin(), link->through.end(), helper) == link->through.end())
+                            {
+                                newWay = true;
+                                detour::Id to = detour::ToId(link->peer);
+                                if (to.size() != 16) continue;
+                                for (auto& [at, packet] : link->recent)
+                                    if (now - at <= kRecentMs) { Queue({ helper, kDetour, detour::MakeDetour(to, me, packet) }); ++again; }
+                            }
+                        link->through = through;
+                    }
+                    if (began)
+                    {
+                        link->quiet = true;
+                        link->quietSince = now;
+                        link->noWayLogged = false;
+                        link->byDetour = 0;
+                    }
+                    if (newWay)
+                    {
+                        std::string names;
+                        for (auto& helper : through) names += (names.empty() ? "" : ", ") + helper.substr(0, 8);
+                        Log(L"p2p: %S and this PC don't hear each other (%llu ms) - game packets also go through %S (%zu sent again)", link->peer.substr(0, 8).c_str(), age(*link), names.c_str(), again);
+                    }
+                    else if (link->quiet && !ended && through.empty() && !link->noWayLogged && now - link->quietSince > 1000)
+                    {
+                        link->noWayLogged = true;
+                        Log(L"p2p: %S and this PC don't hear each other, and no other player hears both - waiting for EOS", link->peer.substr(0, 8).c_str());
+                    }
+                    if (ended)
+                    {
+                        Log(L"p2p: %S is heard straight again after %.1f s; %llu of their packets came only through another player", link->peer.substr(0, 8).c_str(),
+                            (link->fineSince - link->quietSince) / 1000.0, link->byDetour.exchange(0));
+                        link->quiet = false;
+                    }
+                }
+            }
+        }
+
         // Game -> link socket -> EOS.
         void LinkReader(std::shared_ptr<Link> link)
         {
@@ -220,7 +369,7 @@ namespace pdnet::p2p
                 link->outPackets++;
                 link->outBytes += n;
                 film::Packet(true, link->peer, buf.data(), static_cast<size_t>(n)); // Theatre films
-                Queue({ link->peer, kGame, std::vector<uint8_t>(buf.begin(), buf.begin() + n) });
+                SendGame(*link, buf.data(), static_cast<size_t>(n));
                 if (link->holding) ReleaseHeld(*link, L"this PC's game sent its first packet");
             }
         }
@@ -478,7 +627,7 @@ namespace pdnet::p2p
                 // resends them once the connection is back: a short pause instead of a freeze. Unordered, as plain UDP
                 // was for the game: no packet waits behind a lost one. Pings stay unreliable, to measure loss.
                 s.Reliability = o.channel == kControl ? EOS_EPacketReliability::EOS_PR_ReliableOrdered
-                              : o.channel == kGame && GetConfig().p2pGameReliable ? EOS_EPacketReliability::EOS_PR_ReliableUnordered
+                              : (o.channel == kGame || (o.channel == kDetour && o.data.size() > 4 && o.data[4] != detour::kHello)) && GetConfig().p2pGameReliable ? EOS_EPacketReliability::EOS_PR_ReliableUnordered
                                                                                   : EOS_EPacketReliability::EOS_PR_UnreliableUnordered;
                 s.bDisableAutoAcceptConnection = EOS_FALSE;
                 EOS_EResult r = api.EOS_P2P_SendPacket(p2p, &s);
@@ -504,9 +653,69 @@ namespace pdnet::p2p
                 if (api.EOS_P2P_ReceivePacket(p2p, &ro, &from, &socket, &channel, buf, &bytes) != EOS_EResult::EOS_Success) break;
                 std::string peer = Narrow(api, from);
 
-                if (channel == kGame)
                 {
-                    film::Packet(false, peer, buf, bytes); // Theatre films
+                    std::lock_guard guard(g_lock);
+                    if (auto it = g_links.find(peer); it != g_links.end()) it->second->heardAt = GetTickCount64();
+                }
+
+                const uint8_t* game = channel == kGame ? buf : nullptr;
+                uint32_t gameBytes = channel == kGame ? bytes : 0;
+                if (channel == kDetour)
+                {
+                    detour::Packet p;
+                    if (!detour::Read(buf, bytes, p)) continue;
+                    if (p.type == detour::kHello)
+                    {
+                        std::lock_guard guard(g_lock);
+                        if (auto it = g_links.find(peer); it != g_links.end())
+                        {
+                            it->second->helloAt = GetTickCount64();
+                            std::lock_guard seen(it->second->seenLock);
+                            it->second->theirHeard = std::move(p.heard);
+                        }
+                        continue;
+                    }
+                    std::shared_ptr<Link> origin;
+                    if (p.type == detour::kDetour)
+                    {
+                        std::string self = meText;
+                        for (auto& c : self) c = static_cast<char>(tolower(c));
+                        std::lock_guard guard(g_lock);
+                        if (p.to != self)
+                        {
+                            // Passed on once, and only between two players this PC is linked to.
+                            if (p.from == peer && p.to != peer && g_links.count(p.from) && g_links.count(p.to))
+                            {
+                                std::lock_guard outGuard(g_outLock);
+                                g_out.push_back({ p.to, kDetour, std::vector<uint8_t>(buf, buf + bytes) });
+                            }
+                            continue;
+                        }
+                        // For this PC: from a player it is linked to, through one it is linked to.
+                        if (!g_links.count(peer)) continue;
+                        auto it = g_links.find(p.from);
+                        if (it == g_links.end()) continue;
+                        origin = it->second;
+                        peer = p.from;
+                    }
+                    else
+                    {
+                        std::lock_guard guard(g_lock);
+                        if (auto it = g_links.find(peer); it != g_links.end()) origin = it->second;
+                    }
+                    if (origin)
+                    {
+                        std::lock_guard guard(origin->seenLock);
+                        if (!origin->seen.First(p.epoch, p.number)) continue;
+                        if (p.type == detour::kDetour) origin->byDetour++;
+                    }
+                    game = p.data;
+                    gameBytes = static_cast<uint32_t>(p.size);
+                }
+
+                if (game)
+                {
+                    film::Packet(false, peer, game, gameBytes); // Theatre films
                     std::shared_ptr<Link> link;
                     {
                         std::lock_guard guard(g_lock);
@@ -515,13 +724,13 @@ namespace pdnet::p2p
                         {
                             auto& early = g_early[peer]; // no endpoint pair for this peer yet: keep it for when there is
                             if (early.size() >= kEarlyMax) early.pop_front();
-                            early.push_back({ GetTickCount64(), std::vector<uint8_t>(buf, buf + bytes) });
+                            early.push_back({ GetTickCount64(), std::vector<uint8_t>(game, game + gameBytes) });
                         }
                     }
                     if (!link) continue;
                     link->inPackets++;
-                    link->inBytes += bytes;
-                    HoldOrDeliver(*link, buf, bytes);
+                    link->inBytes += gameBytes;
+                    HoldOrDeliver(*link, game, gameBytes);
                     continue;
                 }
 
@@ -766,6 +975,7 @@ namespace pdnet::p2p
             net::InterfaceIp(); // WSAStartup
             std::thread(Dispatcher).detach();
             std::thread(Monitor).detach();
+            std::thread(DetourLoop).detach();
             eos::SetPump(Pump);
             Log(L"p2p: starting (game datagrams via EOS P2P; links on %s)", net::IpToString(net::InterfaceIp()).c_str());
             std::thread([] { Sleep(3000); SelfTest(); }).detach(); // after the game has opened its port
