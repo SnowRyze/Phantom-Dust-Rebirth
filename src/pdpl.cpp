@@ -348,6 +348,19 @@ namespace pdnet::pdpl
             std::thread(ReadPipe).detach();
             output = true;
         }
+        // PDPL's last act is a loop that reads commands from its console while its variable "running" is true. The MinGW
+        // build (2026-11-23) uses msvcrt.dll, whose standard input was set up before the handles above were replaced, so
+        // its fgets returns at once and the loop used a whole CPU core (64531 ms in the first minute, seen in game). The
+        // DLL exports the variable: cleared, the loop ends (or never starts); its hook and plugins don't need it.
+        std::thread([]
+        {
+            for (int i = 0; i < 3000; ++i, Sleep(20)) // a minute
+                if (HMODULE m = GetModuleHandleW(L"pd_loader_core.dll"))
+                {
+                    if (auto running = reinterpret_cast<volatile bool*>(GetProcAddress(m, "running"))) *running = false;
+                    return;
+                }
+        }).detach();
         Log(L"pdpl: ready for PDPL (%s; input %s)", !output ? L"its output is lost" : g_console ? L"hidden console, read into pdnet\\pdpl.log" : L"no console: a pipe into pdnet\\pdpl.log, in 4 KB blocks",
             input ? L"an empty pipe" : L"NOT replaced");
     }
