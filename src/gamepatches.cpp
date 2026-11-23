@@ -7215,6 +7215,30 @@ namespace pdnet::gamepatches
             return data;
         }
 
+        // Skill packs' animation profiles (LocalState\pdnet\mod-skills\anims.bin from pdlaunch: u16 slot + 0x72 bytes each):
+        // the game keeps them apart from the skill data, at 0x1404e024c, 0x72 each for the 752 skills (SkillEditor's
+        // anim_profiles_offset). Written with the mod's skill data.
+        bool CopyProfile(uint16_t slot, const char* from)
+        {
+            __try { memcpy(At(0x1404e024c) + slot * 0x72, from, 0x72); return true; }
+            __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+        }
+
+        int ModAnimationProfiles()
+        {
+            std::ifstream in(LocalStatePath() + L"\\pdnet\\mod-skills\\anims.bin", std::ios::binary);
+            std::string data(std::istreambuf_iterator<char>(in), {});
+            int written = 0;
+            for (size_t at = 0; at + 0x74 <= data.size(); at += 0x74)
+            {
+                uint16_t slot = static_cast<uint8_t>(data[at]) | static_cast<uint8_t>(data[at + 1]) << 8;
+                if (slot >= 752) continue;
+                if (!CopyProfile(slot, data.data() + at + 2)) break;
+                ++written;
+            }
+            return written;
+        }
+
         void SkillDataGuard()
         {
             std::thread([]
@@ -7256,10 +7280,21 @@ namespace pdnet::gamepatches
                             size_t written = 0;
                             for (size_t i = 0; i < kSkillDataSize; ++i)
                                 if ((!diff || mod[i] != file[i]) && block[i] != mod[i]) { block[i] = mod[i]; ++written; }
+                            // Skill packs replace whole skills (pdlaunch lists their slots): the bytes that are the same as
+                            // the game folder's file must still go over the stored online copy's.
+                            {
+                                bool japanese = *reinterpret_cast<int32_t*>(At(0x1403df644)) == 2;
+                                std::ifstream slots(LocalStatePath() + L"\\pdnet\\mod-skills\\" + (japanese ? L"gsdata_ja.slots" : L"gsdata_en.slots"));
+                                int whole = 0;
+                                for (int slot; slots >> slot;)
+                                    if (slot >= 0 && slot < 752) { memcpy(block + 0x18 + slot * 0x90, mod.data() + 0x18 + slot * 0x90, 0x90); ++whole; }
+                                if (whole) Log(L"gamepatch: skill packs: %d skill(s) written whole", whole);
+                            }
                             memcpy(now.data(), block, kSkillDataSize);
                             modded = now;
                             Log(L"gamepatch: skill data from mod %S: %zu bytes written over the stored copy (%s)", from.c_str(), written,
                                 diff ? L"the mod's changes to the game's file" : L"the whole file");
+                            if (int profiles = ModAnimationProfiles()) Log(L"gamepatch: skill packs: %d animation profile(s) written", profiles);
                             continue;
                         }
                     }

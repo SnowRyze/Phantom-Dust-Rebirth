@@ -8,6 +8,7 @@
 #include <cwctype>
 #include <cstdio>
 #include <map>
+#include <array>
 #include <set>
 #include <unordered_set>
 #include <vector>
@@ -393,8 +394,9 @@ namespace modsync
                 size_t dot = name.find_last_of('.');
                 std::string ext = dot == std::string::npos ? "" : name.substr(dot);
                 bool root = slash == std::string::npos;
+                if (ext == ".sp4" || ext == ".sp3") { kinds.insert("skills"); continue; } // SkillEditor skill packs (SkillPacks)
                 if (p.rfind("plugins/", 0) == 0) { if (ext == ".dll" || ext == ".exe") { plugins = true; kinds.insert("plugins"); } continue; }
-                if (name == "pdmod.json" || (root && (ext == ".txt" || ext == ".md" || ext == ".png" || ext == ".jpg"))) continue;
+                if (name == "pdmod.json" || (root && (ext == ".ini" || ext == ".txt" || ext == ".md" || ext == ".png" || ext == ".jpg"))) continue;
                 if (ext == ".cso") kinds.insert("shaders");
                 else if (name.find("gsdata_") != std::string::npos) kinds.insert("skills");
                 else if (p.find("/map/") != std::string::npos || (name.size() > 4 && name[0] == 's' && name[1] == 't' && isdigit(static_cast<unsigned char>(name[2])) && isdigit(static_cast<unsigned char>(name[3]))))
@@ -489,7 +491,7 @@ namespace modsync
                 std::string p = GamePath(raw);
                 if (p.empty() || p.find("..") != std::string::npos) continue;
                 if (p == "pdmod.json") manifestEntry = raw;
-                if (p == "mod-info.ini") iniEntry = raw;
+                if (p == "mod-info.ini" || (p == "modinfo.ini" && iniEntry.empty())) iniEntry = raw;
                 m.files.push_back(p);
             }
             if (!manifestEntry.empty())
@@ -778,6 +780,7 @@ namespace modsync
             auto isHex64 = [](const std::string& h) { return h.size() == 64 && h.find_first_not_of("0123456789abcdef") == std::string::npos; };
             const std::string key = "\"browser_download_url\"";
             size_t previous = 0; // where the asset before this one ended
+            std::vector<std::array<std::string, 3>> loose; // a release without an archive: its .sp4 / .sp3 and mod info (name, url, sha256)
             for (size_t at = json.find(key); at != std::string::npos && r.url.empty(); previous = at, at = json.find(key, at + 1))
             {
                 size_t i = SkipBlank(json, at + key.size());
@@ -786,7 +789,8 @@ namespace modsync
                 std::string url = JsonString(json, i);
                 std::string name = PercentDecode(url.substr(url.find_last_of('/') + 1));
                 std::wstring ext = Extension(Wide(name));
-                if (ext != L".zip" && ext != L".7z") continue;
+                bool looseFile = ext == L".sp4" || ext == L".sp3" || Lower(name) == "modinfo.ini" || Lower(name) == "mod-info.ini";
+                if (ext != L".zip" && ext != L".7z" && !looseFile) continue;
                 std::string hex, from;
                 std::string marker = "sha256 " + name + " ";
                 if (size_t s = body.find(marker); s != std::string::npos && isHex64(Lower(body.substr(s + marker.size(), 64))))
@@ -809,13 +813,28 @@ namespace modsync
                     }
                 }
                 if (hex.empty()) continue;
+                if (looseFile) { loose.push_back({ name, url, hex }); continue; }
                 r.url = url;
                 r.asset = name;
                 r.sha = hex;
                 if (from == "GitHub") g_log(L"mods: %S %S: %S's sha256 from GitHub (no line in the release notes)", e.id.c_str(), r.tag.c_str(), name.c_str());
             }
             if (r.tag.empty()) { why = "no release found"; return false; }
-            if (r.url.empty()) { why = "its newest release has no .zip / .7z (with a sha256: GitHub's, or a line in the notes)"; return false; }
+            // Skill packs (2026-11-26, Toaf's): a release may be just .sp4 files and a modinfo.ini, no archive. They're
+            // downloaded one by one, each checked against its sha256, and put in one zip (Download), the same bytes on every
+            // PC, so lobbies compare it as any mod. url "files:" + name|url|sha256 per file; sha: those, hashed.
+            bool packs = false;
+            for (const auto& l : loose) packs = packs || Lower(l[0]).find(".sp") != std::string::npos;
+            if (r.url.empty() && packs)
+            {
+                std::sort(loose.begin(), loose.end());
+                std::string list, all;
+                for (const auto& l : loose) list += (list.empty() ? "" : ";") + l[0] + "|" + l[1] + "|" + l[2], all += l[0] + ":" + l[2] + "\n";
+                r.url = "files:" + list;
+                r.asset = std::to_string(loose.size()) + " files.zip";
+                r.sha = g_net->sha256(all);
+            }
+            if (r.url.empty()) { why = "its newest release has no .zip / .7z, or .sp4 skill packs (with a sha256: GitHub's, or a line in the notes)"; return false; }
             r.checked = Now();
             return true;
         }
@@ -834,6 +853,163 @@ namespace modsync
             return out.empty() ? "release" : out;
         }
 
+        // ---- skill packs (.sp4, SkillEditor's format; github.com/Torphedo/SkillEditor, src/mods.cxx) ----
+        // The game's skill file (gsdata_<lang>.dat, 0x44004 bytes, as in memory): u32 size, 4 x u32, u32 skill limit, then
+        // 752 skills of 0x90 at 0x18; at 0x34004 the text header (u32 text size, entry count, table size, 2 x u32) and at
+        // 0x34018 the entries (u32 index, u32 name, u32 description: offsets from the entry itself) and the strings.
+        // A pack: "SP4\0", at 0x20 u16 version 4, u16 skills, u16 animation profiles; at 0x30 the skills (0x90 data, u16
+        // slot, u16 name and u16 description offset into the pack's strings), then the profiles (0x72 data, u16 slot, 12
+        // pad), then the strings. As SkillEditor's install_skill_pack: each skill replaces its slot; its text goes over
+        // its text id's (none when the name is empty); profiles are memory the game keeps elsewhere (anims, for pdnet).
+        constexpr size_t kGsdata = 0x44004, kTextHeader = 0x34004, kTextPtrs = 0x34018;
+        struct SkillText
+        {
+            std::string& g;
+            uint32_t U(size_t at) const { uint32_t v = 0; if (at + 4 <= g.size()) memcpy(&v, &g[at], 4); return v; }
+            void P(size_t at, uint32_t v) { if (at + 4 <= g.size()) memcpy(&g[at], &v, 4); }
+            size_t Len(size_t at) const { size_t n = 0; while (at + n < g.size() && g[at + n]) ++n; return n; }
+            void Move(size_t to, size_t from, size_t n)
+            {
+                if (from >= g.size() || to >= g.size()) return;
+                n = (std::min)(n, g.size() - (std::max)(to, from));
+                memmove(&g[to], &g[from], n);
+            }
+            size_t Entry(uint32_t id) const { return kTextPtrs + static_cast<size_t>(id) * 12; }
+
+            // expand_text_table
+            void Expand(uint32_t size)
+            {
+                uint32_t count = U(kTextHeader + 4);
+                if (size > 5000 || size <= count || count == 0) return;
+                size_t bytes = static_cast<size_t>(size - count) * 12, buf = Entry(count);
+                size_t bufSize = U(kTextHeader) - count - 20;
+                Move(buf + bytes, buf, bufSize);
+                if (buf + bytes <= g.size()) memset(&g[buf], 0, bytes);
+                for (uint32_t i = 0; i < count; ++i) P(Entry(i) + 4, U(Entry(i) + 4) + static_cast<uint32_t>(bytes)), P(Entry(i) + 8, U(Entry(i) + 8) + static_cast<uint32_t>(bytes));
+                for (uint32_t i = count; i < size; ++i)
+                {
+                    size_t prev = Entry(i - 1), descAt = prev + U(prev + 8);
+                    P(Entry(i), U(prev) + 1);
+                    P(Entry(i) + 4, U(prev + 8) + 1 + static_cast<uint32_t>(Len(descAt) + 1));
+                    P(Entry(i) + 8, U(Entry(i) + 4) + 1);
+                }
+                P(kTextHeader + 4, size);
+                P(kTextHeader + 8, U(kTextHeader + 8) + static_cast<uint32_t>(bytes));
+                size_t last = Entry(size - 1), end = last + U(last + 8);
+                P(kTextHeader, static_cast<uint32_t>(end + Len(end) + 1 - kTextHeader));
+            }
+
+            // shift_textbuf
+            void Shift(size_t at, size_t newLen, uint32_t id, bool isName)
+            {
+                int64_t diff = static_cast<int64_t>(newLen) - static_cast<int64_t>(Len(at) + 1);
+                if (diff <= 0) return;
+                P(kTextHeader, U(kTextHeader) + static_cast<uint32_t>(diff) + 1);
+                int64_t remaining = static_cast<int64_t>(U(kTextHeader)) - static_cast<int64_t>(at - kTextHeader);
+                size_t target = at + Len(at) + 1;
+                if (remaining > 0) Move(target + static_cast<size_t>(diff), target, static_cast<size_t>(remaining));
+                if (target + diff <= g.size()) memset(&g[target], 0, static_cast<size_t>(diff));
+                for (uint32_t i = id + 1; i < U(kTextHeader + 4); ++i)
+                    P(Entry(i) + 4, U(Entry(i) + 4) + static_cast<uint32_t>(diff)), P(Entry(i) + 8, U(Entry(i) + 8) + static_cast<uint32_t>(diff));
+                if (isName) P(Entry(id) + 8, U(Entry(id) + 8) + static_cast<uint32_t>(diff));
+            }
+
+            // save_skill_text
+            void Save(uint32_t id, const std::string& name, const std::string& desc)
+            {
+                if (U(kTextHeader + 4) <= id) Expand(id + 5);
+                if (U(kTextHeader + 4) <= id) return;
+                size_t e = Entry(id);
+                Shift(e + U(e + 4), name.size() + 1, id, true);
+                Shift(e + U(e + 8), desc.size() + 1, id, false);
+                size_t n = e + U(e + 4), d = e + U(e + 8);
+                if (n + name.size() + 1 <= g.size()) memcpy(&g[n], name.c_str(), name.size() + 1);
+                if (d + desc.size() + 1 <= g.size()) memcpy(&g[d], desc.c_str(), desc.size() + 1);
+            }
+        };
+
+        // The text table as the game has it in memory: in the file each entry's name and description offsets count from the
+        // end of the table; once loaded, from the entry itself (seen in the game's memory, 2026-11-26: every string the
+        // same, the offsets moved by (count - entry) x 12). SkillEditor works on memory, so the packs go on in that layout,
+        // and pdnet writes the result into memory as it is.
+        bool ToMemoryLayout(std::string& g)
+        {
+            if (g.size() != kGsdata) return false;
+            SkillText t{ g };
+            uint32_t count = t.U(kTextHeader + 4);
+            if (count == 0 || count > 5000 || kTextPtrs + static_cast<size_t>(count) * 12 > g.size()) return false;
+            for (uint32_t i = 0; i < count; ++i)
+            {
+                uint32_t shift = (count - i) * 12;
+                t.P(t.Entry(i) + 4, t.U(t.Entry(i) + 4) + shift);
+                t.P(t.Entry(i) + 8, t.U(t.Entry(i) + 8) + shift);
+            }
+            return true;
+        }
+
+        // One pack onto the skill file; its animation profiles added to `anims` (u16 slot + 0x72 bytes each).
+        bool ApplySkillPack(std::string& gsdata, const std::string& pack, std::string& anims, int& skills, std::string& slots, std::string& why)
+        {
+            auto u16 = [&](size_t at) -> uint32_t { return at + 2 <= pack.size() ? static_cast<uint8_t>(pack[at]) | static_cast<uint8_t>(pack[at + 1]) << 8 : 0; };
+            if (pack.size() < 0x30 || pack.compare(0, 4, std::string("SP4\0", 4)) != 0 || u16(0x20) != 4) { why = "not a version 4 skill pack (SkillEditor 3.2 and newer save those)"; return false; }
+            uint32_t count = u16(0x22), profiles = u16(0x24);
+            size_t animAt = 0x30 + static_cast<size_t>(count) * 0x96, poolAt = animAt + static_cast<size_t>(profiles) * 0x80;
+            if (poolAt > pack.size() || gsdata.size() != kGsdata) { why = "cut short"; return false; }
+            std::string pool = pack.substr(poolAt);
+            auto text = [&](uint32_t at) { std::string s; for (size_t i = at; i < pool.size() && pool[i]; ++i) s += pool[i]; return s; };
+            SkillText t{ gsdata };
+            for (uint32_t i = 0; i < count; ++i)
+            {
+                size_t e = 0x30 + static_cast<size_t>(i) * 0x96;
+                uint32_t slot = u16(e + 0x90), nameAt = u16(e + 0x92), descAt = u16(e + 0x94);
+                if (slot >= 752) continue;
+                memcpy(&gsdata[0x18 + static_cast<size_t>(slot) * 0x90], &pack[e], 0x90);
+                slots += std::to_string(slot) + "\n"; // written whole by pdnet (the game runs on its online copy)
+                ++skills;
+                if (static_cast<int64_t>(descAt) - static_cast<int64_t>(nameAt) <= 1) continue; // no name: the skill keeps its text
+                t.Save(u16(e), text(nameAt), text(descAt)); // the skill's text id (its first field)
+            }
+            for (uint32_t i = 0; i < profiles; ++i)
+                anims += pack.substr(animAt + static_cast<size_t>(i) * 0x80 + 0x72, 2) + pack.substr(animAt + static_cast<size_t>(i) * 0x80, 0x72);
+            return true;
+        }
+
+        // A zip of stored files, always the same bytes for the same files: sorted names, no compression, a fixed time.
+        uint32_t Crc32(const std::string& data)
+        {
+            uint32_t crc = 0xFFFFFFFF;
+            for (unsigned char c : data)
+            {
+                crc ^= c;
+                for (int k = 0; k < 8; ++k) crc = (crc >> 1) ^ (0xEDB88320u & (0u - (crc & 1)));
+            }
+            return ~crc;
+        }
+
+        std::string StoredZip(std::vector<std::pair<std::string, std::string>> files) // name, bytes
+        {
+            std::sort(files.begin(), files.end());
+            auto u16 = [](std::string& s, uint16_t v) { s.append(reinterpret_cast<const char*>(&v), 2); };
+            auto u32 = [](std::string& s, uint32_t v) { s.append(reinterpret_cast<const char*>(&v), 4); };
+            std::string out, central;
+            for (const auto& [name, data] : files)
+            {
+                uint32_t crc = Crc32(data), at = static_cast<uint32_t>(out.size()), size = static_cast<uint32_t>(data.size());
+                u32(out, 0x04034b50); u16(out, 10); u16(out, 0); u16(out, 0); u16(out, 0); u16(out, 0x21); // version, flags, stored, 00:00 1980-01-01
+                u32(out, crc); u32(out, size); u32(out, size); u16(out, static_cast<uint16_t>(name.size())); u16(out, 0);
+                out += name + data;
+                u32(central, 0x02014b50); u16(central, 20); u16(central, 10); u16(central, 0); u16(central, 0); u16(central, 0); u16(central, 0x21);
+                u32(central, crc); u32(central, size); u32(central, size); u16(central, static_cast<uint16_t>(name.size())); u16(central, 0); u16(central, 0);
+                u16(central, 0); u16(central, 0); u32(central, 0); u32(central, at);
+                central += name;
+            }
+            uint32_t centralAt = static_cast<uint32_t>(out.size());
+            out += central;
+            u32(out, 0x06054b50); u16(out, 0); u16(out, 0); u16(out, static_cast<uint16_t>(files.size())); u16(out, static_cast<uint16_t>(files.size()));
+            u32(out, static_cast<uint32_t>(central.size())); u32(out, centralAt); u16(out, 0);
+            return out;
+        }
+
         // Downloads the release into modstore\<id>\<tag>.<ext> (if it isn't there yet), checks it, keeps the newest 3.
         bool Download(const CatalogEntry& e, const Release& r, const std::wstring& dir, std::string& why)
         {
@@ -842,8 +1018,25 @@ namespace modsync
             CreateDirectoryW(dir.c_str(), nullptr);
             std::string data;
             g_log(L"mods: %S: downloading %S (%S)", e.id.c_str(), r.asset.c_str(), r.tag.c_str());
-            if (!g_net->get(Wide(r.url), data, 120000)) { why = "the download failed"; return false; }
-            if (g_net->sha256(data) != r.sha) { why = "the download doesn't match its sha256"; return false; }
+            if (r.url.rfind("files:", 0) == 0) // loose files (skill packs): each checked, then one zip
+            {
+                std::vector<std::pair<std::string, std::string>> files;
+                for (const auto& item : Split(r.url.substr(6), ';'))
+                {
+                    auto f = Split(item, '|');
+                    std::string bytes;
+                    if (f.size() != 3 || f[0].find_first_of("/\\") != std::string::npos) { why = "a file in the release has an odd name"; return false; }
+                    if (!g_net->get(Wide(f[1]), bytes, 60000)) { why = "the download of " + f[0] + " failed"; return false; }
+                    if (g_net->sha256(bytes) != f[2]) { why = f[0] + " doesn't match its sha256"; return false; }
+                    files.push_back({ f[0], bytes });
+                }
+                data = StoredZip(files);
+            }
+            else
+            {
+                if (!g_net->get(Wide(r.url), data, 120000)) { why = "the download failed"; return false; }
+                if (g_net->sha256(data) != r.sha) { why = "the download doesn't match its sha256"; return false; }
+            }
             if (!WriteText(file, data)) { why = "couldn't be saved"; return false; }
             g_log(L"mods: %S %S: downloaded, %zu bytes, sha256 ok", e.id.c_str(), r.tag.c_str(), data.size());
             std::vector<std::pair<uint64_t, std::wstring>> versions;
@@ -968,7 +1161,7 @@ namespace modsync
                     {
                         bool catalogs = !e.url.empty() && e.tag == l->tag; // the catalog names that release: no API lookup
                         if (catalogs) r = CatalogRelease(e);
-                        if ((!catalogs && !LookUpRelease(e, l->tag, r, why, answered)) || r.sha.rfind(l->sha, 0) != 0 || !Download(e, r, storeDir + L"\\" + Wide(e.id), why))
+                        if ((!catalogs && !LookUpRelease(e, l->tag, r, why, answered)) || (r.url.rfind("files:", 0) != 0 && r.sha.rfind(l->sha, 0) != 0) || !Download(e, r, storeDir + L"\\" + Wide(e.id), why))
                         {
                             if (why.empty()) why = "the lobby's file isn't that release's";
                             log(L"mods: %S %S (for the lobby): %S", e.id.c_str(), l->tag.c_str(), why.c_str());
@@ -1426,6 +1619,36 @@ namespace modsync
                         else log(L"mods: %S: couldn't read its gsdata_%S.dat", m.id.c_str(), lang);
                         break;
                     }
+                // Skill packs (.sp4) of the mods that are on, over that (or the game's own file): the lowest mod first,
+                // so the top one wins a slot two packs change. Their animation profiles go to anims.bin for pdnet.
+                std::string anims, packs, slots;
+                int skills = 0;
+                for (auto m = mods.rbegin(); m != mods.rend(); ++m)
+                {
+                    bool mounted = m->enabled && !m->path.empty() && (m->problem.empty() || m->problem.rfind("has plugins", 0) != 0);
+                    if (!mounted) continue;
+                    std::vector<std::string> packFiles;
+                    for (const auto& p : m->files)
+                        if (p.size() > 4 && p.compare(p.size() - 4, 4, ".sp4") == 0) packFiles.push_back(p);
+                    std::sort(packFiles.begin(), packFiles.end());
+                    for (const auto& p : packFiles)
+                    {
+                        if (data.empty() && !gameDir.empty()) data = ReadBytes(gameDir + L"\\Assets\\Data\\gstorage\\gsdata_" + Wide(lang) + L".dat");
+                        if (packs.empty() && !ToMemoryLayout(data)) data.clear(); // once, before the first pack
+                        std::string pack, why;
+                        if (data.size() != kGsdata) { log(L"mods: %S: the game's gsdata_%S.dat couldn't be read - its skill packs aren't used", m->id.c_str(), lang); break; }
+                        if (!ExtractGameFile(*m, p, pack)) { log(L"mods: %S: couldn't read %S", m->id.c_str(), p.c_str()); continue; }
+                        if (!ApplySkillPack(data, pack, anims, skills, slots, why)) { log(L"mods: %S: %S not used: %S", m->id.c_str(), p.c_str(), why.c_str()); continue; }
+                        packs += (packs.empty() ? "" : ", ") + m->id + "/" + p;
+                    }
+                }
+                if (!packs.empty())
+                {
+                    from += (from.empty() ? "" : " + ") + std::string("skill packs ") + packs;
+                    if (std::string(lang) == "en") WriteText(skillDir + L"\\anims.bin", anims); // one set: the profiles aren't per language
+                    WriteText(skillDir + L"\\gsdata_" + Wide(lang) + L".slots", slots);
+                    log(L"mods: skill packs (%S): %d skill(s), %zu animation profile(s): %S", lang, skills, anims.size() / 0x74, packs.c_str());
+                }
                 if (from.empty()) continue;
                 WriteText(skillDir + L"\\gsdata_" + Wide(lang) + L".dat", data);
                 WriteText(skillDir + L"\\gsdata_" + Wide(lang) + L".txt", from);
