@@ -147,6 +147,8 @@ without `eos.ini` and without the Discord links. It needs, once, a GitHub token 
 2. Repository access: *Only select repositories*, this repository. Permissions: **Contents: Read and write**.
 3. Copy the token into `private\github-token.txt` (that folder is never in git).
 
+`build.bat fix "notes"` (branch `stable`) publishes the next bug-fix Stable (`stable-16.0.1`, ...): the update zip only.
+
 Commit and push before `build.bat experimental`: a release has to point at a commit that is on GitHub.
 
 ### Linux
