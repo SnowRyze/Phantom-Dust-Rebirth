@@ -5,5 +5,5 @@
 #   repo    its newest release's first .zip or .7z is the download, checked against GitHub's sha256 for it (or a line
 #           "sha256 <file name> <hex>" in the release notes, which wins)
 #   plugin  only for mods with DLLs under plugins/, after someone has read their source
-map-aquarium    eradication0/phantom-dust-map-aquarium  release=0.3 file=https://github.com/eradication0/phantom-dust-map-aquarium/releases/download/0.3/Aquarium.0.3.zip sha256=fdeaa9245380f4f5e04cc9333a8a8eb3864a9c423b34f97784ed9e6ffb13ab0b
+map-aquarium    eradication0/phantom-dust-map-aquarium  release=0.4 file=https://github.com/eradication0/phantom-dust-map-aquarium/releases/download/0.4/Aquarium.0.4.zip sha256=47713d95babf7b45882c5b8a1b3fc92ce3cce78748a84006b3653a7e6a8f3b97
 map-construct   Slowpooch/PhantomDustConstructMap  release=b1 file=https://github.com/Slowpooch/PhantomDustConstructMap/releases/download/b1/Construct.zip sha256=70a62e3eddc20e815105b2f04eb713c9e49861477a573d13cbc91ed838f33f5b
