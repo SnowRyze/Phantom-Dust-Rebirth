@@ -7,6 +7,6 @@
 #   plugin  only for mods with DLLs under plugins/, after someone has read their source
 #   release=, file=, sha256=  the newest release's tag, download and sha256: filled in every 5 minutes by the repo's
 #           "Mod catalog releases" GitHub Action (and by this app), so games download without GitHub lookups of their own
-map-aquarium    eradication0/phantom-dust-map-aquarium  release=0.5 file=https://github.com/eradication0/phantom-dust-map-aquarium/releases/download/0.5/Aquarium.0.5.zip sha256=773896b457f199640c21540ca0e58ccab3b06128fb04df5b207481684178d61d
+map-aquarium    eradication0/phantom-dust-map-aquarium  release=0.6 file=https://github.com/eradication0/phantom-dust-map-aquarium/releases/download/0.6/Aquarium.0.6.zip sha256=919994e7729d09f557b534033f55ae9111e6d088159b4b5ce73454893320106a
 map-construct   Slowpooch/PhantomDustConstructMap  release=b1 file=https://github.com/Slowpooch/PhantomDustConstructMap/releases/download/b1/Construct.zip sha256=70a62e3eddc20e815105b2f04eb713c9e49861477a573d13cbc91ed838f33f5b
 map-ascension   eat872338/phantom-dust-map-ascension  release=0.1 file=https://github.com/eat872338/phantom-dust-map-ascension/releases/download/0.1/Ascension.0.1.zip sha256=2db3cba1738bdb3d651a3ce2fbe19909295bb4ee8cf4e62e1f6ee4d2167fe8ef
