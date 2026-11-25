@@ -9,4 +9,4 @@
 #           "Mod catalog releases" GitHub Action (and by this app), so games download without GitHub lookups of their own
 map-aquarium    eradication0/phantom-dust-map-aquarium  release=0.6 file=https://github.com/eradication0/phantom-dust-map-aquarium/releases/download/0.6/Aquarium.0.6.zip sha256=919994e7729d09f557b534033f55ae9111e6d088159b4b5ce73454893320106a
 map-construct   Slowpooch/PhantomDustConstructMap  release=b1 file=https://github.com/Slowpooch/PhantomDustConstructMap/releases/download/b1/Construct.zip sha256=70a62e3eddc20e815105b2f04eb713c9e49861477a573d13cbc91ed838f33f5b
-map-ascension   eat872338/phantom-dust-map-ascension  release=0.3 file=https://github.com/eat872338/phantom-dust-map-ascension/releases/download/0.3/Ascension.0.3.zip sha256=425bd45fc84bd588e7b369141f9c6c27dbad4e1a61978d1d8688584266f7105c
+map-ascension   eat872338/phantom-dust-map-ascension  release=0.4 file=https://github.com/eat872338/phantom-dust-map-ascension/releases/download/0.4/Ascension.0.4.zip sha256=81cf89add7ed937bced96bc1ef7e84f27469c47a4b43ca80123d937c3d8053fd
