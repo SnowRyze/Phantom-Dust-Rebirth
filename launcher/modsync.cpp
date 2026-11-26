@@ -170,9 +170,13 @@ namespace modsync
             return h;
         }
 
-        // Runs a hidden program and collects what it prints (at most 16 MB). False if it didn't start, timed out or failed.
+        // Runs a hidden program and collects what it prints (at most 512 MB). False if it didn't start, timed out, failed or
+        // printed more than that. (The limit was 16 MB and cut silently: Aquarium 0.6's 21 MB .alr reached the map slot
+        // without its last 5 MB - the textures and baked light - so the stage drew black, 2026-11-26.)
         bool RunCapture(std::wstring command, DWORD timeoutMs, std::string& out)
         {
+            constexpr size_t kMaxOutput = size_t(512) << 20;
+            bool tooBig = false;
             SECURITY_ATTRIBUTES sa{ sizeof(sa), nullptr, TRUE };
             HANDLE read = nullptr, write = nullptr;
             if (!CreatePipe(&read, &write, &sa, 1u << 16)) return false;
@@ -204,7 +208,8 @@ namespace modsync
                 {
                     DWORD got = 0;
                     if (!ReadFile(read, buf, (std::min<DWORD>)(avail, sizeof(buf)), &got, nullptr) || !got) break;
-                    if (out.size() < (16u << 20)) out.append(buf, got);
+                    if (out.size() + got <= kMaxOutput) out.append(buf, got);
+                    else tooBig = true;
                     continue;
                 }
                 if (GetTickCount64() - start > timeoutMs) { timedOut = true; break; }
@@ -217,7 +222,8 @@ namespace modsync
             CloseHandle(pi.hProcess);
             CloseHandle(pi.hThread);
             CloseHandle(read);
-            return !timedOut && exit == 0;
+            if (tooBig) g_log(L"mods: a program printed more than %zu MB - its output wasn't used", kMaxOutput >> 20);
+            return !timedOut && !tooBig && exit == 0;
         }
 
         std::wstring Tar()
