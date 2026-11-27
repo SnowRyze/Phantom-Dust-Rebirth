@@ -14,7 +14,8 @@
 #   pdlaunch-log-PC-TIME.txt   the launcher's steps, as pdlaunch.log on Windows: pdnet updates, game start and exit
 #   wine-log-PC-TIME.txt       wine-uwp's log of the last game run (crashes, missing Windows parts)
 #   system-PC-TIME.txt         distro, kernel, CPU, GPU, wine-uwp and kit versions, pdnet settings (never eos.ini)
-#   and the Flatpak's setup/launcher logs and PD Helper's log when there are some.
+#   and, when there are some: pdlaunch.exe's own log and the mod loader's (pdlaunch-game-log, pdpl-log), the Flatpak's
+#   setup/launcher logs and PD Helper's log.
 set -uo pipefail
 
 family=Microsoft.MSEsper_8wekyb3d8bbwe
@@ -92,6 +93,10 @@ copy "$kit/pdlaunch.log" "pdlaunch-log-$stamp.txt"; have_launch=$?
 copy "$data/logs/flatpak-setup.log" "flatpak-setup-log-$stamp.txt"
 copy "$data/logs/flatpak-launcher.log" "flatpak-launcher-log-$stamp.txt"
 copy "$data/logs/pdhelper.log" "pdhelper-log-$stamp.txt"
+# where wine-uwp starts the game through pdlaunch.exe (it runs from the game's folder): its own log (mod sync, PDPL)
+# and PDPL's (the mod loader's) output, as on Windows
+[ -n "$game" ] && copy "$game/pdlaunch.log" "pdlaunch-game-log-$stamp.txt"
+copy "$(dirname "$pdlog")/pdnet/pdpl.log" "pdpl-log-$stamp.txt"
 
 # --- system ----------------------------------------------------------------------------------------------------------
 settings() {   # an ini without comments and blank lines; webhook addresses are secrets, so only whether one is set
