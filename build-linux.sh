@@ -78,12 +78,8 @@ fi
 
 echo "1. pdnet core"
 FLAGS=("${CFLAGS[@]}" "${EOSFLAGS[@]}" "-DPDNET_BUILD_LABEL=\"$LABEL\"")
-CORE=()
-for f in dllmain hooks gamesave log config net sda testpeer eostest credstore eossdk eosclock eos lobbies p2p \
-         gamepatches gamepads discord scores variants; do
-    CORE+=("$ROOT/src/$f.cpp")
-done
-compile obj "${CORE[@]}"
+# every source in src\, as build.ps1 compiles them (a fixed list here missed the newer ones)
+compile obj "$ROOT"/src/*.cpp
 
 echo "2. XSAPI stand-in"
 # no precompiled header: clang-cl's /Yc,/Yu are fussy, and every file includes xsapi_pch.h itself
@@ -97,3 +93,13 @@ $LINK /nologo /DLL /OUT:Microsoft.Xbox.Services.dll /DEF:"$ROOT/src/pdnet.def" /
     obj/*.obj obj/xsapi/*.obj \
     kernel32.lib ole32.lib oleaut32.lib runtimeobject.lib ws2_32.lib bcrypt.lib
 echo "Built $ROOT/$OUT/Microsoft.Xbox.Services.dll"
+
+echo "4. pdlaunch.exe"
+# as build.ps1 builds it (on Linux, wine-uwp starts it in the game's place; see launcher/pdlaunch.cpp, RunGame)
+mkdir -p obj/launcher
+FLAGS=("${CFLAGS[@]}" "/I$ROOT/src" "/I$ROOT/deps/SDL3/include")
+compile obj/launcher "$ROOT/launcher/pdlaunch.cpp" "$ROOT/launcher/modsync.cpp" "$ROOT/launcher/mapslots.cpp"
+$LINK /nologo /SUBSYSTEM:WINDOWS /ENTRY:wmainCRTStartup /OUT:pdlaunch.exe /OPT:REF /OPT:ICF \
+    /LIBPATH:"$XWIN/crt/lib/x86_64" /LIBPATH:"$XWIN/sdk/lib/um/x86_64" /LIBPATH:"$XWIN/sdk/lib/ucrt/x86_64" \
+    obj/launcher/*.obj kernel32.lib psapi.lib ole32.lib user32.lib
+echo "Built $ROOT/$OUT/pdlaunch.exe"

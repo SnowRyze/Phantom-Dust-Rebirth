@@ -1341,7 +1341,10 @@ namespace
         wchar_t family[PACKAGE_FAMILY_NAME_MAX_LENGTH + 1];
         UINT32 length = _countof(family);
         wchar_t profile[MAX_PATH];
-        if (GetPackageFamilyName(process, &length, family) != ERROR_SUCCESS || !GetEnvironmentVariableW(L"USERPROFILE", profile, MAX_PATH)) return {};
+        if (!GetEnvironmentVariableW(L"USERPROFILE", profile, MAX_PATH)) return {};
+        // wine-uwp (Linux) keeps the package identity in its environment, which pdlaunch shares with the game (RunGame)
+        if (GetPackageFamilyName(process, &length, family) != ERROR_SUCCESS &&
+            !GetEnvironmentVariableW(L"WINE_UWP_PACKAGE_FAMILY_NAME", family, _countof(family))) return {};
         return std::wstring(profile) + L"\\AppData\\Local\\Packages\\" + family + L"\\LocalState";
     }
 }
@@ -1394,6 +1397,41 @@ int Attach()
     return SUCCEEDED(result) ? 0 : 1;
 }
 
+// Linux (wine-uwp): Wine has no package debugger, so nothing starts pdlaunch with the game. wine-uwp starts pdlaunch in
+// the game's place instead (setup-linux.sh writes UWP_EXE=pdlaunch.exe and PDLAUNCH_GAME=PDUWP.exe into local.env in
+// the game's folder, where pdlaunch then is), and pdlaunch starts the game itself: suspended, with the same command
+// line and environment (wine-uwp's package identity is in it), as Windows would have. The rest is as on Windows, except
+// the kit's updates (setup-linux.sh does them before the game starts, then copies the kit into the game's folder) and
+// SDL's controllers (Wine already gives the game every pad, so SDL would read them twice). Returns the game's process
+// (its exit code is pdlaunch's, which wine-uwp passes on), or nullptr when PDLAUNCH_GAME isn't set or the game didn't start.
+HANDLE RunGame(DWORD& pid, DWORD& tid)
+{
+    wchar_t game[MAX_PATH] = {};
+    if (!GetEnvironmentVariableW(L"PDLAUNCH_GAME", game, MAX_PATH) || !game[0]) return nullptr;
+    std::wstring exe = game;
+    if (exe.find(L':') == std::wstring::npos && exe[0] != L'\\') exe = g_dir + exe;
+    // pdlaunch's own command line after its name (quoted or not) goes to the game
+    const wchar_t* rest = GetCommandLineW();
+    if (*rest == L'"') { rest = wcschr(rest + 1, L'"'); rest = rest ? rest + 1 : L""; }
+    else while (*rest && *rest != L' ' && *rest != L'\t') ++rest;
+    while (*rest == L' ' || *rest == L'\t') ++rest;
+    std::wstring command = L"\"" + exe + L"\"" + (*rest ? L" " + std::wstring(rest) : L"");
+    SetEnvironmentVariableW(L"PDLAUNCH_GAME", nullptr);
+    SetEnvironmentVariableW(L"UWP_EXE", game);
+    STARTUPINFOW si{ sizeof(si) };
+    PROCESS_INFORMATION pi{};
+    if (!CreateProcessW(exe.c_str(), command.data(), nullptr, nullptr, FALSE, CREATE_SUSPENDED, nullptr, nullptr, &si, &pi))
+    {
+        Log(L"linux: %s couldn't be started (%lu)", exe.c_str(), GetLastError());
+        return nullptr;
+    }
+    CloseHandle(pi.hThread);
+    pid = pi.dwProcessId;
+    tid = pi.dwThreadId;
+    Log(L"linux: started %s suspended (wine-uwp has no package debugger to start pdlaunch with it)", game);
+    return pi.hProcess;
+}
+
 int wmain(int argc, wchar_t** argv)
 {
     wchar_t exe[MAX_PATH];
@@ -1420,7 +1458,8 @@ int wmain(int argc, wchar_t** argv)
 
     DWORD pid = 0, tid = 0;
     bool handedOver = false; // started by the previous pdlaunch.exe right after it installed this one (below)
-    for (int i = 1; i < argc; ++i)
+    HANDLE linuxGame = RunGame(pid, tid); // Linux: pdlaunch starts the game itself (RunGame)
+    for (int i = 1; i < argc && !linuxGame; ++i)
     {
         if (i + 1 < argc && _wcsicmp(argv[i], L"-p") == 0) pid = wcstoul(argv[i + 1], nullptr, 10);
         if (i + 1 < argc && _wcsicmp(argv[i], L"-tid") == 0) tid = wcstoul(argv[i + 1], nullptr, 10);
@@ -1457,11 +1496,11 @@ int wmain(int argc, wchar_t** argv)
     }
 
     Log(handedOver ? L"game started (pid %lu, main thread %lu) - handed over by the previous pdlaunch after its update" : L"game started (pid %lu, main thread %lu)", pid, tid);
-    KeepAttached();
+    if (!linuxGame) KeepAttached(); // (Windows' sign-in entry; wine-uwp starts pdlaunch every time)
     HANDLE game = OpenProcess(SYNCHRONIZE | PROCESS_QUERY_LIMITED_INFORMATION, FALSE, pid);
     std::wstring localState = game ? GameLocalState(game) : std::wstring();
     if (!localState.empty()) DeleteFileW(PastTitleFile(localState).c_str()); // from the last start: pdnet writes it again
-    if (!handedOver) CheckForUpdate(); // before anything loads pdnet.dll, SDL3.dll or the EOS SDK, which it may replace
+    if (!handedOver && !linuxGame) CheckForUpdate(); // (on Linux setup-linux.sh has done it) before anything loads pdnet.dll, SDL3.dll or the EOS SDK, which it may replace
     // The update replaced pdlaunch.exe: the new one does the rest of this start (the game is still suspended; nothing is
     // loaded into it yet). If it can't be started, this one carries on as before.
     if (g_launcherReplaced && !handedOver)
@@ -1481,7 +1520,8 @@ int wmain(int argc, wchar_t** argv)
     }
     CheckClock(localState); // before pdnet starts EOS, which reads the offset
     KeepIdentity(localState, true); // before the game runs: the same player as always
-    std::thread controllers(ReadControllers, pid, localState); // until the game exits
+    std::thread controllers; // until the game exits
+    if (!linuxGame) controllers = std::thread(ReadControllers, pid, localState);
     std::thread keyboard(ReadKeyboard, pid, localState); // until the game exits
     bool injected = Inject(pid);
     if (injected) InjectPdpl(pid, localState);
@@ -1500,8 +1540,16 @@ int wmain(int argc, wchar_t** argv)
         if (injected && !localState.empty()) CloseDiscordMessage(localState);
     }
     KeepIdentity(localState, false); // a first sign-in made its credential while the game ran
-    controllers.join();
+    if (controllers.joinable()) controllers.join();
     keyboard.join();
     if (liveMods.joinable()) liveMods.join();
+    if (linuxGame) // wine-uwp passes the game's exit code on
+    {
+        WaitForSingleObject(linuxGame, INFINITE);
+        DWORD code = 1;
+        GetExitCodeProcess(linuxGame, &code);
+        CloseHandle(linuxGame);
+        return static_cast<int>(code);
+    }
     return injected ? 0 : 1;
 }
