@@ -134,8 +134,6 @@ if [ $action = logs ]; then
     mkdir -p "$out"
     [ -n "$game" ] && cp -f "$data/logs/$(basename "$game").log" "$out/game.log" 2>/dev/null || true
     cp -f "$pdlog" "$out/pdnet.log" 2>/dev/null || true
-    [ -n "$game" ] && cp -f "$game/pdlaunch.log" "$out/pdlaunch.log" 2>/dev/null || true
-    cp -f "$(dirname "$pdlog")/pdnet/pdpl.log" "$out/pdpl.log" 2>/dev/null || true
     [ -n "$(ls -A "$out")" ] || { rmdir "$out"; fail "no logs found (has the game run yet?)"; }
     say "Logs copied to $out - send the files in it."
     exit 0
