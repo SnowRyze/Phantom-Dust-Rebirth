@@ -11,8 +11,11 @@
 #
 # wine-uwp is looked for in $WINE_UWP (the wine-uwp script), on PATH, in ~/.local/opt/wine-uwp and ~/wine-uwp; if
 # none can load pdnet, it offers to download the prebuilt one (github.com/designgears/wine-uwp releases).
-# The game's files are not changed: wine-uwp loads pdnet.dll into the game when it starts (local.env in the game's
-# folder, WINE_UWP_INJECT), as pdlaunch.exe does on Windows. pdnet and its files are copied next to the game.
+# The game's files are not changed: wine-uwp starts the kit's pdlaunch.exe in the game's place (local.env in the
+# game's folder), and pdlaunch starts the game, loads pdnet and the mod loader (PDPL) and keeps the mods in sync, as on
+# Windows. Kits whose pdlaunch can't do that have wine-uwp load only pdnet.dll (WINE_UWP_INJECT): no mods. pdnet and
+# its files are copied next to the game. The mod sync reads .zip / .7z mods with 7-Zip for Windows, which Wine lacks:
+# setup puts it into the Wine prefix (official 7-Zip release, sha256 checked).
 # Like pdlaunch.exe, a launcher (~/.local/bin/phantom-dust-rebirth, menu entry "Phantom Dust Rebirth") calls this
 # script with --auto-update and then starts the game. A wine-uwp that runs the game folder's before-start.sh at
 # each start does that update itself, so the launcher leaves it to wine-uwp.
@@ -22,6 +25,9 @@ kit=$(cd "$(dirname "$0")" && pwd)
 store_id=9PCDNBHR11MR
 family=Microsoft.MSEsper_8wekyb3d8bbwe
 inject="export WINE_UWP_INJECT='pdnet.dll!PdInjectedInit'"
+# 7-Zip for Windows (github.com/ip7z/7zip, the official releases): pdlaunch's mod sync reads mod archives with it
+sevenzip_url=https://github.com/ip7z/7zip/releases/download/26.06/7z2606-x64.exe
+sevenzip_sha256=9b697f65ecc2d9b0152f5ee96d72dde522a7827690349d9307935dacf40f42ec
 
 say()  { printf '%s\n' "$*"; }
 fail() { printf '\nERROR: %s\n' "$*" >&2; exit 1; }
@@ -128,6 +134,8 @@ if [ $action = logs ]; then
     mkdir -p "$out"
     [ -n "$game" ] && cp -f "$data/logs/$(basename "$game").log" "$out/game.log" 2>/dev/null || true
     cp -f "$pdlog" "$out/pdnet.log" 2>/dev/null || true
+    [ -n "$game" ] && cp -f "$game/pdlaunch.log" "$out/pdlaunch.log" 2>/dev/null || true
+    cp -f "$(dirname "$pdlog")/pdnet/pdpl.log" "$out/pdpl.log" 2>/dev/null || true
     [ -n "$(ls -A "$out")" ] || { rmdir "$out"; fail "no logs found (has the game run yet?)"; }
     say "Logs copied to $out - send the files in it."
     exit 0
@@ -141,18 +149,68 @@ copy_extras() {
     for f in charsel-portraits.bin; do
         if [ -f "$kit/$f" ]; then cp -f "$kit/$f" "$game/"; fi
     done
+    use_pdlaunch
+}
+
+# Newer kits' pdlaunch.exe can start the game itself (Linux: Wine has no package debugger to start it with the game). It
+# looks for PDLAUNCH_GAME, so that name (UTF-16 in the exe) is what tells.
+pdlaunch_runs_game() {
+    [ -f "$kit/pdlaunch.exe" ] && [ -f "$kit/pd_loader_core.dll" ] &&
+        LC_ALL=C grep -qaP 'P\x00D\x00L\x00A\x00U\x00N\x00C\x00H\x00_\x00G\x00A\x00M\x00E\x00' "$kit/pdlaunch.exe"
+}
+# local.env without what this script wrote into it (older versions included)
+clean_local_env() {
+    [ -f "$game/local.env" ] || return 0
+    sed -i '/WINE_UWP_INJECT/d; /^export UWP_EXE=.pdlaunch\.exe.$/d; /PDLAUNCH_GAME/d; /^# Phantom Dust Rebirth/d' "$game/local.env"
+}
+# How wine-uwp starts the game: through pdlaunch.exe (mods), else with pdnet.dll injected (no mods).
+use_pdlaunch() {
+    local exe
+    clean_local_env
+    touch "$game/local.env"
+    if pdlaunch_runs_game; then
+        cp -f "$kit/pdlaunch.exe" "$kit/pd_loader_core.dll" "$game/"
+        exe=$(sed -n "s/^export UWP_EXE='\(.*\)'$/\1/p" "$game/identity.env" | tail -1)
+        printf "# Phantom Dust Rebirth: wine-uwp starts pdlaunch.exe, which starts the game with pdnet and the mod loader, as on Windows (setup-linux.sh)\nexport UWP_EXE='pdlaunch.exe'\nexport PDLAUNCH_GAME='%s'\n" \
+            "${exe:-PDUWP.exe}" >> "$game/local.env"
+        install_7zip || say "(Without 7-Zip the mods still load, but the Mods list can't read their details or new maps.)"
+    else
+        rm -f "$game/pdlaunch.exe" "$game/pd_loader_core.dll"
+        printf '# Phantom Dust Rebirth: pdnet loaded the way pdlaunch.exe does on Windows (setup-linux.sh)\n%s\n' "$inject" >> "$game/local.env"
+    fi
+}
+# 7-Zip for Windows in the prefix, where pdlaunch's mod sync looks for it (%ProgramFiles%\7-Zip\7z.exe). At game start
+# (--auto-update) a failed try is repeated a day later at the earliest, so it can't hold every start back.
+sevenzip_tried="$data/logs/.rebirth-7zip-tried"
+install_7zip() {
+    local prefix="$data/prefix" wine="$bindir/wine" tmp
+    [ -f "$prefix/drive_c/Program Files/7-Zip/7z.exe" ] && return 0
+    [ -d "$prefix/drive_c" ] || return 1   # no prefix yet (wine would make one)
+    [ -n "$auto" ] && [ -n "$(find "$sevenzip_tried" -mmin -1440 2>/dev/null)" ] && return 1
+    mkdir -p "$(dirname "$sevenzip_tried")" && touch "$sevenzip_tried"
+    [ -x "$wine" ] || { say "(No wine next to $wup, so 7-Zip isn't installed into the prefix.)"; return 1; }
+    command -v curl >/dev/null || return 1
+    say "Installing 7-Zip for Windows into the Wine prefix (for the in-game Mods list; $sevenzip_url)..."
+    tmp=$(mktemp -d) || return 1
+    if curl -fsSL --connect-timeout 10 --max-time 120 -o "$tmp/7z-setup.exe" "$sevenzip_url" &&
+       [ "$(sha256sum "$tmp/7z-setup.exe" | cut -d' ' -f1)" = "$sevenzip_sha256" ]; then
+        WINEPREFIX=$prefix WINEDEBUG=-all "$wine" "$tmp/7z-setup.exe" /S < /dev/null > /dev/null 2>&1 || true
+    fi
+    rm -rf "$tmp"
+    [ -f "$prefix/drive_c/Program Files/7-Zip/7z.exe" ] || { say "(7-Zip could not be installed.)"; return 1; }
+    rm -f "$sevenzip_tried"
 }
 
 # --- --remove -------------------------------------------------------------------------------------------------------
 if [ $action = remove ]; then
     [ -n "$game" ] || fail "Phantom Dust is not installed in $data."
     running && fail "close Phantom Dust first."
-    rm -f "$game"/{pdnet.dll,pdnet.ini,eos.ini,EOSSDK-Win64-Shipping.dll,xaudio2_9redist.dll,kit-version.txt,charsel-portraits.bin,before-start.sh}
+    rm -f "$game"/{pdnet.dll,pdnet.ini,eos.ini,EOSSDK-Win64-Shipping.dll,xaudio2_9redist.dll,kit-version.txt,charsel-portraits.bin,before-start.sh,pdlaunch.exe,pd_loader_core.dll}
     # only what this script wrote
     grep -qs 'written by setup-linux.sh' "$launcher" && rm -f "$launcher"
     grep -qs 'written by setup-linux.sh' "$menu_entry" && rm -f "$menu_entry"
     if [ -f "$game/local.env" ]; then
-        sed -i '/WINE_UWP_INJECT/d; /^# Phantom Dust Rebirth/d' "$game/local.env"
+        clean_local_env
         grep -q '[^[:space:]]' "$game/local.env" || rm -f "$game/local.env"
     fi
     say "pdnet removed. Phantom Dust starts with Xbox Live again. (pdnet's saves are kept, in its LocalState\\pdnet folder.)"
@@ -168,7 +226,7 @@ fi
 if [ $action = update ]; then
     running && fail "close Phantom Dust first."
     # set up before newer wine-uwp only ends the game with its window when asked to (see "have wine-uwp load pdnet")
-    if [ -f "$game/local.env" ] && grep -q WINE_UWP_INJECT "$game/local.env" && ! grep -q WINE_UWP_EXIT_WITH_WINDOW "$game/local.env"; then
+    if [ -f "$game/local.env" ] && grep -qE 'WINE_UWP_INJECT|PDLAUNCH_GAME' "$game/local.env" && ! grep -q WINE_UWP_EXIT_WITH_WINDOW "$game/local.env"; then
         printf '# wine-uwp: end the game when its window is gone, as Windows does (setup-linux.sh)\n%s\n' \
             "export WINE_UWP_EXIT_WITH_WINDOW=1" >> "$game/local.env"
     fi
@@ -255,9 +313,13 @@ print("update", best[0], best[1], m.group(1).lower() if m else "-", "revert" if 
             say "Up to date (build ${build:-?})."
             if [ -n "$game" ] && [ -f "$game/pdnet.dll" ] &&
                { ! cmp -s "$kit/pdnet.dll" "$game/pdnet.dll" || ! cmp -s "$kit/kit-version.txt" "$game/kit-version.txt" ||
-                 { [ -f "$kit/charsel-portraits.bin" ] && ! cmp -s "$kit/charsel-portraits.bin" "$game/charsel-portraits.bin"; }; }; then
+                 { [ -f "$kit/charsel-portraits.bin" ] && ! cmp -s "$kit/charsel-portraits.bin" "$game/charsel-portraits.bin"; } ||
+                 { pdlaunch_runs_game && { ! cmp -s "$kit/pdlaunch.exe" "$game/pdlaunch.exe" || ! cmp -s "$kit/pd_loader_core.dll" "$game/pd_loader_core.dll" ||
+                   ! grep -qs PDLAUNCH_GAME "$game/local.env"; }; }; }; then
                 say "The game's pdnet files aren't this kit's; copying the kit's."
                 update_game
+            elif [ -n "$game" ] && pdlaunch_runs_game && [ ! -f "$data/prefix/drive_c/Program Files/7-Zip/7z.exe" ]; then
+                install_7zip || true
             fi
             exit 0 ;;
     esac
@@ -384,8 +446,8 @@ sed "s|^display_name=.*|display_name=$esc|" "$kit/pdnet.ini" > "$game/pdnet.ini"
 
 # --- have wine-uwp load pdnet into the game -------------------------------------------------------------------------
 touch "$game/local.env"
-sed -i '/WINE_UWP_INJECT/d; /^# Phantom Dust Rebirth/d; /WINE_UWP_EXIT_WITH_WINDOW/d; /^# wine-uwp: end the game/d' "$game/local.env"
-printf '# Phantom Dust Rebirth: pdnet loaded the way pdlaunch.exe does on Windows (setup-linux.sh)\n%s\n' "$inject" >> "$game/local.env"
+# (copy_extras above wrote how the game starts: pdlaunch.exe, or pdnet.dll injected)
+sed -i '/WINE_UWP_EXIT_WITH_WINDOW/d; /^# wine-uwp: end the game/d' "$game/local.env"
 # End Game and closing the window end the game (newer wine-uwp only does that when asked; this stays after --remove)
 printf '# wine-uwp: end the game when its window is gone, as Windows does (setup-linux.sh)\n%s\n' \
     "export WINE_UWP_EXIT_WITH_WINDOW=1" >> "$game/local.env"

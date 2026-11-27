@@ -306,9 +306,86 @@ namespace pdnet::pdpl
         return count;
     }
 
+    namespace
+    {
+        // ---- Linux (wine-uwp), which sets WINE_UWP_PACKAGE_FAMILY_NAME; nothing of this runs on Windows ----
+        wchar_t g_family[128] = {};
+
+        // PDPL finds RoamingState from SHGetFolderPathA(CSIDL_LOCAL_APPDATA), which in a Store app on Windows is the
+        // package's ...\Packages\<family>\AC: it cuts the "AC" and adds "RoamingState\". Wine gives every program
+        // ...\AppData\Local, so PDPL looked in ...\AppData\LocRoamingState\mods and never found a mod (2026-11-27).
+        // So SHGetFolderPathA answers as Windows does in the game: that folder for CSIDL_LOCAL_APPDATA, everything else
+        // as before, through SHGetFolderPathW (Wine's A version is that and a conversion too).
+        using GetFolderW = HRESULT(WINAPI*)(HWND, int, HANDLE, DWORD, LPWSTR);
+        GetFolderW g_getFolderW = nullptr;
+
+        HRESULT WINAPI PackageGetFolderPathA(HWND window, int csidl, HANDLE token, DWORD flags, LPSTR path)
+        {
+            wchar_t wide[MAX_PATH] = {};
+            HRESULT hr = g_getFolderW(window, csidl, token, flags, wide);
+            if (SUCCEEDED(hr) && (csidl & 0xff) == 0x1c /* CSIDL_LOCAL_APPDATA */ && !token)
+            {
+                std::wstring package = std::wstring(wide) + L"\\Packages\\" + g_family + L"\\AC";
+                if (package.size() < MAX_PATH) wcscpy_s(wide, package.c_str());
+            }
+            if (path && !WideCharToMultiByte(CP_ACP, 0, wide, -1, path, MAX_PATH, nullptr, nullptr)) path[0] = 0;
+            return hr;
+        }
+
+        // shell32!SHGetFolderPathA jumps to PackageGetFolderPathA (mov rax, address; jmp rax). Before PDPL loads, so
+        // its first call already gets the package folder.
+        void PackageLocalAppData()
+        {
+            HMODULE shell = LoadLibraryW(L"shell32.dll");
+            auto target = shell ? reinterpret_cast<uint8_t*>(GetProcAddress(shell, "SHGetFolderPathA")) : nullptr;
+            g_getFolderW = shell ? reinterpret_cast<GetFolderW>(GetProcAddress(shell, "SHGetFolderPathW")) : nullptr;
+            DWORD old = 0;
+            if (!target || !g_getFolderW || !VirtualProtect(target, 12, PAGE_EXECUTE_READWRITE, &old))
+            {
+                Log(L"pdpl: Linux: SHGetFolderPathA not redirected (error %lu) - PDPL won't find RoamingState\\mods", GetLastError());
+                return;
+            }
+            uint8_t jump[12] = { 0x48, 0xB8, 0, 0, 0, 0, 0, 0, 0, 0, 0xFF, 0xE0 };
+            uintptr_t to = reinterpret_cast<uintptr_t>(&PackageGetFolderPathA);
+            memcpy(jump + 2, &to, sizeof(to));
+            memcpy(target, jump, sizeof(jump));
+            VirtualProtect(target, 12, old, &old);
+            FlushInstructionCache(GetCurrentProcess(), target, 12);
+            Log(L"pdpl: Linux: SHGetFolderPathA(CSIDL_LOCAL_APPDATA) gives the package's AC folder, as on Windows (PDPL reads RoamingState from it)");
+        }
+
+        // PDPL leaves its standard output alone when its AllocConsole fails (pdnet's console is there), so it writes
+        // through the stdout that msvcrt.dll set up when it loaded. On Windows that's when PDPL loads, after pdnet's
+        // handles are in; under Wine msvcrt.dll is in the game long before (Wine's own DLLs use it), with no output, so
+        // pdpl.log stayed empty. Its stdout and stderr are opened on pdnet's console again, unbuffered as PDPL does.
+        void ReopenMsvcrtOutput()
+        {
+            HMODULE crt = GetModuleHandleW(L"msvcrt.dll");
+            if (!crt || !g_console) return;
+            using IobFn = FILE*(__cdecl*)();
+            using FreopenFn = FILE*(__cdecl*)(const char*, const char*, FILE*);
+            using SetvbufFn = int(__cdecl*)(FILE*, char*, int, size_t);
+            auto iob = reinterpret_cast<IobFn>(GetProcAddress(crt, "__iob_func"));
+            auto reopen = reinterpret_cast<FreopenFn>(GetProcAddress(crt, "freopen"));
+            auto setbuf = reinterpret_cast<SetvbufFn>(GetProcAddress(crt, "setvbuf"));
+            if (!iob || !reopen || !setbuf) return;
+            constexpr size_t kMsvcrtFile = 48; // msvcrt.dll's FILE on x64 (_ptr, _cnt, _base, _flag, _file, _charbuf, _bufsiz, _tmpfname)
+            auto files = reinterpret_cast<uint8_t*>(iob());
+            int reopened = 0;
+            for (int n : { 1, 2 }) // stdout, stderr
+            {
+                FILE* f = reinterpret_cast<FILE*>(files + n * kMsvcrtFile);
+                if (reopen("CONOUT$", "w", f)) { setbuf(f, nullptr, 4 /* _IONBF */, 0); ++reopened; }
+            }
+            Log(L"pdpl: Linux: msvcrt.dll's stdout and stderr %s pdnet's console", reopened == 2 ? L"now go to" : L"could NOT all be put on");
+        }
+    }
+
     void BeforeLoad()
     {
         if (g_prepared.exchange(true)) return;
+        bool wineUwp = GetEnvironmentVariableW(L"WINE_UWP_PACKAGE_FAMILY_NAME", g_family, _countof(g_family)) > 0 && g_family[0];
+        if (wineUwp) PackageLocalAppData();
         CreateDirectoryW((LocalStatePath() + L"\\pdnet").c_str(), nullptr);
         if (FILE* f = nullptr; !_wfopen_s(&f, (LocalStatePath() + L"\\pdnet\\mods-boot.txt").c_str(), L"w") && f)
         {
@@ -338,6 +415,7 @@ namespace pdnet::pdpl
         {
             SetStdHandle(STD_OUTPUT_HANDLE, g_console);
             SetStdHandle(STD_ERROR_HANDLE, g_console);
+            if (wineUwp) ReopenMsvcrtOutput();
             std::thread(ReadConsoleText).detach();
             output = true;
         }
