@@ -7,7 +7,7 @@
 #   plugin  only for mods with DLLs under plugins/, after someone has read their source
 #   release=, file=, sha256=  the newest release's tag, download and sha256: filled in every 5 minutes by the repo's
 #           "Mod catalog releases" GitHub Action (and by this app), so games download without GitHub lookups of their own
-map-aquarium    eradication0/phantom-dust-map-aquarium  release=0.8 file=https://github.com/eradication0/phantom-dust-map-aquarium/releases/download/0.8/Aquarium.0.8.zip sha256=1b6f88c83f32b080063c109c92c1efb38cf6b56c1b1aeab262bb10e8f1e81b8a
+map-aquarium    eradication0/phantom-dust-map-aquarium  release=0.9 file=https://github.com/eradication0/phantom-dust-map-aquarium/releases/download/0.9/Aquarium.0.9.zip sha256=a2c3c6fa7013a8d1f6ee63d9f031a65eedec0cc03c30d5500dbfaacc4e571a9f
 map-construct   Slowpooch/PhantomDustConstructMap  release=b1 file=https://github.com/Slowpooch/PhantomDustConstructMap/releases/download/b1/Construct.zip sha256=70a62e3eddc20e815105b2f04eb713c9e49861477a573d13cbc91ed838f33f5b
 map-ascension   eat872338/phantom-dust-map-ascension  release=0.4 file=https://github.com/eat872338/phantom-dust-map-ascension/releases/download/0.4/Ascension.0.4.zip sha256=81cf89add7ed937bced96bc1ef7e84f27469c47a4b43ca80123d937c3d8053fd
 ashes2dust      toafster/phantomdust-ashes2dust  release=v2.1.2 file=https://github.com/toafster/phantomdust-ashes2dust/releases/download/v2.1.2/Ashes2Dust-v2.1.2.zip sha256=10aeb8e118ea00414a10842ea7e64efb1a52b03aea694e72aa2ea524f55765bf
