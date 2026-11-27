@@ -32,9 +32,13 @@ pdnet updates itself at game start as in any Linux setup, so a new Flatpak is on
 |---|---|
 | `flatpak run io.github.snowryze.PhantomDustRebirth setup --name NAME` | set up again, or change the name |
 | `flatpak run io.github.snowryze.PhantomDustRebirth kit --update` | `setup-linux.sh` with these options (`--remove`, `--help` ...) |
+| `flatpak run io.github.snowryze.PhantomDustRebirth pdhelper` | [PD Helper](https://github.com/eradication0/PDHelper) (arsenal editor) next to the running game; add `modloader` for its Skill Editor. Also in the app menu: right-click Phantom Dust Rebirth > PD Helper. The first time it downloads PD Helper 4.1 and .NET 6 (about 70 MB) onto the game's C: drive |
+| `flatpak run io.github.snowryze.PhantomDustRebirth pdhelper-folder` | open PD Helper's folder in the file manager: `Arsenals` (saved arsenals), `Mods` (put a mod's `.sp4` and `.json` there, then Load Modpack). Also right-click > PD Helper folder |
+| `flatpak run io.github.snowryze.PhantomDustRebirth logs` | what Collect-Log.bat does on Windows: copies pdnet's and the launcher's logs, wine-uwp's and the setup's, and a system summary into `logs/collected/` and opens it. Also right-click > Collect logs |
 | `flatpak run io.github.snowryze.PhantomDustRebirth stop` | close the game (any other argument goes to wine-uwp) |
 
-Logs: `logs/` in the folder above (`flatpak-setup.log` is the setup's).
+Logs: `logs/` in the folder above (`flatpak-setup.log` is the setup's); `rebirth-kit/pdlaunch.log` has the launcher's
+steps (pdnet updates, game start and exit), as `pdlaunch.log` on Windows.
 
 ## Building
 

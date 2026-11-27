@@ -7,7 +7,7 @@
 #   ./setup-linux.sh --iso FILE       use this Windows 11 ISO if wine-uwp isn't set up yet
 #   ./setup-linux.sh --update         update this kit to the newest pdnet build now (the game also does it at start)
 #   ./setup-linux.sh --remove         stop using pdnet (your pdnet saves are kept)
-#   ./setup-linux.sh --logs           copy the logs to your home folder, to send after a test
+#   ./setup-linux.sh --logs           collect the logs on your Desktop, to send after a test (collect-logs-linux.sh)
 #
 # wine-uwp is looked for in $WINE_UWP (the wine-uwp script), on PATH, in ~/.local/opt/wine-uwp and ~/wine-uwp; if
 # none can load pdnet, it offers to download the prebuilt one (github.com/designgears/wine-uwp releases).
@@ -18,7 +18,8 @@
 # setup puts it into the Wine prefix (official 7-Zip release, sha256 checked).
 # Like pdlaunch.exe, a launcher (~/.local/bin/phantom-dust-rebirth, menu entry "Phantom Dust Rebirth") calls this
 # script with --auto-update and then starts the game. A wine-uwp that runs the game folder's before-start.sh at
-# each start does that update itself, so the launcher leaves it to wine-uwp.
+# each start does that update itself, so the launcher leaves it to wine-uwp. The update's and the launcher's steps go
+# to pdlaunch.log in this folder, as on Windows. Right-click the menu entry for PD Helper, its folder and Collect logs.
 set -euo pipefail
 
 kit=$(cd "$(dirname "$0")" && pwd)
@@ -42,11 +43,24 @@ while [ $# -gt 0 ]; do
         --logs) action=logs ;;
         --update) action=update ;;
         --auto-update) action=update auto=1 ;;   # at game start: nobody is there to answer
-        -h|--help) sed -n '2,15p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+        -h|--help) sed -n '2,/^set -e/{/^set -e/d;s/^# \{0,1\}//;p}' "$0"; exit 0 ;;
         *) fail "unknown option $1 (see --help)" ;;
     esac
     shift
 done
+# Collect-Log.bat's counterpart is a script of its own
+if [ $action = logs ]; then exec bash "$kit/collect-logs-linux.sh"; fi
+
+# At game start nobody reads this script's output: its steps go to the kit's pdlaunch.log too, timestamped, as
+# pdlaunch.exe logs its update on Windows (kept under 1 MB)
+launch_log() { printf '%s %s\n' "$(date '+%F %T.%3N')" "$*" >> "$kit/pdlaunch.log" 2>/dev/null || true; }
+if [ -n "$auto" ]; then
+    if [ "$(stat -c %s "$kit/pdlaunch.log" 2>/dev/null || echo 0)" -gt 1000000 ]; then
+        tail -n 5000 "$kit/pdlaunch.log" > "$kit/pdlaunch.log.new" && mv -f "$kit/pdlaunch.log.new" "$kit/pdlaunch.log" || true
+    fi
+    say()  { printf '%s\n' "$*"; launch_log "update: $*"; }
+    fail() { printf '\nERROR: %s\n' "$*" >&2; launch_log "update: ERROR: $*"; exit 1; }
+fi
 
 # --- wine-uwp -------------------------------------------------------------------------------------------------------
 # The first one found that can load pdnet (its wineuwp-launch knows WINE_UWP_INJECT); an older wine-uwp elsewhere
@@ -99,10 +113,10 @@ download_wine_uwp() {
     fi
     say "wine-uwp installed in $dest/wine-uwp."
 }
-[ -n "$wup" ] || [ $action = remove ] || [ $action = logs ] || download_wine_uwp
+[ -n "$wup" ] || [ $action = remove ] || download_wine_uwp
 if [ -z "$wup" ]; then
-    [ -n "$old" ] && fail "your wine-uwp ($old) is too old to load pdnet. Run this without --remove/--logs to update it, or set WINE_UWP=/path/to/bin/wine-uwp."
-    fail "wine-uwp was not found. Run this without --remove/--logs to download it, or set WINE_UWP=/path/to/bin/wine-uwp."
+    [ -n "$old" ] && fail "your wine-uwp ($old) is too old to load pdnet. Run this without --remove to update it, or set WINE_UWP=/path/to/bin/wine-uwp."
+    fail "wine-uwp was not found. Run this without --remove to download it, or set WINE_UWP=/path/to/bin/wine-uwp."
 fi
 bindir=$(dirname "$(readlink -f "$wup")")
 libdir="$bindir/../lib/wine/x86_64-windows"
@@ -128,16 +142,89 @@ previous_name=""
 keep_name=$previous_name   # what --update passes on, "Player" included
 [ "$previous_name" = Player ] && previous_name=""
 
-# --- --logs ---------------------------------------------------------------------------------------------------------
-if [ $action = logs ]; then
-    out="$HOME/PhantomDust-logs-$(date +%Y%m%d-%H%M%S)"
-    mkdir -p "$out"
-    [ -n "$game" ] && cp -f "$data/logs/$(basename "$game").log" "$out/game.log" 2>/dev/null || true
-    cp -f "$pdlog" "$out/pdnet.log" 2>/dev/null || true
-    [ -n "$(ls -A "$out")" ] || { rmdir "$out"; fail "no logs found (has the game run yet?)"; }
-    say "Logs copied to $out - send the files in it."
-    exit 0
+# --- the launcher and its menu entry -------------------------------------------------------------------------------
+# With a wine-uwp without the before-start.sh hook the launcher does the update, then starts the game (pdlaunch's job
+# on Windows). Not inside a Flatpak: its paths are the sandbox's, and the Flatpak starts the game its own way.
+in_flatpak=""
+if [ -f /.flatpak-info ] || [ -n "${FLATPAK_ID:-}" ]; then
+    in_flatpak=${FLATPAK_ID:-$(sed -n 's/^name=//p' /.flatpak-info 2>/dev/null | head -1)}
+    in_flatpak=${in_flatpak:-flatpak}
 fi
+# Written to a new file and renamed: the launcher may be running this script while it is rewritten.
+write_launcher() {
+    local app; app=$(basename "$game")
+    mkdir -p "$(dirname "$launcher")" 2>/dev/null && [ -w "$(dirname "$launcher")" ] || return 1
+    {
+        printf '#!/usr/bin/env bash\n'
+        printf '# Phantom Dust Rebirth: update pdnet, then start the game, as pdlaunch.exe does on Windows\n'
+        printf '# (written by setup-linux.sh; running it again rewrites this file; launcher-version 2)\n'
+        printf '#   %s                     the game\n' "$(basename "$launcher")"
+        printf '#   %s pdhelper [modloader]  PD Helper, or its Skill Editor\n' "$(basename "$launcher")"
+        printf '#   %s pdhelper-folder       open PD Helper'"'"'s folder (arsenals, mods)\n' "$(basename "$launcher")"
+        printf '#   %s logs                  collect the logs for the developers\n' "$(basename "$launcher")"
+        [ -n "${WINE_UWP_DATA:-}" ] && printf 'export WINE_UWP_DATA=%q\n' "$WINE_UWP_DATA"
+        printf 'wup=%q kit=%q app=%q log=%q\n' "$wup" "$kit" "$app" "$data/logs/$app-before-start.log"
+        cat <<'EOF'
+export WINE_UWP=$wup
+# started from the menu, nobody sees a terminal: errors in a window
+oops() {
+    if [ -t 2 ]; then echo "$1" >&2
+    elif command -v zenity >/dev/null; then LC_ALL=C.UTF-8 zenity --error --title="Phantom Dust Rebirth" --width=460 --text="$1"
+    elif command -v kdialog >/dev/null; then kdialog --title "Phantom Dust Rebirth" --error "$1"
+    else notify-send "Phantom Dust Rebirth" "$1" 2>/dev/null || echo "$1" >&2; fi
+    exit 1
+}
+# a kit without the script, or with one from before the menu entries (a kit back on an older build)
+tool() {
+    [ -d "$kit" ] || oops "The Rebirth kit isn't in $kit any more. Run setup-linux.sh from where it is now."
+    grep -qs -- "$2" "$kit/$1" || oops "This kit's $1 doesn't work from the menu yet. In a terminal: bash $kit/$3"
+}
+gui=--gui; [ -t 1 ] && gui=
+case ${1:-} in
+    pdhelper)        shift; tool pdhelper-linux.sh --gui-child pdhelper-linux.sh; exec bash "$kit/pdhelper-linux.sh" $gui "$@" ;;
+    pdhelper-folder) tool pdhelper-linux.sh --open-folder pdhelper-linux.sh; exec bash "$kit/pdhelper-linux.sh" $gui --open-folder ;;
+    logs)            tool collect-logs-linux.sh --gui "setup-linux.sh --logs"; exec bash "$kit/collect-logs-linux.sh" $gui ;;
+esac
+# the launcher's steps in the kit's pdlaunch.log, as pdlaunch.exe keeps them on Windows
+note() { if [ -d "$kit" ]; then printf '%s %s\n' "$(date '+%F %T.%3N')" "$*" >> "$kit/pdlaunch.log" 2>/dev/null; fi; true; }
+note "linux launcher: starting $app (wine-uwp $(cat "$(dirname "$(readlink -f "$wup")")/../share/wine-uwp/VERSION" 2>/dev/null || echo '?'), $wup)"
+# a wine-uwp that runs before-start.sh at each start does the update itself
+if ! grep -q before-start.sh "$(readlink -f "$wup")" 2>/dev/null; then
+    if [ -f "$kit/setup-linux.sh" ]; then
+        mkdir -p "$(dirname "$log")"
+        # no input, output to its log; a failed update doesn't stop the game
+        bash "$kit/setup-linux.sh" --auto-update < /dev/null > "$log" 2>&1 || echo "pdnet update failed: see $log" >&2
+    else
+        echo "The Rebirth kit isn't in $kit any more, so pdnet isn't updated. Run setup-linux.sh from where it is now." >&2
+    fi
+fi
+"$wup" run "$app" "$@"
+code=$?
+note "game exited (code $code)"
+exit $code
+EOF
+    } > "$launcher.new" && chmod 755 "$launcher.new" && mv -f "$launcher.new" "$launcher"
+}
+# menu entry (Exec quoting from the desktop entry spec); right-click actions for PD Helper, its folder and the logs
+dq() { printf '"%s"' "$(printf '%s' "$1" | sed 's/[\\"`$]/\\&/g; s/%/%%/g')"; }
+write_menu_entry() {
+    local icon=""
+    [ ! -e "$menu_entry" ] || grep -qs 'written by setup-linux.sh' "$menu_entry" || return 0
+    mkdir -p "$(dirname "$menu_entry")" 2>/dev/null || return 1
+    [ -f "$game/.wine-uwp-icon.png" ] && icon=$game/.wine-uwp-icon.png
+    {
+        printf '[Desktop Entry]\n# written by setup-linux.sh (Phantom Dust Rebirth)\n'
+        printf 'Type=Application\nName=Phantom Dust Rebirth\nComment=Phantom Dust with Rebirth online play (wine-uwp)\n'
+        printf 'Exec=%s\n' "$(dq "$launcher")"
+        [ -n "$icon" ] && printf 'Icon=%s\n' "$icon"
+        printf 'Terminal=false\nCategories=Game;\nStartupWMClass=pduwp.exe\n'
+        printf 'Actions=pdhelper;pdhelper-folder;logs;\n'
+        printf '\n[Desktop Action pdhelper]\nName=PD Helper\nExec=%s pdhelper\n' "$(dq "$launcher")"
+        printf '\n[Desktop Action pdhelper-folder]\nName=PD Helper folder (arsenals, mods)\nExec=%s pdhelper-folder\n' "$(dq "$launcher")"
+        printf '\n[Desktop Action logs]\nName=Collect logs (to send to the developers)\nExec=%s logs\n' "$(dq "$launcher")"
+    } > "$menu_entry.new" && mv -f "$menu_entry.new" "$menu_entry" || return 1
+    command -v update-desktop-database >/dev/null && update-desktop-database -q "$(dirname "$menu_entry")" 2>/dev/null || true
+}
 
 # Data files pdnet reads next to pdnet.dll (on Windows it runs from the kit folder; here it runs from the game's).
 # charsel-portraits.bin: the Advanced character select's portraits and lobby banners (without it the grid shows the
@@ -223,6 +310,13 @@ fi
 # at game start) a failure only ends this script, and a game with another pdnet.dll than the kit's is left alone.
 if [ $action = update ]; then
     running && fail "close Phantom Dust first."
+    # a launcher from an older kit gets PD Helper, its folder and Collect logs (right-click the menu entry)
+    if [ -z "$in_flatpak" ] && [ -n "$game" ] && grep -qs 'written by setup-linux.sh' "$launcher" &&
+       ! grep -qs 'launcher-version 2' "$launcher"; then
+        if write_launcher && write_menu_entry; then
+            say "Launcher updated: right-click Phantom Dust Rebirth in the app menu for PD Helper and Collect logs."
+        fi
+    fi
     # set up before newer wine-uwp only ends the game with its window when asked to (see "have wine-uwp load pdnet")
     if [ -f "$game/local.env" ] && grep -qE 'WINE_UWP_INJECT|PDLAUNCH_GAME' "$game/local.env" && ! grep -q WINE_UWP_EXIT_WITH_WINDOW "$game/local.env"; then
         printf '# wine-uwp: end the game when its window is gone, as Windows does (setup-linux.sh)\n%s\n' \
@@ -459,51 +553,9 @@ uplog="$data/logs/$app-before-start.log"
     printf 'export WINE_UWP=%q\n' "$wup"
     printf 'exec bash %q --auto-update\n' "$kit/setup-linux.sh"
 } > "$game/before-start.sh"
-# Any other wine-uwp: the launcher does the update, then starts the game (pdlaunch's job on Windows).
-# Not inside a Flatpak: its paths are the sandbox's, and the Flatpak starts the game its own way.
-write_launcher() {
-    mkdir -p "$(dirname "$launcher")" 2>/dev/null && [ -w "$(dirname "$launcher")" ] || return 1
-    {
-        printf '#!/usr/bin/env bash\n'
-        printf '# Phantom Dust Rebirth: update pdnet, then start the game, as pdlaunch.exe does on Windows\n'
-        printf '# (written by setup-linux.sh; running it again rewrites this file)\n'
-        [ -n "${WINE_UWP_DATA:-}" ] && printf 'export WINE_UWP_DATA=%q\n' "$WINE_UWP_DATA"
-        printf 'wup=%q kit=%q log=%q\n' "$wup" "$kit" "$uplog"
-        cat <<'EOF'
-# a wine-uwp that runs before-start.sh at each start does the update itself
-if ! grep -q before-start.sh "$(readlink -f "$wup")" 2>/dev/null; then
-    if [ -f "$kit/setup-linux.sh" ]; then
-        mkdir -p "$(dirname "$log")"
-        # no terminal when started from the menu: no input, output to the log; a failed update doesn't stop the game
-        WINE_UWP=$wup bash "$kit/setup-linux.sh" --auto-update < /dev/null > "$log" 2>&1 ||
-            echo "pdnet update failed: see $log" >&2
-    else
-        echo "The Rebirth kit isn't in $kit any more, so pdnet isn't updated. Run setup-linux.sh from where it is now." >&2
-    fi
-fi
-EOF
-        printf 'exec "$wup" run %q "$@"\n' "$app"
-    } > "$launcher" && chmod 755 "$launcher"
-}
-# menu entry (Exec quoting from the desktop entry spec)
-dq() { printf '"%s"' "$(printf '%s' "$1" | sed 's/[\\"`$]/\\&/g; s/%/%%/g')"; }
-icon=""
-[ -f "$game/.wine-uwp-icon.png" ] && icon=$game/.wine-uwp-icon.png
-write_menu_entry() {
-    [ ! -e "$menu_entry" ] || grep -qs 'written by setup-linux.sh' "$menu_entry" || return 0
-    mkdir -p "$(dirname "$menu_entry")" 2>/dev/null || return 1
-    {
-        printf '[Desktop Entry]\n# written by setup-linux.sh (Phantom Dust Rebirth)\n'
-        printf 'Type=Application\nName=Phantom Dust Rebirth\nComment=Phantom Dust with Rebirth online play (wine-uwp)\n'
-        printf 'Exec=%s\n' "$(dq "$launcher")"
-        [ -n "$icon" ] && printf 'Icon=%s\n' "$icon"
-        printf 'Terminal=false\nCategories=Game;\nStartupWMClass=pduwp.exe\n'
-    } > "$menu_entry" || return 1
-    command -v update-desktop-database >/dev/null && update-desktop-database -q "$(dirname "$menu_entry")" 2>/dev/null || true
-}
-launched="" flatpak=""
-if [ -f /.flatpak-info ] || [ -n "${FLATPAK_ID:-}" ]; then
-    flatpak=${FLATPAK_ID:-$(sed -n 's/^name=//p' /.flatpak-info 2>/dev/null | head -1)}
+launched="" flatpak=$in_flatpak
+if [ -n "$flatpak" ]; then
+    :
 elif write_launcher; then
     launched=1
     write_menu_entry || say "(Could not add the menu entry $menu_entry.)"
@@ -528,5 +580,11 @@ else
 fi
 say "Keep this kit folder where it is: the updates go through it."
 say "The first title screen should say \"Rebirth\". Your Xbox profile doesn't show while pdnet is on: make a new one."
-say "After a test: $0 --logs     To stop using pdnet: $0 --remove"
-say "PD Helper (arsenal editor; optional, now or any time later): bash \"$kit/pdhelper-linux.sh\""
+if [ -n "$launched" ]; then
+    say "Right-click \"Phantom Dust Rebirth\" in the app menu for PD Helper (arsenal editor; optional, downloaded the"
+    say "first time), its folder, and Collect logs (after a test, to send to the developers)."
+    say "To stop using pdnet: $0 --remove"
+else
+    say "After a test: $0 --logs     To stop using pdnet: $0 --remove"
+    say "PD Helper (arsenal editor; optional, now or any time later): bash \"$kit/pdhelper-linux.sh\""
+fi

@@ -6,3 +6,16 @@ Exec=pdrebirth
 Icon=applications-games
 Categories=Game;
 Terminal=false
+Actions=pdhelper;pdhelper-folder;logs;
+
+[Desktop Action pdhelper]
+Name=PD Helper
+Exec=pdrebirth pdhelper
+
+[Desktop Action pdhelper-folder]
+Name=PD Helper folder (arsenals, mods)
+Exec=pdrebirth pdhelper-folder
+
+[Desktop Action logs]
+Name=Collect logs (to send to the developers)
+Exec=pdrebirth logs
